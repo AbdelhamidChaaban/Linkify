@@ -1,0 +1,2248 @@
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const { getCredentials, getSession, saveSession, updateDashboardData } = require('./firebase-db');
+const { solveCaptcha, getCaptchaSiteKey, injectCaptchaToken } = require('./captcha-solver');
+
+puppeteer.use(StealthPlugin());
+
+// Helper function to replace waitForTimeout
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Login to Alfa dashboard and fetch data for a specific user
+ * @param {string} userId - User ID
+ * @returns {Promise<Object>} Dashboard data
+ */
+async function loginAndFetchDashboard(userId) {
+  console.log(`🚀 Starting browser for user: ${userId}`);
+  
+  const browser = await puppeteer.launch({ 
+    headless: true,
+    args: [
+      '--no-sandbox', 
+      '--disable-setuid-sandbox', 
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--window-size=1920,1080'
+    ]
+  });
+  
+  const page = await browser.newPage();
+  
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  await page.setViewport({ width: 1920, height: 1080 });
+  
+  // Set very high timeouts explicitly
+  page.setDefaultNavigationTimeout(60000);
+  page.setDefaultTimeout(40000);
+  
+  console.log('✅ Browser initialized');
+
+  try {
+    const savedSession = await getSession(userId);
+    let needsLogin = true;
+
+    if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
+      console.log('🍪 Restoring session from cookies...');
+      await page.setCookie(...savedSession.cookies);
+      
+      try {
+        console.log('🔄 Navigating to account page with saved session...');
+        await page.goto('https://www.alfa.com.lb/en/account', {
+          waitUntil: 'domcontentloaded',
+          timeout: 60000
+        });
+        
+        await delay(2000);
+        const currentUrl = page.url();
+        console.log(`📍 Current URL after navigation: ${currentUrl}`);
+        
+        if (!currentUrl.includes('/login') && currentUrl.includes('/account')) {
+          needsLogin = false;
+          console.log('✅ Session restored successfully');
+        } else {
+          console.log('⚠️ Session expired, need to login');
+          needsLogin = true;
+        }
+      } catch (error) {
+        console.log(`⚠️ Session restore error: ${error.message}`);
+        if (error.message.includes('timeout')) {
+          const currentUrl = page.url();
+          console.log(`📍 Checking URL after timeout: ${currentUrl}`);
+          if (currentUrl.includes('alfa.com.lb') && !currentUrl.includes('/login') && currentUrl.includes('/account')) {
+            needsLogin = false;
+            console.log('✅ Session restored (page loaded despite timeout)');
+          } else {
+            needsLogin = true;
+            console.log('⚠️ Need to login (redirected to login or no alfa page)');
+          }
+        } else {
+          needsLogin = true;
+        }
+      }
+    } else {
+      console.log('ℹ️ No saved session found, will login');
+    }
+
+    if (needsLogin) {
+      const credentials = await getCredentials(userId);
+      console.log('🔐 Navigating to login page...');
+      
+      // Retry navigation with different strategies (handle 503 errors)
+      let navigationSuccess = false;
+      const maxRetries = 5;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          console.log(`🔄 Navigation attempt ${attempt}/${maxRetries}...`);
+          
+          await page.goto('https://www.alfa.com.lb/en/account/login', {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000
+          });
+          
+          // Check if we got a 503 error or service unavailable
+          const pageContent = await page.evaluate(() => {
+            return document.body.textContent || '';
+          });
+          
+          if (pageContent.includes('Service Unavailable') || pageContent.includes('503') || pageContent.includes('HTTP Error')) {
+            console.log(`⚠️ Got 503/Service Unavailable on attempt ${attempt}`);
+            if (attempt < maxRetries) {
+              const waitTime = attempt * 3000; // Increasing wait time: 3s, 6s, 9s, 12s
+              console.log(`⏳ Waiting ${waitTime/1000}s before retry...`);
+              await delay(waitTime);
+              continue;
+            } else {
+              throw new Error('Service unavailable (503) after multiple retries');
+            }
+          }
+          
+          const currentUrl = page.url();
+          console.log(`✅ Navigation successful. Current URL: ${currentUrl}`);
+          navigationSuccess = true;
+          break;
+        } catch (error) {
+          console.log(`⚠️ Navigation attempt ${attempt} failed: ${error.message}`);
+          
+          if (attempt < maxRetries) {
+            // Check error type - DNS errors need different handling
+            if (error.message.includes('ERR_NAME_NOT_RESOLVED') || error.message.includes('DNS')) {
+              console.log('⚠️ DNS/Network error detected - website may be down or unreachable');
+              const waitTime = attempt * 3000; // Longer waits for DNS issues
+              console.log(`⏳ Waiting ${waitTime/1000}s before retry (checking internet connection)...`);
+              await delay(waitTime);
+            } else {
+              const waitTime = attempt * 2000;
+              console.log(`⏳ Waiting ${waitTime/1000}s before retry...`);
+              await delay(waitTime);
+            }
+          } else {
+          // Last attempt - check if we're on any alfa page
+          try {
+            const finalUrl = page.url();
+            const pageText = await page.evaluate(() => {
+              try {
+                return document.body.textContent || '';
+              } catch (e) {
+                return '';
+              }
+            });
+            
+            if (finalUrl.includes('alfa.com.lb') && !pageText.includes('Service Unavailable') && !pageText.includes('503')) {
+              console.log(`✅ Page loaded despite errors. URL: ${finalUrl}`);
+              navigationSuccess = true;
+            } else {
+              throw new Error(`Failed to navigate after ${maxRetries} attempts. Last error: ${error.message}`);
+            }
+          } catch (evalError) {
+            // Execution context destroyed - page likely crashed or navigated away
+            if (error.message.includes('ERR_NAME_NOT_RESOLVED')) {
+              throw new Error('Cannot reach alfa.com.lb - DNS resolution failed. Please check your internet connection.');
+            }
+            throw new Error(`Failed to navigate after ${maxRetries} attempts. Network error: ${error.message}`);
+          }
+        }
+        }
+      }
+      
+      if (!navigationSuccess) {
+        throw new Error('Unable to navigate to login page');
+      }
+
+      console.log('⏳ Waiting for page to stabilize...');
+      await delay(3000);
+      
+      // Verify page is actually loaded (not 503 or error)
+      let pageCheck;
+      try {
+        pageCheck = await page.evaluate(() => {
+          return {
+            hasLoginForm: !!document.querySelector('#Username, input[type="password"]'),
+            hasError: document.body.textContent.includes('Service Unavailable') || 
+                     document.body.textContent.includes('503') ||
+                     document.body.textContent.includes('ERR_NAME_NOT_RESOLVED'),
+            bodyText: document.body.textContent.substring(0, 200)
+          };
+        });
+      } catch (evalError) {
+        // Execution context destroyed - page may have navigated or crashed
+        const currentUrl = page.url();
+        throw new Error(`Page evaluation failed. Current URL: ${currentUrl}. This may indicate the page crashed or navigated unexpectedly.`);
+      }
+      
+      if (pageCheck.hasError) {
+        throw new Error('Login page returned Service Unavailable (503) error');
+      }
+      
+      if (!pageCheck.hasLoginForm) {
+        console.log('⚠️ Login form not found, page content:', pageCheck.bodyText);
+        throw new Error('Login form not found - page may have changed or service unavailable');
+      }
+
+      const usernameSelectors = [
+        '#Username',
+        'input[name="Username"]',
+        'input[id*="Username"]',
+        'input[id*="username"]',
+        'input[type="text"]',
+        'input[placeholder*="phone"]',
+        'input[placeholder*="number"]',
+        'input[placeholder*="user"]'
+      ];
+
+      const passwordSelectors = [
+        '#Password',
+        'input[name="Password"]',
+        'input[type="password"]'
+      ];
+
+      let usernameField = null;
+      let passwordField = null;
+
+      for (const selector of usernameSelectors) {
+        try {
+          await page.waitForSelector(selector, { timeout: 2000 });
+          usernameField = selector;
+          console.log(`✅ Found username field: ${selector}`);
+          break;
+        } catch (e) {
+          continue;
+        }
+      }
+
+      if (!usernameField) {
+        const pageContent = await page.evaluate(() => document.body.innerHTML.substring(0, 5000));
+        console.error('❌ Could not find username field. Page content:', pageContent);
+        throw new Error('Login form not found - page may have changed');
+      }
+
+      for (const selector of passwordSelectors) {
+        try {
+          await page.waitForSelector(selector, { timeout: 2000 });
+          passwordField = selector;
+          console.log(`✅ Found password field: ${selector}`);
+          break;
+        } catch (e) {
+          continue;
+        }
+      }
+
+      if (!passwordField) {
+        throw new Error('Password field not found');
+      }
+
+      console.log('📝 Typing credentials...');
+      console.log(`📱 Username: ${credentials.username.substring(0, 3)}***`);
+      console.log(`🔒 Password: ${'*'.repeat(Math.min(credentials.password.length, 8))}`);
+      
+      // Clear fields first
+      await page.click(usernameField, { clickCount: 3 });
+      await page.keyboard.press('Backspace');
+      await page.type(usernameField, credentials.username, { delay: 30 });
+      
+      await page.click(passwordField, { clickCount: 3 });
+      await page.keyboard.press('Backspace');
+      await page.type(passwordField, credentials.password, { delay: 30 });
+      
+      await delay(500);
+
+      const siteKey = await getCaptchaSiteKey(page);
+      let captchaToken = null;
+
+      if (siteKey) {
+        console.log('🔍 CAPTCHA detected, solving...');
+        try {
+          captchaToken = await solveCaptcha(siteKey, page.url());
+          await injectCaptchaToken(page, captchaToken);
+          await delay(500);
+        } catch (error) {
+          console.error('❌ CAPTCHA solving failed:', error.message);
+        }
+      }
+
+      console.log('🔘 Clicking submit button...');
+      await page.click('button[type="submit"]');
+
+      // Wait for navigation after login
+      try {
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 });
+      } catch (navError) {
+        console.log('⚠️ Navigation wait timeout, checking page state...');
+      }
+      
+      await delay(2000);
+      const currentUrl = page.url();
+      console.log(`📍 URL after login: ${currentUrl}`);
+      
+      // Check if still on login page
+      if (currentUrl.includes('/login')) {
+        // Check for CAPTCHA first
+        const hasCaptcha = await getCaptchaSiteKey(page);
+        if (hasCaptcha && !captchaToken) {
+          console.log('🔍 CAPTCHA appeared, solving...');
+          try {
+            captchaToken = await solveCaptcha(hasCaptcha, page.url());
+            await injectCaptchaToken(page, captchaToken);
+            await delay(1000);
+            await page.click('button[type="submit"]');
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 });
+            await delay(2000);
+            const newUrl = page.url();
+            if (newUrl.includes('/login')) {
+              throw new Error('Login failed after CAPTCHA solve');
+            }
+            console.log('✅ Login successful after CAPTCHA');
+          } catch (captchaError) {
+            throw new Error(`CAPTCHA solving failed: ${captchaError.message}`);
+          }
+        } else {
+          // Check for error messages
+          const errorMsg = await page.evaluate(() => {
+            const bodyText = document.body.textContent || '';
+            if (bodyText.toLowerCase().includes('invalid') || bodyText.toLowerCase().includes('incorrect')) {
+              return 'Invalid credentials';
+            }
+            return null;
+          });
+          throw new Error(errorMsg || 'Login failed - still on login page');
+        }
+      } else {
+        console.log('✅ Login successful - navigated away from login page');
+      }
+    }
+
+    // After login, wait a bit for session to establish
+    console.log('⏳ Waiting for session to establish...');
+    await delay(2000);
+    
+    // Set up network listeners BEFORE navigation (or if already on page)
+    const apiResponses = [];
+    const networkData = {
+      requests: [],
+      responses: []
+    };
+    
+    page.on('request', (request) => {
+      const url = request.url();
+      const resourceType = request.resourceType();
+      
+      // Capture all XHR/fetch requests and any Alfa-related endpoints
+      if (resourceType === 'xhr' || resourceType === 'fetch' || 
+          url.includes('alfa.com.lb') || url.includes('api') || 
+          url.includes('ajax') || url.includes('json') || url.includes('data')) {
+        networkData.requests.push({
+          url: url,
+          method: request.method(),
+          headers: request.headers(),
+          resourceType: resourceType
+        });
+        console.log(`📡 Request: ${request.method()} ${url}`);
+      }
+    });
+    
+    page.on('response', async (response) => {
+      const url = response.url();
+      const status = response.status();
+      
+      // Capture all XHR/fetch responses and any Alfa API responses
+      const resourceType = response.request().resourceType();
+      if (((resourceType === 'xhr' || resourceType === 'fetch') || 
+           url.includes('alfa.com.lb') || url.includes('api') || 
+           url.includes('ajax') || url.includes('json') || url.includes('data')) && 
+          status === 200) {
+        try {
+          const contentType = response.headers()['content-type'] || '';
+          if (contentType.includes('json') || url.includes('.json')) {
+            const responseData = await response.json();
+            apiResponses.push({
+              url: url,
+              status: status,
+              data: responseData
+            });
+            
+            // Special logging for getconsumption endpoint (balance source)
+            if (url.includes('getconsumption')) {
+              console.log(`🎯 ✅ getconsumption endpoint response captured!`);
+              console.log(`🎯 URL: ${url}`);
+              console.log(`🎯 Response keys:`, Object.keys(responseData || {}));
+              console.log(`🎯 Full response:`, JSON.stringify(responseData, null, 2).substring(0, 1000));
+            } else if (url.includes('getmyservices')) {
+              console.log(`🎯 ✅ getmyservices endpoint response captured!`);
+              console.log(`🎯 URL: ${url}`);
+              console.log(`🎯 Response keys:`, Object.keys(responseData || {}));
+              console.log(`🎯 Full response:`, JSON.stringify(responseData, null, 2).substring(0, 1000));
+            } else {
+              console.log(`✅ API Response from ${url}:`, JSON.stringify(responseData).substring(0, 200));
+            }
+          } else {
+            const responseText = await response.text();
+            if (responseText.trim().startsWith('{') || responseText.trim().startsWith('[')) {
+              try {
+                const responseData = JSON.parse(responseText);
+                apiResponses.push({
+                  url: url,
+                  status: status,
+                  data: responseData
+                });
+                // Special logging for getconsumption endpoint (balance source)
+                if (url.includes('getconsumption')) {
+                  console.log(`🎯 ✅ getconsumption endpoint response captured (parsed from text)!`);
+                  console.log(`🎯 URL: ${url}`);
+                  console.log(`🎯 Response keys:`, Object.keys(responseData || {}));
+                  console.log(`🎯 Full response:`, JSON.stringify(responseData, null, 2).substring(0, 1000));
+                } else if (url.includes('getmyservices')) {
+                  console.log(`🎯 ✅ getmyservices endpoint response captured (parsed from text)!`);
+                  console.log(`🎯 URL: ${url}`);
+                  console.log(`🎯 Response keys:`, Object.keys(responseData || {}));
+                  console.log(`🎯 Full response:`, JSON.stringify(responseData, null, 2).substring(0, 1000));
+                } else {
+                  console.log(`✅ JSON Response from ${url}:`, JSON.stringify(responseData).substring(0, 200));
+                }
+              } catch (e) {
+                // Not JSON
+              }
+            }
+          }
+          
+          networkData.responses.push({
+            url: url,
+            status: status,
+            headers: response.headers()
+          });
+        } catch (error) {
+          // Ignore errors reading response
+        }
+      }
+    });
+    
+    const postLoginUrl = page.url();
+    console.log(`📍 Current URL after login: ${postLoginUrl}`);
+    
+    // Check more carefully if we're on login page
+    const urlPath = new URL(postLoginUrl).pathname;
+    const isOnLoginPage = urlPath.includes('/login') || urlPath.endsWith('/login');
+    
+    // Also check for actual dashboard content
+    const hasAccountContent = await page.evaluate(() => {
+      return !!document.querySelector('#consumptions, [class*="account"], [class*="dashboard"]');
+    });
+    const hasLoginForm = await page.evaluate(() => {
+      return !!document.querySelector('#Username, input[type="password"]');
+    });
+    
+    console.log(`📄 Is on login page: ${isOnLoginPage}`);
+    console.log(`📄 Has account content: ${hasAccountContent}`);
+    console.log(`📄 Has login form: ${hasLoginForm}`);
+    
+    // If we're already on account page with content, great!
+    if (!isOnLoginPage && hasAccountContent) {
+      console.log('✅ Already on account page after login with content');
+      await delay(5000); // Wait for content to load
+    } else if (isOnLoginPage && !hasAccountContent && hasLoginForm) {
+      // Still on login page with login form - login failed
+      throw new Error('Login failed - still on login page with login form');
+    } else if (isOnLoginPage && !hasAccountContent && !hasLoginForm) {
+      // On login URL but no login form - might be transitioning, try navigating
+      console.log('⚠️ On login URL but no login form - attempting to navigate to account page');
+      // Continue to navigation below
+    } else if (!isOnLoginPage && !hasAccountContent) {
+      // Not on login page but no content - might need to wait or navigate
+      console.log('⚠️ Not on login page but no account content - will navigate');
+      // Continue to navigation
+    } else {
+      // Navigate to account page
+      console.log('🔄 Navigating to account page...');
+      
+      try {
+        // Save cookies immediately after login to preserve session
+        const cookies = await page.cookies();
+        console.log(`🍪 Have ${cookies.length} cookies after login...`);
+        
+        await page.goto('https://www.alfa.com.lb/en/account', {
+          waitUntil: 'networkidle0',
+          timeout: 60000
+        });
+        
+        // Wait for critical elements to load
+        await delay(5000);
+        
+        // Explicitly wait for consumption-container to ensure balance section is loaded
+        try {
+          await page.waitForSelector('#consumption-container', { timeout: 10000 });
+          console.log('✅ #consumption-container loaded');
+          await delay(2000); // Additional wait for content to render
+        } catch (e) {
+          console.log('⚠️ #consumption-container not found after navigation');
+        }
+        
+        const currentUrl = page.url();
+        console.log(`📍 Account page URL: ${currentUrl}`);
+        
+        // Check if redirected to login
+        if (currentUrl.includes('/login')) {
+          // Check if login form is present (definitely redirected)
+          const hasLoginForm = await page.evaluate(() => {
+            return !!document.querySelector('#Username, input[type="password"]');
+          });
+          
+          if (hasLoginForm) {
+            throw new Error('Session expired - redirected to login page after navigation');
+          } else {
+            console.log('⚠️ URL contains /login but no login form found, might be false positive');
+          }
+        }
+        
+        // Verify we can see account content
+        const hasAccountContent = await page.evaluate(() => {
+          return !!document.querySelector('#consumptions, [class*="account"], [class*="dashboard"]');
+        });
+        
+        if (!hasAccountContent && currentUrl.includes('/login')) {
+          throw new Error('Unable to access account page - no account content found');
+        }
+        
+        console.log('✅ Account page loaded successfully');
+        console.log(`📊 Captured ${apiResponses.length} API responses so far`);
+        
+        // CRITICAL: Wait for getconsumption and getmyservices APIs to be called (they might be called after page load)
+        console.log('⏳ Waiting for getconsumption and getmyservices API calls...');
+        const maxWaitTime = 15000; // 15 seconds
+        const checkInterval = 500; // Check every 500ms
+        let waited = 0;
+        let getConsumptionFound = false;
+        let getMyServicesFound = false;
+        
+        while (waited < maxWaitTime && (!getConsumptionFound || !getMyServicesFound)) {
+          await delay(checkInterval);
+          waited += checkInterval;
+          
+          if (!getConsumptionFound) {
+            const foundResponse = apiResponses.find(resp => resp.url && resp.url.includes('getconsumption'));
+            if (foundResponse && foundResponse.data) {
+              getConsumptionFound = true;
+              console.log(`✅✅✅ getconsumption API found after ${waited}ms wait!`);
+            }
+          }
+          
+          if (!getMyServicesFound) {
+            const foundResponse = apiResponses.find(resp => resp.url && resp.url.includes('getmyservices'));
+            if (foundResponse && foundResponse.data) {
+              getMyServicesFound = true;
+              console.log(`✅✅✅ getmyservices API found after ${waited}ms wait!`);
+            }
+          }
+        }
+        
+        if (!getConsumptionFound) {
+          console.log(`⚠️ getconsumption API not found after ${maxWaitTime}ms wait`);
+        }
+        
+        if (!getMyServicesFound) {
+          console.log(`⚠️ getmyservices API not found after ${maxWaitTime}ms wait`);
+        }
+        
+        console.log(`   Available API responses: ${apiResponses.map(r => r.url).join(', ')}`);
+        console.log(`📊 Final: Captured ${apiResponses.length} API responses`);
+      } catch (error) {
+        console.log(`⚠️ Dashboard navigation error: ${error.message}`);
+        
+        const currentUrl = page.url();
+        console.log(`📍 Error URL: ${currentUrl}`);
+        
+        if (error.message.includes('timeout')) {
+          console.log('⏳ Checking if page loaded despite timeout...');
+          
+          if (currentUrl.includes('alfa.com.lb') && !currentUrl.includes('/login')) {
+            const hasContent = await page.evaluate(() => {
+              return !!document.querySelector('#consumptions, [class*="account"]');
+            });
+            if (hasContent) {
+              console.log('✅ Page loaded despite timeout warning');
+            } else {
+              throw new Error('Page loaded but no content found');
+            }
+          } else if (currentUrl.includes('/login')) {
+            throw new Error('Session expired - redirected to login');
+          } else {
+            throw new Error(`Dashboard navigation timeout: ${error.message}`);
+          }
+        } else {
+          if (currentUrl.includes('/login')) {
+            const hasLoginForm = await page.evaluate(() => {
+              return !!document.querySelector('#Username, input[type="password"]');
+            });
+            if (hasLoginForm) {
+              throw new Error('Unable to access dashboard - session may have expired');
+            }
+          }
+          throw error;
+        }
+      }
+    }
+
+    console.log('📊 Extracting dashboard data...');
+    
+    // Wait for getconsumption API endpoint to be called (this is the primary source for balance)
+    console.log('⏳ Waiting for getconsumption endpoint to be called...');
+    let getConsumptionCalled = false;
+    const maxWaitTime = 15000; // 15 seconds max wait
+    const startTime = Date.now();
+    
+    while (!getConsumptionCalled && (Date.now() - startTime) < maxWaitTime) {
+      getConsumptionCalled = apiResponses.some(resp => resp.url && resp.url.includes('getconsumption'));
+      if (!getConsumptionCalled) {
+        await delay(1000); // Check every second
+      }
+    }
+    
+    if (getConsumptionCalled) {
+      console.log('✅ getconsumption endpoint was called!');
+    } else {
+      console.log('⚠️ getconsumption endpoint was not called within timeout (will use HTML extraction)');
+    }
+    
+    // Wait for consumption-container to be available (for balance extraction fallback)
+    let balanceExtracted = false;
+    let extractedBalance = null;
+    
+    try {
+      await page.waitForSelector('#consumption-container', { timeout: 20000 });
+      console.log('✅ #consumption-container found');
+      
+      // Wait for h2.white inside consumption-container to be visible
+      await page.waitForSelector('#consumption-container h2.white', { timeout: 15000 });
+      console.log('✅ h2.white found in consumption-container');
+      
+      // Additional wait to ensure content is fully loaded
+      await delay(3000);
+      
+      // Extract balance directly here (outside page.evaluate for better reliability)
+      extractedBalance = await page.evaluate(() => {
+        const container = document.querySelector('#consumption-container');
+        if (container) {
+          const textCenter = container.querySelector('.text-center');
+          if (textCenter) {
+            const whiteHeading = textCenter.querySelector('h2.white');
+            if (whiteHeading) {
+              const text = whiteHeading.textContent?.trim() || '';
+              const match = text.match(/(\$?\s*-?\d+[,.]?\d*)/i);
+              return match ? match[0].trim() : text.trim();
+            }
+          }
+          // Fallback: direct h2.white
+          const directH2 = container.querySelector('h2.white');
+          if (directH2) {
+            const text = directH2.textContent?.trim() || '';
+            const match = text.match(/(\$?\s*-?\d+[,.]?\d*)/i);
+            return match ? match[0].trim() : text.trim();
+          }
+          // Fallback: container text
+          const containerText = container.textContent || '';
+          const match = containerText.match(/Current\s+Balance[\s\S]{0,50}(\$?\s*-?\d+[,.]?\d*)/i);
+          return match && match[1] ? match[1].trim() : null;
+        }
+        return null;
+      });
+      
+      if (extractedBalance) {
+        balanceExtracted = true;
+        console.log('✅ Balance extracted early (before HTML extraction):', extractedBalance);
+      }
+    } catch (e) {
+      console.log('⚠️ Error waiting for balance elements:', e.message);
+    }
+    
+    // Combine API responses with HTML extraction
+    const dashboardData = {
+      apiResponses: apiResponses,
+      networkRequests: networkData.requests.length,
+      networkResponses: networkData.responses.length
+    };
+    
+    // Get page HTML for debugging
+    const pageHTML = await page.evaluate(() => document.body.innerHTML.substring(0, 5000));
+    console.log('📄 Page HTML sample:', pageHTML.substring(0, 500));
+    
+    // Extract consumption data from circle elements
+    const consumptionData = await page.evaluate(() => {
+      const consumptions = [];
+      const consumptionElements = document.querySelectorAll('#consumptions .circle');
+      
+      consumptionElements.forEach((circle) => {
+        const circleData = {};
+        
+        // Extract percentage and data usage
+        const span = circle.querySelector('.c100 span');
+        if (span) {
+          const text = span.textContent.trim();
+          const parts = text.split('/');
+          if (parts.length === 2) {
+            circleData.used = parts[0].replace(/[^\d.]/g, '').trim();
+            const totalPart = parts[1].trim();
+            circleData.total = totalPart.replace(/[^\d.]/g, '').trim() + 
+                            (totalPart.includes('GB') ? ' GB' : ' MB');
+            circleData.usage = `${circleData.used} / ${circleData.total}`;
+          }
+        }
+        
+        // Extract percentage from class (e.g., "p18" = 18%)
+        const c100Element = circle.querySelector('.c100');
+        if (c100Element) {
+          const classList = Array.from(c100Element.classList);
+          const pClass = classList.find(c => c.startsWith('p'));
+          if (pClass) {
+            circleData.percentage = parseInt(pClass.substring(1));
+          }
+        }
+        
+        // Extract plan name and phone number
+        const titleElement = circle.querySelector('.title');
+        if (titleElement) {
+          const titleText = titleElement.textContent.trim();
+          const lines = titleText.split('\n').map(l => l.trim()).filter(l => l);
+          if (lines.length > 0) {
+            circleData.planName = lines[0];
+          }
+          if (lines.length > 1) {
+            const secondLine = lines[1];
+            if (secondLine.match(/^\d{8,}$/)) {
+              circleData.phoneNumber = secondLine;
+            }
+          }
+          // Also check for phone number in light spans
+          const lightSpans = titleElement.querySelectorAll('.light');
+          lightSpans.forEach(span => {
+            const text = span.textContent.trim();
+            if (text.match(/^\d{8,}$/)) {
+              circleData.phoneNumber = text;
+            }
+          });
+        }
+        
+        if (circleData.planName || circleData.usage) {
+          consumptions.push(circleData);
+        }
+      });
+      
+      return consumptions;
+    });
+    
+    console.log(`📊 Found ${consumptionData.length} consumption circles`);
+    if (consumptionData.length > 0) {
+      console.log('📊 Consumption data:', JSON.stringify(consumptionData, null, 2));
+    }
+    
+    // Also extract HTML data
+    const htmlData = await page.evaluate(() => {
+      const data = {};
+      const allText = document.body.innerText || '';
+      const allHTML = document.body.innerHTML || '';
+      
+      console.log('Page text length:', allText.length);
+      
+      // METHOD 0: Direct extraction from #consumption-container (EXACT structure from user)
+      // Structure: #consumption-container > .text-center > h2.white with text "$ 3.05"
+      const consumptionContainer = document.querySelector('#consumption-container');
+      const extractionDebug = { step: 'start', found: false };
+      
+      if (consumptionContainer) {
+        extractionDebug.step = 'container_found';
+        const textCenter = consumptionContainer.querySelector('.text-center');
+        if (textCenter) {
+          extractionDebug.step = 'textCenter_found';
+          const whiteHeading = textCenter.querySelector('h2.white');
+          if (whiteHeading) {
+            extractionDebug.step = 'whiteHeading_found';
+            const balanceText = whiteHeading.textContent?.trim() || '';
+            extractionDebug.balanceText = balanceText;
+            // Extract balance value (e.g., "$ 3.05" or "$ -0.29")
+            const balanceMatch = balanceText.match(/(\$?\s*-?\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+            if (balanceMatch) {
+              data.balance = balanceMatch[0].trim();
+              extractionDebug.step = 'extracted_via_regex';
+              extractionDebug.found = true;
+            } else if (balanceText) {
+              // If regex doesn't match, use the text as-is (remove any extra whitespace)
+              data.balance = balanceText.replace(/\s+/g, ' ').trim();
+              extractionDebug.step = 'extracted_via_text';
+              extractionDebug.found = true;
+            }
+          } else {
+            extractionDebug.step = 'whiteHeading_not_found';
+            // Try finding h2.white directly in container
+            const directWhiteHeading = consumptionContainer.querySelector('h2.white');
+            if (directWhiteHeading) {
+              const balanceText = directWhiteHeading.textContent?.trim() || '';
+              const balanceMatch = balanceText.match(/(\$?\s*-?\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+              if (balanceMatch) {
+                data.balance = balanceMatch[0].trim();
+                extractionDebug.step = 'extracted_via_direct';
+                extractionDebug.found = true;
+              }
+            }
+          }
+        } else {
+          extractionDebug.step = 'textCenter_not_found';
+        }
+        // Fallback: if h2.white not found, search container text
+        if (!data.balance) {
+          const containerText = consumptionContainer.textContent || '';
+          extractionDebug.containerText = containerText.substring(0, 200);
+          const balanceMatch = containerText.match(/Current\s+Balance[\s\S]{0,50}(\$?\s*-?\d+[,.]?\d*)/i);
+          if (balanceMatch && balanceMatch[1]) {
+            data.balance = balanceMatch[1].trim();
+            extractionDebug.step = 'extracted_via_container_text';
+            extractionDebug.found = true;
+          }
+        }
+      } else {
+        extractionDebug.step = 'container_not_found';
+      }
+      
+      // Store debug info to see what happened
+      data._balanceExtractionDebug = extractionDebug;
+      
+      // METHOD 0b: Extract from table structure (td element with balance value)
+      // Structure: <td> with balance value like "$ -0.29" in a table with "Balance" header
+      if (!data.balance) {
+        // Find all table cells (td) with currency values
+        const allTds = document.querySelectorAll('td');
+        for (const td of allTds) {
+          const text = td.textContent?.trim() || '';
+          // Check if it contains a currency pattern
+          const balanceMatch = text.match(/(\$?\s*-?\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+          if (balanceMatch) {
+            // Check if there's a "Balance" header in the same table
+            const table = td.closest('table');
+            if (table) {
+              const tableText = table.textContent || '';
+              if (tableText.toLowerCase().includes('balance')) {
+                // Get the column index
+                const row = td.parentElement;
+                const cells = Array.from(row.querySelectorAll('td, th'));
+                const cellIndex = cells.indexOf(td);
+                
+                // Check if header row has "Balance" in same column
+                const headerRow = table.querySelector('thead tr, tr:first-child');
+                if (headerRow) {
+                  const headers = Array.from(headerRow.querySelectorAll('th, td'));
+                  if (headers[cellIndex]) {
+                    const headerText = headers[cellIndex].textContent?.toLowerCase() || '';
+                    if (headerText.includes('balance')) {
+                      data.balance = balanceMatch[0].trim();
+                      console.log('✅ Found balance in table cell:', data.balance);
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // METHOD 0c: Simple text search for "Current Balance" or "Balance" label
+      if (!data.balance) {
+        const balanceLabels = ['Current Balance', 'current balance', 'Balance', 'balance'];
+        for (const label of balanceLabels) {
+          const labelIndex = allText.indexOf(label);
+          if (labelIndex !== -1) {
+            // Get text after the label (up to 50 chars)
+            const afterLabel = allText.substring(labelIndex + label.length, labelIndex + label.length + 50);
+            // Look for currency pattern (including negative values)
+            const balanceMatch = afterLabel.match(/(\$?\s*-?\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+            if (balanceMatch) {
+              data.balance = balanceMatch[0].trim();
+              console.log('✅ Found balance using text search for:', label, 'value:', data.balance);
+              break;
+            }
+          }
+        }
+      }
+      
+      // UNIVERSAL Balance Extraction - Try multiple methods to work for ALL users
+      // Method 1: Try #consumption-container (already tried in Method 0, but try again if not found)
+      if (!data.balance) {
+      const consumptionContainer = document.querySelector('#consumption-container');
+      if (consumptionContainer) {
+        // Try h2.white inside container
+        let whiteHeading = consumptionContainer.querySelector('h2.white');
+        if (!whiteHeading) {
+          const textCenter = consumptionContainer.querySelector('.text-center');
+          if (textCenter) {
+            whiteHeading = textCenter.querySelector('h2.white');
+          }
+        }
+        if (!whiteHeading) {
+          const allH2 = consumptionContainer.querySelectorAll('h2');
+          for (const h2 of allH2) {
+            if (h2.classList.contains('white') || h2.textContent.match(/\$?\s*\d+[,.]?\d*/)) {
+              whiteHeading = h2;
+              break;
+            }
+          }
+        }
+        if (whiteHeading) {
+          const balanceText = whiteHeading.textContent?.trim() || '';
+          const balanceMatch = balanceText.match(/(\$?\s*\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+          if (balanceMatch) {
+            data.balance = balanceMatch[0].trim();
+          } else {
+            const numberMatch = balanceText.match(/(\d+[,.]?\d*)/);
+            if (numberMatch) {
+              data.balance = balanceText.trim();
+            }
+          }
+        }
+        // If still not found, search container text
+        if (!data.balance) {
+          const containerText = consumptionContainer.textContent || '';
+          const balancePattern = containerText.match(/(\$?\s*\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+          if (balancePattern) {
+            data.balance = balancePattern[0].trim();
+          }
+        }
+      }
+      
+      // Method 2: Search for "Current Balance" or "Balance" label and get following value
+      if (!data.balance) {
+        const allElements = document.querySelectorAll('*');
+        for (const el of allElements) {
+          const text = (el.textContent || '').trim();
+          if (text.match(/current\s+balance|balance/i) && text.length < 100) {
+            // Check next sibling or parent's next child
+            let valueEl = el.nextElementSibling;
+            if (!valueEl || !valueEl.textContent.trim()) {
+              const parent = el.parentElement;
+              if (parent) {
+                const siblings = Array.from(parent.children);
+                const elIndex = siblings.indexOf(el);
+                if (elIndex < siblings.length - 1) {
+                  valueEl = siblings[elIndex + 1];
+                }
+              }
+            }
+            if (valueEl) {
+              const valueText = valueEl.textContent?.trim() || '';
+              const balanceMatch = valueText.match(/(\$?\s*\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+              if (balanceMatch) {
+                data.balance = balanceMatch[0].trim();
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      // Method 3: Search for currency patterns near balance-related keywords
+      if (!data.balance) {
+        const pageText = allText;
+        // Look for balance near "Current Balance", "Credit", "Amount" keywords
+        const balanceKeywords = ['current balance', 'balance', 'credit', 'amount', 'available'];
+        for (const keyword of balanceKeywords) {
+          const regex = new RegExp(`${keyword}[\\s:]*([\\$\\s]*\\d+[,.]?\\d*)\\s*(?:LBP|USD|lbp|usd)?`, 'i');
+          const match = pageText.match(regex);
+          if (match && match[1]) {
+            data.balance = match[1].trim();
+            if (match[0].includes('$')) {
+              data.balance = '$ ' + data.balance;
+            }
+            break;
+          }
+        }
+      }
+      
+      // Method 4: Search for h2 elements with currency patterns (common balance display)
+      if (!data.balance) {
+        const allH2 = document.querySelectorAll('h2');
+        for (const h2 of allH2) {
+          const text = h2.textContent?.trim() || '';
+          const balanceMatch = text.match(/(\$?\s*\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+          if (balanceMatch && !text.match(/gb|mb|data|usage|consumption/i)) {
+            // Make sure it's not data usage
+            data.balance = balanceMatch[0].trim();
+            break;
+          }
+        }
+      }
+      
+      // Method 5: Search entire page for currency patterns (last resort)
+      if (!data.balance) {
+        const pageText = allText;
+        // Look for currency patterns that aren't part of data usage
+        const currencyPatterns = [
+          /\$\s*(\d+[,.]?\d*)/i,
+          /(\d+[,.]?\d*)\s*(?:LBP|USD)/i,
+          /(\d+[,.]?\d*)\s*\$/
+        ];
+        for (const pattern of currencyPatterns) {
+          const matches = pageText.match(pattern);
+          if (matches && matches[0]) {
+            const candidate = matches[0].trim();
+            // Exclude if it looks like data usage (has GB/MB nearby)
+            const candidateIndex = pageText.indexOf(candidate);
+            const context = pageText.substring(Math.max(0, candidateIndex - 20), 
+                                              Math.min(pageText.length, candidateIndex + 50));
+            if (!context.match(/gb|mb|data|usage|consumption|circle|plan|package/i)) {
+              data.balance = candidate;
+              break;
+            }
+          }
+        }
+      }
+      
+      // Method 6: Search in all div/span elements that might contain balance
+      if (!data.balance) {
+        const allDivs = document.querySelectorAll('div, span, p, td, th');
+        for (const el of allDivs) {
+          const text = el.textContent?.trim() || '';
+          // Look for elements containing "balance" or "credit" with currency nearby
+          if ((text.toLowerCase().includes('balance') || text.toLowerCase().includes('credit')) && 
+              text.length < 100) {
+            const balanceMatch = text.match(/(\$?\s*\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+            if (balanceMatch && !text.match(/gb|mb|data|usage|consumption/i)) {
+              data.balance = balanceMatch[0].trim();
+              break;
+            }
+          }
+        }
+      }
+      
+      // Method 7: Get ALL currency values and pick the one that's most likely balance
+      if (!data.balance) {
+        const pageText = allText;
+        // Find all currency patterns
+        const allCurrencyMatches = [];
+        const currencyRegex = /(\$?\s*\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/gi;
+        let match;
+        while ((match = currencyRegex.exec(pageText)) !== null) {
+          const value = match[0].trim();
+          const contextStart = Math.max(0, match.index - 30);
+          const contextEnd = Math.min(pageText.length, match.index + match[0].length + 30);
+          const context = pageText.substring(contextStart, contextEnd).toLowerCase();
+          
+          // Skip if it's clearly data usage
+          if (!context.match(/gb|mb|data|usage|consumption|circle|plan|package|total\s*bundle/i)) {
+            // Prefer values near "balance", "credit", "amount"
+            const score = (context.match(/balance|credit|amount|available/i) ? 10 : 0) +
+                         (context.match(/current|now/i) ? 5 : 0) -
+                         (context.match(/used|consumed|left|remaining/i) ? 5 : 0);
+            allCurrencyMatches.push({ value, score, context });
+          }
+        }
+        
+        // Sort by score and pick the highest
+        if (allCurrencyMatches.length > 0) {
+          allCurrencyMatches.sort((a, b) => b.score - a.score);
+          data.balance = allCurrencyMatches[0].value;
+        }
+      }
+      } // End of else block for Method 1-7
+      
+      // Final fallback: Look for balance in common patterns if not found yet
+      if (!data.balance) {
+        const balanceSelectors = [
+          '[class*="balance"]',
+          '[id*="balance"]',
+          '[class*="credit"]',
+          '[id*="credit"]',
+          '[class*="amount"]',
+          '[id*="amount"]'
+        ];
+        
+        for (const selector of balanceSelectors) {
+          const elements = document.querySelectorAll(selector);
+          for (const el of elements) {
+            const text = el.textContent?.trim() || '';
+            // Look for currency patterns
+            const balanceMatch = text.match(/(\$?\s*\d+[,.]?\d*)\s*(?:LBP|USD|lbp|usd)?/i);
+            if (balanceMatch && !data.balance) {
+              data.balance = balanceMatch[0].trim();
+              break;
+            }
+          }
+          if (data.balance) break;
+        }
+      }
+      
+      // Try to find expiry date from common patterns
+      const expirySelectors = [
+        '[class*="expir"]',
+        '[id*="expir"]',
+        '[class*="valid"]',
+        '[id*="valid"]',
+        '[class*="expir"]',
+        '[id*="expir"]'
+      ];
+      
+      for (const selector of expirySelectors) {
+        const elements = document.querySelectorAll(selector);
+        for (const el of elements) {
+          const text = el.textContent?.trim() || '';
+          // Look for date patterns
+          const dateMatch = text.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/);
+          if (dateMatch && !data.expiryDate) {
+            data.expiryDate = dateMatch[0].trim();
+            break;
+          }
+        }
+        if (data.expiryDate) break;
+      }
+      
+      // Also try to extract from all text labels
+      
+      function findValueByLabel(labelText) {
+        const searchText = labelText.toLowerCase();
+        const labels = Array.from(document.querySelectorAll('*'));
+        
+        for (const label of labels) {
+          const text = (label.textContent || '').trim().toLowerCase();
+          if (text.includes(searchText)) {
+            let element = label.nextElementSibling;
+            if (!element || !element.textContent.trim()) {
+              element = label.parentElement;
+              const siblings = Array.from(element.children || []);
+              for (const sibling of siblings) {
+                if (sibling !== label && sibling.textContent && sibling.textContent.trim()) {
+                  const siblingText = sibling.textContent.trim();
+                  if (!siblingText.toLowerCase().includes(searchText)) {
+                    return siblingText;
+                  }
+                }
+              }
+            }
+            if (element && element.textContent && element.textContent.trim()) {
+              const elementText = element.textContent.trim();
+              if (!elementText.toLowerCase().includes(searchText)) {
+                return elementText;
+              }
+            }
+          }
+        }
+        
+        const regex = new RegExp(`${labelText}[\\s:]*([^\\n]+)`, 'i');
+        const match = allText.match(regex);
+        return match ? match[1].trim() : null;
+      }
+
+      function extractByPattern(pattern, text) {
+        const regex = new RegExp(pattern, 'gi');
+        const matches = text.match(regex);
+        if (matches && matches.length > 0) {
+          return matches[0].trim();
+        }
+        return null;
+      }
+
+      const pageText = allText;
+      
+      try {
+        data.phoneNumber = findValueByLabel('phone') || 
+                          findValueByLabel('number') ||
+                          extractByPattern(/(\d{8,})/, pageText);
+
+        // Use balance from specific selectors if found, otherwise try label-based extraction
+        if (!data.balance) {
+          data.balance = findValueByLabel('balance') ||
+                        findValueByLabel('credit') ||
+                        findValueByLabel('amount') ||
+                        extractByPattern(/(\$?\d+\.?\d*\s*(?:LBP|USD|lbp|usd)?)/i, pageText);
+        }
+
+        // Use expiryDate from specific selectors if found, otherwise try label-based extraction
+        if (!data.expiryDate) {
+          data.expiryDate = findValueByLabel('expir') ||
+                           findValueByLabel('valid until') ||
+                           findValueByLabel('expires') ||
+                           findValueByLabel('validity') ||
+                           extractByPattern(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/, pageText) ||
+                           extractByPattern(/(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/, pageText);
+        }
+
+        data.planName = findValueByLabel('plan') ||
+                       findValueByLabel('package') ||
+                       findValueByLabel('subscription');
+
+        data.dataUsage = findValueByLabel('data') ||
+                        findValueByLabel('usage') ||
+                        findValueByLabel('consumed');
+
+        data.remainingData = findValueByLabel('remaining') ||
+                            findValueByLabel('left');
+
+        const cards = document.querySelectorAll('[class*="card"], [class*="widget"], [class*="panel"], div[class*="box"]');
+        cards.forEach((card, index) => {
+          const cardText = card.textContent.trim();
+          if (cardText) {
+            if (!data.cards) data.cards = [];
+            data.cards.push({
+              index: index + 1,
+              content: cardText.substring(0, 200)
+            });
+          }
+        });
+
+        const tables = document.querySelectorAll('table');
+        if (tables.length > 0) {
+          data.tableData = [];
+          tables.forEach((table, tableIndex) => {
+            const rows = Array.from(table.querySelectorAll('tr'));
+            const tableInfo = [];
+            rows.forEach(row => {
+              const cells = Array.from(row.querySelectorAll('td, th'));
+              if (cells.length > 0) {
+                const rowData = cells.map(cell => cell.textContent.trim()).filter(t => t);
+                if (rowData.length > 0) {
+                  tableInfo.push(rowData);
+                }
+              }
+            });
+            if (tableInfo.length > 0) {
+              data.tableData.push(tableInfo);
+            }
+          });
+        }
+
+        data.fullPageText = pageText.substring(0, 5000);
+        
+        // Extract all visible text values that might be data
+        const allElements = document.querySelectorAll('*');
+        const textValues = [];
+        const dateValues = [];
+        const numberValues = [];
+        
+        allElements.forEach(el => {
+          const text = el.textContent?.trim() || '';
+          const children = Array.from(el.children);
+          
+          // Only get text from leaf nodes (elements with no text children)
+          if (children.length === 0 && text) {
+            // Check for dates
+            const dateMatch = text.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}/);
+            if (dateMatch && text.length < 50) {
+              dateValues.push(text);
+            }
+            
+            // Check for numbers/amounts
+            if (text.match(/^\$?\d+[,.]?\d*\s*(?:LBP|USD|lbp|usd)?$/i) && text.length < 30) {
+              numberValues.push(text);
+            }
+            
+            // Collect meaningful text (not too long, not empty)
+            if (text.length > 2 && text.length < 200 && !text.match(/^\s*$/)) {
+              textValues.push(text);
+            }
+          }
+        });
+        
+        // Remove duplicates
+        data.amounts = [...new Set(numberValues)].slice(0, 10);
+        data.dates = [...new Set(dateValues)].slice(0, 10);
+        data.allTextValues = [...new Set(textValues)].slice(0, 50);
+        
+        // Try to find specific dashboard sections
+        const sections = document.querySelectorAll('[class*="card"], [class*="panel"], [class*="widget"], [class*="box"], section, [role="region"]');
+        if (sections.length > 0) {
+          data.sections = [];
+          sections.forEach((section, idx) => {
+            const sectionText = section.textContent?.trim() || '';
+            if (sectionText.length > 10 && sectionText.length < 1000) {
+              data.sections.push({
+                index: idx,
+                text: sectionText.substring(0, 300),
+                className: section.className || '',
+                id: section.id || ''
+              });
+            }
+          });
+        }
+
+      } catch (error) {
+        console.error('Error extracting data:', error);
+      }
+
+      return data;
+    });
+    
+    // Merge HTML data into dashboardData
+    Object.assign(dashboardData, htmlData);
+    
+    // Log balance extraction result (outside page.evaluate so it shows in Node console)
+    if (htmlData._balanceExtractionDebug) {
+      console.log('🔍 Balance Extraction Debug Info (from page):');
+      console.log('   Step reached:', htmlData._balanceExtractionDebug.step);
+      console.log('   Balance found?', htmlData._balanceExtractionDebug.found);
+      if (htmlData._balanceExtractionDebug.balanceText) {
+        console.log('   Balance text from h2.white:', htmlData._balanceExtractionDebug.balanceText);
+      }
+      if (htmlData._balanceExtractionDebug.containerText) {
+        console.log('   Container text sample:', htmlData._balanceExtractionDebug.containerText);
+      }
+      delete htmlData._balanceExtractionDebug; // Remove debug info before saving
+    }
+    
+    if (htmlData._balanceDebug) {
+      console.log('🔍 Balance Debug Info (legacy):');
+      console.log('   Container found:', htmlData._balanceDebug.foundContainer);
+      console.log('   Heading found:', htmlData._balanceDebug.foundHeading);
+      console.log('   Heading text:', htmlData._balanceDebug.headingText || 'N/A');
+      if (htmlData._balanceDebug.containerHTML) {
+        console.log('   Container HTML sample:', htmlData._balanceDebug.containerHTML);
+      }
+      delete htmlData._balanceDebug; // Remove debug info before saving
+    }
+    
+    // CRITICAL: Extract and save balance immediately
+    // Priority order:
+    // 1. getconsumption API endpoint (most reliable)
+    // 2. Early HTML extraction (if available)
+    // 3. HTML extraction from page
+    // 4. Other API responses
+    
+    // If balance was already extracted from getconsumption API, keep it
+    if (dashboardData.balance) {
+      console.log('✅ Balance already extracted from API (getconsumption):', dashboardData.balance);
+    } else if (balanceExtracted && extractedBalance) {
+      dashboardData.balance = extractedBalance;
+      console.log('✅ Using balance extracted early from HTML:', dashboardData.balance);
+    } else if (htmlData.balance) {
+      console.log('💰 Balance extraction result:', htmlData.balance || 'NOT FOUND');
+      console.log('💰 Balance type:', typeof htmlData.balance);
+      console.log('💰 Balance value details:', htmlData.balance);
+      console.log('💰 htmlData keys:', Object.keys(htmlData));
+      
+      // Always try to extract balance, even if it's a string like "NOT FOUND"
+      if (htmlData.balance) {
+        const balanceValue = String(htmlData.balance).trim();
+        // Only save if it's a valid balance (not "NOT FOUND", not "-", not empty)
+        if (balanceValue && balanceValue !== 'NOT FOUND' && balanceValue !== '-' && balanceValue.length > 0) {
+          dashboardData.balance = balanceValue;
+          console.log('✅ Balance successfully extracted and saved:', dashboardData.balance);
+        } else {
+          console.log('⚠️ Balance found but invalid:', balanceValue);
+        }
+      } else {
+        // Balance not found in htmlData, try last resort extraction
+        console.log('⚠️ Balance not found in htmlData');
+        console.log('⚠️ htmlData keys:', Object.keys(htmlData));
+        
+        // LAST RESORT: Try to extract from page directly (outside page.evaluate)
+        console.log('🔍 Attempting last resort extraction from page...');
+        try {
+          // Method 1: Direct DOM access to #consumption-container
+          const directBalance = await page.evaluate(() => {
+            const container = document.querySelector('#consumption-container');
+            if (container) {
+              const textCenter = container.querySelector('.text-center');
+              if (textCenter) {
+                const whiteHeading = textCenter.querySelector('h2.white');
+                if (whiteHeading) {
+                  const text = whiteHeading.textContent?.trim() || '';
+                  const match = text.match(/(\$?\s*-?\d+[,.]?\d*)/i);
+                  return match ? match[0].trim() : text.trim();
+                }
+              }
+              // Fallback: search container text
+              const containerText = container.textContent || '';
+              const match = containerText.match(/Current\s+Balance[\s\S]{0,50}(\$?\s*-?\d+[,.]?\d*)/i);
+              return match && match[1] ? match[1].trim() : null;
+            }
+            return null;
+          });
+        
+        if (directBalance) {
+          dashboardData.balance = directBalance;
+          console.log('✅ Balance extracted via direct DOM access:', dashboardData.balance);
+        } else {
+          // Method 2: Text search fallback
+          const pageText = await page.evaluate(() => document.body.innerText || '');
+          
+          // Search for "Current Balance" or "Balance" followed by currency
+          const balancePatterns = [
+            /Current\s+Balance[\s\S]{0,50}?(\$?\s*-?\d+[,.]?\d*)/i,
+            /Balance[\s\S]{0,50}?(\$?\s*-?\d+[,.]?\d*)/i,
+            /(\$?\s*-?\d+[,.]?\d*)\s*(?:LBP|USD)/i
+          ];
+          
+          for (const pattern of balancePatterns) {
+            const match = pageText.match(pattern);
+            if (match && match[1]) {
+              const extractedBalance = match[1].trim();
+              // Make sure it's not data usage
+              const contextStart = Math.max(0, pageText.indexOf(match[0]) - 30);
+              const contextEnd = Math.min(pageText.length, pageText.indexOf(match[0]) + match[0].length + 30);
+              const context = pageText.substring(contextStart, contextEnd).toLowerCase();
+              
+              if (!context.match(/gb|mb|data|usage|consumption|circle|plan|package/i)) {
+                dashboardData.balance = extractedBalance;
+                console.log('✅ Balance extracted via text search:', dashboardData.balance);
+                break;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.log('⚠️ Last resort extraction failed:', error.message);
+      }
+      }
+    }
+    
+    // Ensure balance exists before proceeding
+    if (!dashboardData.balance) {
+      console.log('❌ ERROR: dashboardData.balance is still empty after all extraction methods!');
+      console.log('❌ This means balance could not be extracted from the page');
+      console.log('❌ Will try one more time with longer wait...');
+      
+      // Final attempt: wait longer and try again
+      await delay(3000);
+      const finalBalance = await page.evaluate(() => {
+        const container = document.querySelector('#consumption-container');
+        if (container) {
+          const h2 = container.querySelector('h2.white') || container.querySelector('.text-center h2.white');
+          if (h2) {
+            const text = h2.textContent?.trim() || '';
+            const match = text.match(/(\$?\s*-?\d+[,.]?\d*)/i);
+            return match ? match[0].trim() : text.trim();
+          }
+          // Try container text
+          const text = container.textContent || '';
+          const match = text.match(/Current\s+Balance[\s\S]{0,50}(\$?\s*-?\d+[,.]?\d*)/i);
+          return match && match[1] ? match[1].trim() : null;
+        }
+        return null;
+      });
+      
+      if (finalBalance) {
+        dashboardData.balance = finalBalance;
+        console.log('✅ Balance found on final attempt:', dashboardData.balance);
+      } else {
+        console.log('❌ Balance still not found after final attempt');
+      }
+    } else {
+      console.log('✅ dashboardData.balance is set to:', dashboardData.balance);
+      console.log('✅ Balance will be saved to database');
+    }
+    
+    // CRITICAL: Save apiResponses to dashboardData so fallback extraction can use it
+    dashboardData.apiResponses = apiResponses;
+    console.log(`💾 Saved ${apiResponses.length} API responses to dashboardData`);
+    if (apiResponses.length > 0) {
+      console.log(`   API response URLs:`, apiResponses.map(r => r.url).join(', '));
+    }
+    
+    // Add consumption data
+    if (consumptionData.length > 0) {
+      dashboardData.consumptions = consumptionData;
+      
+      // Use first consumption as primary data
+      const primaryConsumption = consumptionData[0];
+      if (primaryConsumption.usage) {
+        dashboardData.dataUsage = primaryConsumption.usage;
+      }
+      if (primaryConsumption.planName) {
+        dashboardData.planName = primaryConsumption.planName;
+      }
+      if (primaryConsumption.phoneNumber) {
+        dashboardData.phoneNumber = primaryConsumption.phoneNumber;
+      }
+      if (primaryConsumption.total) {
+        dashboardData.totalData = primaryConsumption.total;
+      }
+      if (primaryConsumption.used) {
+        dashboardData.usedData = primaryConsumption.used;
+      }
+      
+      // Build admin consumption: "ServiceName / admin_used / ConsumptionValue"
+      // admin_used = primaryConsumption.used (from HTML)
+      // ConsumptionValue = from API (adminConsumptionTemplate)
+      if (dashboardData.adminConsumptionTemplate && primaryConsumption.used) {
+        const serviceName = dashboardData.adminConsumptionTemplate.serviceName;
+        const adminUsed = primaryConsumption.used; // e.g., "14.66"
+        const consumptionValue = dashboardData.adminConsumptionTemplate.consumptionValue; // e.g., "15008.95"
+        const consumptionUnit = dashboardData.adminConsumptionTemplate.consumptionUnit; // e.g., "MB"
+        
+        // Format: "admin_used / ConsumptionValue" (no service name, just numbers)
+        dashboardData.adminConsumption = `${adminUsed} / ${consumptionValue} ${consumptionUnit}`;
+        console.log(`✅✅✅ Built admin consumption: "${dashboardData.adminConsumption}"`);
+        console.log(`   ServiceName: ${serviceName}`);
+        console.log(`   admin_used (from HTML): ${adminUsed}`);
+        console.log(`   ConsumptionValue (from API): ${consumptionValue} ${consumptionUnit}`);
+      }
+      
+      // DO NOT calculate totalConsumption from HTML circles here
+      // The API extraction (which runs later) will set it correctly from SecondaryValue[0].ConsumptionValue / PackageValue
+      // Only set it here if API extraction completely fails (which we'll check later)
+      console.log('⏸️ Skipping HTML totalConsumption calculation - API extraction will handle it');
+      
+      // Admin consumption and subscribers count will be extracted from API only
+      // (HTML fallback removed - just like balance)
+    }
+    
+    // PRIORITY 1: Extract balance and consumption from getconsumption endpoint (MOST RELIABLE)
+    // EXACTLY LIKE BALANCE - ONLY API, NO HTML FALLBACK
+    const getConsumptionResponse = apiResponses.find(resp => resp.url && resp.url.includes('getconsumption'));
+    if (getConsumptionResponse && getConsumptionResponse.data) {
+      console.log('🎯 Found getconsumption endpoint response!');
+      console.log('🎯 getconsumption data keys:', Object.keys(getConsumptionResponse.data || {}));
+      console.log('🎯 getconsumption full response:', JSON.stringify(getConsumptionResponse.data, null, 2).substring(0, 1000));
+      
+      const apiResponseData = getConsumptionResponse.data; // Use different name to avoid conflict
+      
+      // CRITICAL: Save this to primaryData so we can extract ConsumptionValue later
+      dashboardData.primaryData = apiResponseData;
+      console.log('✅✅✅ Saved getconsumption response to primaryData for later extraction');
+      
+      // Extract balance
+      const balanceFields = [
+        'balance', 'Balance', 'BALANCE',
+        'CurrentBalance', 'currentBalance', 'CurrentBalanceValue',
+        'Amount', 'amount', 'AMOUNT',
+        'BalanceValue', 'balanceValue',
+        'CurrentBalanceAmount', 'currentBalanceAmount'
+      ];
+      
+      for (const field of balanceFields) {
+        if (apiResponseData[field] !== undefined && apiResponseData[field] !== null) {
+          let balanceValue = apiResponseData[field];
+          
+          // If it's a number, format it as currency
+          if (typeof balanceValue === 'number') {
+            balanceValue = `$ ${balanceValue.toFixed(2)}`;
+          } else {
+            balanceValue = String(balanceValue).trim();
+            // Add $ if it's a number without currency symbol
+            if (/^-?\d+[,.]?\d*$/.test(balanceValue)) {
+              balanceValue = `$ ${balanceValue}`;
+            }
+          }
+          
+          dashboardData.balance = balanceValue;
+          console.log(`✅ Extracted balance from getconsumption.${field}:`, dashboardData.balance);
+          break;
+        }
+      }
+      
+      // Extract consumption data from getconsumption API (EXACT STRUCTURE FROM JSON)
+      // ONLY FROM API - NO HTML FALLBACK (just like balance)
+      console.log('📊 Extracting consumption data from getconsumption API ONLY...');
+      console.log('📊 Full getconsumption response structure:', JSON.stringify(apiResponseData, null, 2));
+      
+      // Navigate the nested structure: ServiceInformationValue -> ServiceDetailsInformationValue
+      if (apiResponseData.ServiceInformationValue && 
+          Array.isArray(apiResponseData.ServiceInformationValue) && 
+          apiResponseData.ServiceInformationValue.length > 0) {
+        
+        const firstService = apiResponseData.ServiceInformationValue[0];
+        const serviceName = firstService.ServiceNameValue || '';
+        console.log('✅ Found ServiceInformationValue[0]');
+        
+        if (firstService.ServiceDetailsInformationValue && 
+            Array.isArray(firstService.ServiceDetailsInformationValue) && 
+            firstService.ServiceDetailsInformationValue.length > 0) {
+          
+          const firstServiceDetails = firstService.ServiceDetailsInformationValue[0];
+          
+          // 1. Total Consumption = SecondaryValue[0].ConsumptionValue / ServiceDetailsInformationValue[0].PackageValue
+          // Before "/": ConsumptionValue from first SecondaryValue (line 27 in JSON)
+          // After "/": PackageValue from main ServiceDetailsInformationValue (line 21 in JSON)
+          let totalConsumptionValue = null;
+          let totalConsumptionUnit = null;
+          let totalPackageValue = null;
+          let totalPackageUnit = null;
+          
+          // Get ConsumptionValue from first SecondaryValue (line 27 in JSON: "46.83")
+          console.log('🔍🔍🔍 EXTRACTING TOTAL CONSUMPTION FROM API');
+          console.log('🔍 Looking for SecondaryValue array...');
+          console.log('   firstServiceDetails.SecondaryValue exists?', !!firstServiceDetails.SecondaryValue);
+          console.log('   firstServiceDetails.SecondaryValue is array?', Array.isArray(firstServiceDetails.SecondaryValue));
+          if (firstServiceDetails.SecondaryValue) {
+            console.log('   SecondaryValue length:', firstServiceDetails.SecondaryValue.length);
+            console.log('   All SecondaryValue items:', JSON.stringify(firstServiceDetails.SecondaryValue, null, 2));
+          }
+          
+          if (firstServiceDetails.SecondaryValue && 
+              Array.isArray(firstServiceDetails.SecondaryValue) && 
+              firstServiceDetails.SecondaryValue.length > 0) {
+            const firstSecondary = firstServiceDetails.SecondaryValue[0];
+            console.log('   📌 FIRST SecondaryValue[0] (this is what we need):', JSON.stringify(firstSecondary, null, 2));
+            console.log('   📌 firstSecondary.ConsumptionValue:', firstSecondary.ConsumptionValue);
+            console.log('   📌 firstSecondary.ConsumptionUnitValue:', firstSecondary.ConsumptionUnitValue);
+            
+            if (firstSecondary.ConsumptionValue) {
+              totalConsumptionValue = firstSecondary.ConsumptionValue;
+              totalConsumptionUnit = firstSecondary.ConsumptionUnitValue || '';
+              console.log(`✅✅✅ FOUND ConsumptionValue from first SecondaryValue[0]: "${totalConsumptionValue}" ${totalConsumptionUnit}`);
+            } else {
+              console.log('   ❌❌❌ First SecondaryValue[0] does NOT have ConsumptionValue!');
+              console.log('   First SecondaryValue[0] keys:', Object.keys(firstSecondary || {}));
+            }
+          } else {
+            console.log('   ❌❌❌ SecondaryValue array is empty or not found');
+          }
+          
+          // Get PackageValue from main ServiceDetailsInformationValue (line 21 in JSON: "77")
+          console.log('🔍 Looking for PackageValue in main ServiceDetailsInformationValue...');
+          console.log('   📌 firstServiceDetails.PackageValue:', firstServiceDetails.PackageValue);
+          console.log('   📌 firstServiceDetails.PackageUnitValue:', firstServiceDetails.PackageUnitValue);
+          console.log('   📌 firstServiceDetails keys:', Object.keys(firstServiceDetails || {}));
+          
+          if (firstServiceDetails.PackageValue) {
+            totalPackageValue = firstServiceDetails.PackageValue;
+            totalPackageUnit = firstServiceDetails.PackageUnitValue || '';
+            console.log(`✅✅✅ FOUND PackageValue from main ServiceDetailsInformationValue: "${totalPackageValue}" ${totalPackageUnit}`);
+          } else {
+            console.log('   ❌❌❌ PackageValue not found in main ServiceDetailsInformationValue');
+            console.log('   Available keys:', Object.keys(firstServiceDetails || {}));
+          }
+          
+          if (totalConsumptionValue && totalPackageValue) {
+            // Format: "46.83 / 77 GB" (or with appropriate units)
+            // CRITICAL: Set this BEFORE any HTML fallback calculation
+            dashboardData.totalConsumption = `${totalConsumptionValue} / ${totalPackageValue} ${totalPackageUnit || 'GB'}`;
+            console.log(`✅✅✅ EXTRACTED TOTAL CONSUMPTION FROM API:`);
+            console.log(`   SecondaryValue[0].ConsumptionValue: ${totalConsumptionValue} ${totalConsumptionUnit}`);
+            console.log(`   ServiceDetailsInformationValue[0].PackageValue: ${totalPackageValue} ${totalPackageUnit}`);
+            console.log(`   Final value: "${dashboardData.totalConsumption}"`);
+            console.log(`   ✅✅✅ SET dashboardData.totalConsumption = "${dashboardData.totalConsumption}"`);
+            console.log(`   This should NOT be overwritten by HTML fallback!`);
+          } else {
+            console.log('❌❌❌ Total consumption: Missing values!');
+            console.log('   totalConsumptionValue:', totalConsumptionValue);
+            console.log('   totalPackageValue:', totalPackageValue);
+            console.log('   totalConsumptionValue type:', typeof totalConsumptionValue);
+            console.log('   totalPackageValue type:', typeof totalPackageValue);
+            if (!totalConsumptionValue) {
+              console.log('   ❌ Missing: SecondaryValue[0].ConsumptionValue');
+            }
+            if (!totalPackageValue) {
+              console.log('   ❌ Missing: ServiceDetailsInformationValue[0].PackageValue');
+            }
+            console.log('   ⚠️⚠️⚠️ NOT SETTING dashboardData.totalConsumption - values are missing!');
+          }
+          
+          // 2. Admin Consumption = admin_used_value / ConsumptionValue from getmyservices
+          // Format: "admin_used / 15 GB" (no service name, just numbers)
+          // admin_used comes from HTML consumptions[0].used (U-share Main circle)
+          // ConsumptionValue comes from getmyservices API, line 15: "ConsumptionValue": "15008.95" with "ConsumptionUnitValue": "MB"
+          // NOTE: We'll extract this from getmyservices API response (not getconsumption)
+          console.log('📊 Admin consumption will be extracted from getmyservices API (not getconsumption)');
+          
+          // 3. Subscribers Count = Count of "U-share secondary" in BundleNameValue
+          let subscribersCount = 0;
+          const secondarySubscribers = [];
+          if (firstServiceDetails.SecondaryValue && Array.isArray(firstServiceDetails.SecondaryValue)) {
+            // Extract secondary subscribers (U-share secondary) for "View Details" column
+            firstServiceDetails.SecondaryValue.forEach((secondary, index) => {
+              if (secondary.BundleNameValue && secondary.BundleNameValue.includes('U-share secondary')) {
+                subscribersCount++;
+                
+                // Extract consumption data for this secondary subscriber
+                let consumptionValue = secondary.ConsumptionValue || '';
+                let consumptionUnit = secondary.ConsumptionUnitValue || '';
+                let quotaValue = secondary.QuotaValue || '';
+                let quotaUnit = secondary.QuotaUnitValue || '';
+                let secondaryNumber = secondary.SecondaryNumberValue || '';
+                
+                // Convert MB to GB if needed for display
+                let displayConsumption = consumptionValue;
+                if (consumptionUnit === 'MB' && quotaUnit === 'GB') {
+                  displayConsumption = (parseFloat(consumptionValue) / 1024).toFixed(2);
+                }
+                
+                secondarySubscribers.push({
+                  phoneNumber: secondaryNumber,
+                  consumption: `${displayConsumption} / ${quotaValue} ${quotaUnit}`,
+                  rawConsumption: consumptionValue,
+                  rawConsumptionUnit: consumptionUnit,
+                  quota: quotaValue,
+                  quotaUnit: quotaUnit
+                });
+              }
+            });
+            
+            dashboardData.subscribersCount = subscribersCount;
+            dashboardData.secondarySubscribers = secondarySubscribers; // Save for "View Details" column
+            console.log(`✅ Extracted subscribers count (U-share secondary):`, subscribersCount);
+            console.log(`✅✅✅ SET dashboardData.secondarySubscribers with ${secondarySubscribers.length} items`);
+            console.log(`✅ Extracted secondary subscribers data:`, JSON.stringify(secondarySubscribers, null, 2));
+            console.log(`✅✅✅ Verifying dashboardData.secondarySubscribers is set:`, dashboardData.secondarySubscribers ? 'YES' : 'NO');
+          } else {
+            console.log('⚠️⚠️⚠️ SecondaryValue array not found or empty - NOT SETTING secondarySubscribers');
+          }
+        } else {
+          console.log('⚠️⚠️⚠️ ServiceDetailsInformationValue not found - NOT SETTING secondarySubscribers');
+        }
+      } else {
+        console.log('⚠️ ServiceInformationValue not found in getconsumption response');
+      }
+      
+      // If balance field not found, log the entire structure for debugging
+      if (!dashboardData.balance) {
+        console.log('⚠️ Balance field not found in getconsumption response. Full structure:');
+        console.log(JSON.stringify(apiResponseData, null, 2));
+      }
+      
+      // Verify totalConsumption was extracted
+      console.log('🔍🔍🔍 VERIFICATION AFTER EXTRACTION:');
+      console.log('   dashboardData.totalConsumption:', dashboardData.totalConsumption);
+      console.log('   dashboardData.secondarySubscribers:', dashboardData.secondarySubscribers);
+      console.log('   dashboardData keys:', Object.keys(dashboardData));
+      
+      if (dashboardData.totalConsumption) {
+        console.log('✅✅✅✅✅ Total consumption EXTRACTED AND SAVED from API:', dashboardData.totalConsumption);
+        console.log('✅✅✅ This will be saved to database - NO HTML FALLBACK!');
+      } else {
+        console.log('❌❌❌❌❌ Total consumption NOT extracted from API!');
+        console.log('   Full API structure:', JSON.stringify(apiResponseData, null, 2));
+        console.log('   This means extraction failed - check the logs above for errors');
+        console.log('   ⚠️⚠️⚠️ Check if SecondaryValue[0].ConsumptionValue and PackageValue were found!');
+      }
+      
+      if (dashboardData.secondarySubscribers) {
+        console.log('✅✅✅✅✅ Secondary subscribers EXTRACTED:', dashboardData.secondarySubscribers.length, 'items');
+      } else {
+        console.log('❌❌❌❌❌ Secondary subscribers NOT extracted!');
+      }
+    } else {
+      // getconsumption API response not found - NO FALLBACK (just like balance)
+      console.log('⚠️⚠️⚠️ getconsumption API response not found - NO HTML FALLBACK');
+      console.log('   Available API responses:', apiResponses.map(r => r.url).join(', '));
+    }
+    
+    // If we have API responses, extract and structure the data
+    // NOTE: primaryData should already be set from getconsumption response above
+    // CRITICAL: Only set primaryData to getconsumption response, NEVER to other API responses
+    // Other API responses (getlastrecharge, getexpirydate) don't have ServiceInformationValue structure
+    // Check if getconsumption was already found and saved above
+    if (dashboardData.primaryData && dashboardData.primaryData.ServiceInformationValue) {
+      console.log('✅ primaryData already set correctly from getconsumption response');
+    } else {
+      // Try to find getconsumption response again
+      const getConsumptionResp = apiResponses.find(resp => resp.url && resp.url.includes('getconsumption'));
+      if (getConsumptionResp && getConsumptionResp.data) {
+        dashboardData.primaryData = getConsumptionResp.data;
+        console.log('✅✅✅ Set primaryData to getconsumption response (found later)');
+      } else {
+        console.log('⚠️⚠️⚠️ getconsumption API response not found - primaryData will NOT be set');
+        console.log('   This means adminConsumption cannot be extracted from API');
+        console.log('   Available API responses:', apiResponses.map(r => r.url).join(', '));
+        // DO NOT set primaryData to other API responses - they don't have the right structure
+      }
+    }
+    
+    // PRIORITY 1.5: Extract Expiration from getexpirydate API
+    // Expiration = number of days remaining from getexpirydate API response (just a number like "54")
+    let getExpiryDateResponse = apiResponses.find(resp => resp.url && resp.url.includes('getexpirydate'));
+    
+    // If getexpirydate API wasn't captured automatically, make a direct fetch call
+    if (!getExpiryDateResponse || getExpiryDateResponse.data === undefined || getExpiryDateResponse.data === null) {
+      console.log('⚠️ getexpirydate API not found in captured responses - making direct API call...');
+      try {
+        // Make a direct fetch call to getexpirydate API using the browser context
+        const expiryDateData = await page.evaluate(async () => {
+          const timestamp = Date.now();
+          const url = `https://www.alfa.com.lb/en/account/getexpirydate?_=${timestamp}`;
+          
+          try {
+            const response = await fetch(url, {
+              method: 'GET',
+              credentials: 'include', // Include cookies for authentication
+              headers: {
+                'Accept': 'application/json, text/plain, */*',
+                'X-Requested-With': 'XMLHttpRequest'
+              }
+            });
+            
+            if (response.ok) {
+              // The response is just a number (could be JSON number or string)
+              const text = await response.text();
+              const data = text.trim();
+              // Try to parse as number, but keep as string if it's already a valid number string
+              const numValue = data.match(/^\d+$/) ? data : (isNaN(data) ? null : data);
+              return { success: true, data: numValue || data };
+            } else {
+              return { success: false, error: `HTTP ${response.status}` };
+            }
+          } catch (error) {
+            return { success: false, error: error.message };
+          }
+        });
+        
+        if (expiryDateData.success && expiryDateData.data !== null && expiryDateData.data !== undefined) {
+          console.log('✅✅✅ Successfully fetched getexpirydate API directly!');
+          getExpiryDateResponse = {
+            url: 'https://www.alfa.com.lb/en/account/getexpirydate',
+            status: 200,
+            data: expiryDateData.data
+          };
+          // Add to apiResponses array for persistence
+          apiResponses.push(getExpiryDateResponse);
+          // Update dashboardData.apiResponses to include the new response
+          dashboardData.apiResponses = apiResponses;
+          console.log('✅ Added getexpirydate response to apiResponses array');
+          console.log(`✅ Expiration days: ${expiryDateData.data}`);
+        } else {
+          console.log('❌ Failed to fetch getexpirydate API:', expiryDateData.error);
+        }
+      } catch (error) {
+        console.log('❌ Error making direct getexpirydate API call:', error.message);
+      }
+    } else {
+      console.log('✅ Found getexpirydate API response:', getExpiryDateResponse.data);
+    }
+    
+    // PRIORITY 2: Extract Admin Consumption from getmyservices API
+    // Format: "admin_used / ConsumptionValue" (e.g., "13 / 15 GB")
+    // Before "/": consumptions[0].used (from HTML U-share Main circle)
+    // After "/": ConsumptionValue from getmyservices API (line 15: "ConsumptionValue": "15008.95" with unit "MB")
+    let getMyServicesResponse = apiResponses.find(resp => resp.url && resp.url.includes('getmyservices'));
+    
+    // If getmyservices API wasn't captured automatically, make a direct fetch call
+    if (!getMyServicesResponse || !getMyServicesResponse.data) {
+      console.log('⚠️ getmyservices API not found in captured responses - making direct API call...');
+      try {
+        // Make a direct fetch call to getmyservices API using the browser context
+        const myServicesData = await page.evaluate(async () => {
+          const timestamp = Date.now();
+          const url = `https://www.alfa.com.lb/en/account/manage-services/getmyservices?_=${timestamp}`;
+          
+          try {
+            const response = await fetch(url, {
+              method: 'GET',
+              credentials: 'include', // Include cookies for authentication
+              headers: {
+                'Accept': 'application/json, text/plain, */*',
+                'X-Requested-With': 'XMLHttpRequest'
+              }
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              return { success: true, data: data };
+            } else {
+              return { success: false, error: `HTTP ${response.status}` };
+            }
+          } catch (error) {
+            return { success: false, error: error.message };
+          }
+        });
+        
+        if (myServicesData.success && myServicesData.data) {
+          console.log('✅✅✅ Successfully fetched getmyservices API directly!');
+          getMyServicesResponse = {
+            url: 'https://www.alfa.com.lb/en/account/manage-services/getmyservices',
+            status: 200,
+            data: myServicesData.data
+          };
+          // Add to apiResponses array for persistence
+          apiResponses.push(getMyServicesResponse);
+          // Update dashboardData.apiResponses to include the new response
+          dashboardData.apiResponses = apiResponses;
+          console.log('✅ Added getmyservices response to apiResponses array');
+          console.log(`✅ Updated dashboardData.apiResponses with ${apiResponses.length} total responses`);
+        } else {
+          console.log('❌ Failed to fetch getmyservices API:', myServicesData.error);
+        }
+      } catch (error) {
+        console.log('❌ Error making direct getmyservices API call:', error.message);
+      }
+    }
+    
+    if (getMyServicesResponse && getMyServicesResponse.data) {
+      console.log('🎯 Found getmyservices endpoint response!');
+      console.log('🎯 getmyservices data keys:', Object.keys(getMyServicesResponse.data || {}));
+      
+      const myServicesData = getMyServicesResponse.data;
+      
+      // Extract ConsumptionValue from ServiceDetailsInformationValue[0].ConsumptionValue (line 15)
+      if (myServicesData.ServiceInformationValue && 
+          Array.isArray(myServicesData.ServiceInformationValue) && 
+          myServicesData.ServiceInformationValue.length > 0) {
+        
+        const firstService = myServicesData.ServiceInformationValue[0];
+        if (firstService.ServiceDetailsInformationValue && 
+            Array.isArray(firstService.ServiceDetailsInformationValue) && 
+            firstService.ServiceDetailsInformationValue.length > 0) {
+          
+          const firstServiceDetails = firstService.ServiceDetailsInformationValue[0];
+          const consumptionValue = firstServiceDetails.ConsumptionValue; // Line 15: "15008.95"
+          const consumptionUnit = firstServiceDetails.ConsumptionUnitValue || ''; // Line 14: "MB"
+          
+          console.log('✅ Found ConsumptionValue in getmyservices:', consumptionValue, consumptionUnit);
+          
+          // Store the template for later use
+          dashboardData.adminConsumptionTemplate = {
+            serviceName: firstService.ServiceNameValue || 'U-share Main',
+            consumptionValue: consumptionValue,
+            consumptionUnit: consumptionUnit
+          };
+          console.log(`✅ Extracted admin consumption template from getmyservices:`);
+          console.log(`   ServiceName: ${dashboardData.adminConsumptionTemplate.serviceName}`);
+          console.log(`   ConsumptionValue: ${consumptionValue} ${consumptionUnit}`);
+          
+          // Build adminConsumption if we have consumptions data
+          if (dashboardData.consumptions && dashboardData.consumptions.length > 0) {
+            const primaryConsumption = dashboardData.consumptions[0];
+            if (primaryConsumption.used) {
+              // Convert MB to GB if needed (for display: 15008.95 MB = ~14.66 GB, but user example shows "15 GB")
+              let displayValue = consumptionValue;
+              let displayUnit = consumptionUnit;
+              
+              // If unit is MB and value is large, convert to GB for display
+              if (consumptionUnit === 'MB' && parseFloat(consumptionValue) > 1000) {
+                const valueInGB = (parseFloat(consumptionValue) / 1024).toFixed(2);
+                displayValue = valueInGB;
+                displayUnit = 'GB';
+                console.log(`   Converted ${consumptionValue} ${consumptionUnit} to ${displayValue} ${displayUnit}`);
+              }
+              
+              dashboardData.adminConsumption = `${primaryConsumption.used} / ${displayValue} ${displayUnit}`;
+              console.log(`✅✅✅ Built adminConsumption from getmyservices: "${dashboardData.adminConsumption}"`);
+            }
+          }
+        } else {
+          console.log('⚠️ ServiceDetailsInformationValue not found in getmyservices response');
+        }
+      } else {
+        console.log('⚠️ ServiceInformationValue not found in getmyservices response');
+      }
+    } else {
+      console.log('⚠️ getmyservices API response not found');
+      console.log('   Available API responses:', apiResponses.map(r => r.url).join(', '));
+    }
+    
+    // Extract key fields from primaryData if available
+    if (dashboardData.primaryData) {
+      const apiData = dashboardData.primaryData;
+      
+      // Extract key fields from API response (only if not already extracted from HTML or getconsumption)
+      if (!dashboardData.balance && apiData.CurrentBalanceValue) {
+        dashboardData.balance = String(apiData.CurrentBalanceValue).trim();
+        console.log('✅ Extracted balance from API CurrentBalanceValue:', dashboardData.balance);
+      }
+      
+      if (apiData.MobileNumberValue) {
+        dashboardData.phoneNumber = apiData.MobileNumberValue;
+      }
+      
+      // Extract service/plan information
+      if (apiData.ServiceInformationValue && apiData.ServiceInformationValue.length > 0) {
+        const service = apiData.ServiceInformationValue[0];
+        
+        if (service.ServiceDetailsInformationValue && service.ServiceDetailsInformationValue.length > 0) {
+          const details = service.ServiceDetailsInformationValue[0];
+          
+          if (details.PackageValue && details.PackageUnitValue) {
+            dashboardData.planName = `${details.PackageValue} ${details.PackageUnitValue}`;
+          }
+          
+          if (details.ConsumptionValue && details.ConsumptionUnitValue) {
+            dashboardData.dataUsage = `${details.ConsumptionValue} ${details.ConsumptionUnitValue}`;
+          }
+          
+          // Calculate remaining data
+          if (details.PackageValue && details.ConsumptionValue) {
+            const totalMB = parseFloat(details.PackageValue) * (details.PackageUnitValue === 'GB' ? 1024 : 1);
+            const usedMB = parseFloat(details.ConsumptionValue) * (details.ConsumptionUnitValue === 'GB' ? 1024 : 1);
+            const remaining = totalMB - usedMB;
+            if (remaining >= 0) {
+              dashboardData.remainingData = `${remaining.toFixed(2)} MB`;
+            }
+          }
+        }
+        
+        // Extract expiry date if available (only if not already extracted from HTML)
+        if (!dashboardData.expiryDate && service.ExpiryDateValue) {
+          dashboardData.expiryDate = service.ExpiryDateValue;
+        }
+      }
+      
+      console.log(`✅ Extracted from API:`);
+      console.log(`   Balance: ${dashboardData.balance || 'N/A'}`);
+      console.log(`   Plan: ${dashboardData.planName || 'N/A'}`);
+      console.log(`   Usage: ${dashboardData.dataUsage || 'N/A'}`);
+      console.log(`   Expiry: ${dashboardData.expiryDate || 'N/A'}`);
+    }
+
+    console.log('📊 Extracted data keys:', Object.keys(dashboardData));
+    console.log('📊 Balance:', dashboardData.balance || 'NOT FOUND');
+    console.log('📊 Expiry Date:', dashboardData.expiryDate || 'NOT FOUND');
+    
+    // Debug primaryData structure
+    if (dashboardData.primaryData) {
+      console.log('📊 primaryData keys:', Object.keys(dashboardData.primaryData));
+      console.log('📊 primaryData.CurrentBalanceValue:', dashboardData.primaryData.CurrentBalanceValue);
+      console.log('📊 primaryData type:', typeof dashboardData.primaryData);
+      console.log('📊 primaryData sample:', JSON.stringify(dashboardData.primaryData, null, 2).substring(0, 500));
+    } else {
+      console.log('📊 primaryData is null/undefined');
+    }
+    
+    // CRITICAL: Ensure balance is ALWAYS saved at top level, even if primaryData is empty
+    if (!dashboardData.balance || dashboardData.balance === 'NOT FOUND' || dashboardData.balance === '-') {
+      if (dashboardData.primaryData?.CurrentBalanceValue) {
+        dashboardData.balance = String(dashboardData.primaryData.CurrentBalanceValue).trim();
+        console.log('✅ Set balance from primaryData.CurrentBalanceValue:', dashboardData.balance);
+      } else if (apiResponses.length > 0 && apiResponses[0].data?.CurrentBalanceValue) {
+        // Fallback: get directly from API response if primaryData is empty
+        dashboardData.balance = String(apiResponses[0].data.CurrentBalanceValue).trim();
+        console.log('✅ Set balance directly from API response:', dashboardData.balance);
+      } else {
+        console.log('⚠️ WARNING: Balance not found anywhere!');
+      }
+    }
+    
+    // Final check: Ensure balance is a valid string value before saving
+    if (dashboardData.balance && dashboardData.balance !== 'NOT FOUND' && dashboardData.balance !== '-') {
+      dashboardData.balance = String(dashboardData.balance).trim();
+      console.log('✅ FINAL: Balance will be saved as:', dashboardData.balance);
+    } else {
+      console.log('❌ ERROR: Balance is still missing or invalid before save!');
+      console.log('   dashboardData.balance value:', dashboardData.balance);
+      console.log('   htmlData.balance:', htmlData.balance);
+      console.log('   apiResponses[0]?.data?.CurrentBalanceValue:', apiResponses[0]?.data?.CurrentBalanceValue);
+      
+      // Last resort: try to extract from amounts array if available
+      if (dashboardData.amounts && dashboardData.amounts.length > 0) {
+        const amountValue = dashboardData.amounts[0];
+        if (amountValue && typeof amountValue === 'string' && amountValue.match(/[\d.,]+/)) {
+          dashboardData.balance = amountValue;
+          console.log('✅ Using amounts[0] as balance fallback:', dashboardData.balance);
+        }
+      }
+    }
+    
+    // Log final state before saving
+    console.log('📋 Final dashboardData.balance before save:', dashboardData.balance);
+    console.log('📋 Balance type:', typeof dashboardData.balance);
+    console.log('📋 Balance truthy check:', !!dashboardData.balance);
+    console.log('📋 Balance !== NOT FOUND:', dashboardData.balance !== 'NOT FOUND');
+    console.log('📋 Balance !== -:', dashboardData.balance !== '-');
+    console.log('📋 Will balance be saved?', !!(dashboardData.balance && dashboardData.balance !== 'NOT FOUND' && dashboardData.balance !== '-'));
+    console.log('📋 dashboardData keys:', Object.keys(dashboardData));
+    console.log('📋 dashboardData.balance in keys?', 'balance' in dashboardData);
+    
+    const cookies = await page.cookies();
+    const tokens = await page.evaluate(() => {
+      return {
+        localStorage: Object.keys(localStorage).reduce((acc, key) => {
+          acc[key] = localStorage.getItem(key);
+          return acc;
+        }, {}),
+        sessionStorage: Object.keys(sessionStorage).reduce((acc, key) => {
+          acc[key] = sessionStorage.getItem(key);
+          return acc;
+        }, {})
+      };
+    });
+
+    await saveSession(userId, cookies, tokens);
+    
+    // FINAL CHECK: Log what's in dashboardData before saving
+    console.log('🔍🔍🔍 FINAL CHECK BEFORE SAVING:');
+    console.log('   dashboardData.totalConsumption:', dashboardData.totalConsumption);
+    console.log('   dashboardData.secondarySubscribers:', dashboardData.secondarySubscribers);
+    console.log('   dashboardData.secondarySubscribers length:', dashboardData.secondarySubscribers ? dashboardData.secondarySubscribers.length : 'N/A');
+    console.log('   dashboardData.balance:', dashboardData.balance);
+    console.log('   dashboardData keys:', Object.keys(dashboardData));
+    
+    // CRITICAL: If data is missing, try to extract it from primaryData as fallback
+    if (!dashboardData.totalConsumption && dashboardData.primaryData) {
+      console.log('⚠️⚠️⚠️ totalConsumption missing! Trying to extract from primaryData...');
+      const primaryData = dashboardData.primaryData;
+      if (primaryData.ServiceInformationValue && 
+          Array.isArray(primaryData.ServiceInformationValue) && 
+          primaryData.ServiceInformationValue.length > 0) {
+        const firstService = primaryData.ServiceInformationValue[0];
+        if (firstService.ServiceDetailsInformationValue && 
+            Array.isArray(firstService.ServiceDetailsInformationValue) && 
+            firstService.ServiceDetailsInformationValue.length > 0) {
+          const firstServiceDetails = firstService.ServiceDetailsInformationValue[0];
+          
+          // Extract totalConsumption from SecondaryValue[0]
+          if (firstServiceDetails.SecondaryValue && 
+              Array.isArray(firstServiceDetails.SecondaryValue) && 
+              firstServiceDetails.SecondaryValue.length > 0) {
+            const firstSecondary = firstServiceDetails.SecondaryValue[0];
+            if (firstSecondary.ConsumptionValue && firstServiceDetails.PackageValue) {
+              dashboardData.totalConsumption = `${firstSecondary.ConsumptionValue} / ${firstServiceDetails.PackageValue} ${firstServiceDetails.PackageUnitValue || 'GB'}`;
+              console.log('✅✅✅ EXTRACTED totalConsumption from primaryData fallback:', dashboardData.totalConsumption);
+            }
+          }
+          
+          // Extract adminConsumption from primaryData
+          if (!dashboardData.adminConsumption && firstService.ServiceNameValue && firstServiceDetails.ConsumptionValue) {
+            const serviceName = firstService.ServiceNameValue;
+            const consumptionValue = firstServiceDetails.ConsumptionValue;
+            const consumptionUnit = firstServiceDetails.ConsumptionUnitValue || '';
+            const adminUsed = dashboardData.consumptions && dashboardData.consumptions[0] ? dashboardData.consumptions[0].used : null;
+            
+            if (adminUsed) {
+              // Format: "admin_used / ConsumptionValue" (no service name, just numbers)
+              dashboardData.adminConsumption = `${adminUsed} / ${consumptionValue} ${consumptionUnit}`;
+              console.log('✅✅✅ EXTRACTED adminConsumption from primaryData fallback:', dashboardData.adminConsumption);
+            }
+          }
+          
+          // Extract secondarySubscribers from SecondaryValue
+          if (!dashboardData.secondarySubscribers && firstServiceDetails.SecondaryValue && Array.isArray(firstServiceDetails.SecondaryValue)) {
+            const secondarySubscribers = [];
+            firstServiceDetails.SecondaryValue.forEach((secondary) => {
+              if (secondary.BundleNameValue && secondary.BundleNameValue.includes('U-share secondary')) {
+                let consumptionValue = secondary.ConsumptionValue || '';
+                let consumptionUnit = secondary.ConsumptionUnitValue || '';
+                let quotaValue = secondary.QuotaValue || '';
+                let quotaUnit = secondary.QuotaUnitValue || '';
+                
+                let displayConsumption = consumptionValue;
+                if (consumptionUnit === 'MB' && quotaUnit === 'GB') {
+                  displayConsumption = (parseFloat(consumptionValue) / 1024).toFixed(2);
+                }
+                
+                secondarySubscribers.push({
+                  phoneNumber: secondary.SecondaryNumberValue || '',
+                  consumption: `${displayConsumption} / ${quotaValue} ${quotaUnit}`,
+                  rawConsumption: consumptionValue,
+                  rawConsumptionUnit: consumptionUnit,
+                  quota: quotaValue,
+                  quotaUnit: quotaUnit
+                });
+              }
+            });
+            
+            if (secondarySubscribers.length > 0) {
+              dashboardData.secondarySubscribers = secondarySubscribers;
+              console.log('✅✅✅ EXTRACTED secondarySubscribers from primaryData fallback:', secondarySubscribers.length, 'items');
+            }
+          }
+        }
+      }
+    }
+    
+    // FINAL CHECK AFTER FALLBACK
+    console.log('🔍🔍🔍 FINAL CHECK AFTER FALLBACK:');
+    console.log('   dashboardData.totalConsumption:', dashboardData.totalConsumption);
+    console.log('   dashboardData.adminConsumption:', dashboardData.adminConsumption);
+    console.log('   dashboardData.secondarySubscribers:', dashboardData.secondarySubscribers);
+    
+    // FINAL ATTEMPT: Build adminConsumption if still missing
+    // Try multiple sources: apiResponses, primaryData, or build from template
+    if (!dashboardData.adminConsumption && dashboardData.consumptions && dashboardData.consumptions.length > 0) {
+      const primaryConsumption = dashboardData.consumptions[0];
+      const adminUsed = primaryConsumption.used;
+      
+      console.log('🔍🔍🔍 FINAL ATTEMPT: Building adminConsumption...');
+      console.log('   adminUsed from consumptions[0]:', adminUsed);
+      console.log('   apiResponses length:', dashboardData.apiResponses?.length || 0);
+      console.log('   primaryData exists:', !!dashboardData.primaryData);
+      
+      if (adminUsed) {
+        let consumptionValue = null;
+        let consumptionUnit = null;
+        let serviceName = 'U-share Main';
+        
+        // Try to get from apiResponses
+        const getConsumptionResponse = dashboardData.apiResponses?.find(resp => resp.url && resp.url.includes('getconsumption'));
+        if (getConsumptionResponse && getConsumptionResponse.data) {
+          console.log('   ✅ Found getconsumption in apiResponses');
+          const apiData = getConsumptionResponse.data;
+          if (apiData.ServiceInformationValue && apiData.ServiceInformationValue.length > 0) {
+            const service = apiData.ServiceInformationValue[0];
+            if (service.ServiceNameValue) serviceName = service.ServiceNameValue;
+            if (service.ServiceDetailsInformationValue && service.ServiceDetailsInformationValue.length > 0) {
+              const details = service.ServiceDetailsInformationValue[0];
+              // CRITICAL: Use ConsumptionValue (15008.95 MB), NOT PackageValue (77 GB)
+              if (details.ConsumptionValue) {
+                consumptionValue = details.ConsumptionValue;
+                consumptionUnit = details.ConsumptionUnitValue || '';
+                console.log('   ✅✅✅ Found ConsumptionValue in apiResponses:', consumptionValue, consumptionUnit);
+                console.log('   ❌ NOT using PackageValue:', details.PackageValue, details.PackageUnitValue);
+              } else {
+                console.log('   ❌ ConsumptionValue not found! Available keys:', Object.keys(details));
+              }
+            }
+          }
+        }
+        
+        // If not found in apiResponses, try primaryData
+        if (!consumptionValue && dashboardData.primaryData) {
+          console.log('   ✅ Trying primaryData...');
+          const primaryData = dashboardData.primaryData;
+          if (primaryData.ServiceInformationValue && primaryData.ServiceInformationValue.length > 0) {
+            const service = primaryData.ServiceInformationValue[0];
+            if (service.ServiceNameValue) serviceName = service.ServiceNameValue;
+            if (service.ServiceDetailsInformationValue && service.ServiceDetailsInformationValue.length > 0) {
+              const details = service.ServiceDetailsInformationValue[0];
+              // CRITICAL: Use ConsumptionValue (15008.95 MB), NOT PackageValue (77 GB)
+              if (details.ConsumptionValue) {
+                consumptionValue = details.ConsumptionValue;
+                consumptionUnit = details.ConsumptionUnitValue || '';
+                console.log('   ✅✅✅ Found ConsumptionValue in primaryData:', consumptionValue, consumptionUnit);
+                console.log('   ❌ NOT using PackageValue:', details.PackageValue, details.PackageUnitValue);
+              } else {
+                console.log('   ❌ ConsumptionValue not found! Available keys:', Object.keys(details));
+              }
+            }
+          }
+        }
+        
+        // If still not found, try adminConsumptionTemplate
+        if (!consumptionValue && dashboardData.adminConsumptionTemplate) {
+          console.log('   ✅ Trying adminConsumptionTemplate...');
+          serviceName = dashboardData.adminConsumptionTemplate.serviceName;
+          consumptionValue = dashboardData.adminConsumptionTemplate.consumptionValue;
+          consumptionUnit = dashboardData.adminConsumptionTemplate.consumptionUnit;
+        }
+        
+        // Build adminConsumption if we have the ConsumptionValue
+        // Format: "admin_used / ConsumptionValue" (no service name, just numbers)
+        if (consumptionValue) {
+          dashboardData.adminConsumption = `${adminUsed} / ${consumptionValue} ${consumptionUnit}`;
+          console.log('✅✅✅✅✅ FINAL ATTEMPT SUCCESS: Built adminConsumption:', dashboardData.adminConsumption);
+        } else {
+          console.log('❌❌❌ Could not find ConsumptionValue from any source!');
+          console.log('   Available apiResponses:', dashboardData.apiResponses?.map(r => r.url).join(', ') || 'none');
+        }
+      }
+    }
+    
+    await updateDashboardData(userId, dashboardData);
+    
+    console.log('✅ Dashboard data saved to database');
+
+    await browser.close();
+    return dashboardData;
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
+}
+
+module.exports = { loginAndFetchDashboard };
+
+
+

@@ -1,0 +1,333 @@
+// Import the functions you need from the SDKs you need
+const { initializeApp } = require("firebase/app");
+const { getFirestore, doc, getDoc, setDoc, collection, getDocs } = require("firebase/firestore");
+
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyCz83EAYIqHZgfjdyhsNr1m1d0lfe7SHRg",
+  authDomain: "linkify-1f8e7.firebaseapp.com",
+  projectId: "linkify-1f8e7",
+  storageBucket: "linkify-1f8e7.firebasestorage.app",
+  messagingSenderId: "22572769612",
+  appId: "1:22572769612:web:580da17cab96ae519a6fe9",
+  measurementId: "G-01YBXB5H9V"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// Collection name for storing user credentials and sessions
+const COLLECTION_NAME = 'alfa_users';
+
+/**
+ * Get credentials from Firebase for a specific user
+ * @param {string} userId - User ID
+ * @returns {Promise<{username: string, password: string}>}
+ */
+async function getCredentials(userId) {
+  try {
+    const userDocRef = doc(db, COLLECTION_NAME, userId);
+    const userDoc = await getDoc(userDocRef);
+    
+    if (!userDoc.exists()) {
+      throw new Error('User credentials not found in database.');
+    }
+    
+    const data = userDoc.data();
+    return {
+      username: data.phoneNumber || data.username,
+      password: data.password
+    };
+  } catch (error) {
+    console.error('❌ Error getting credentials:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get saved session (cookies and tokens) from Firebase
+ * @param {string} userId - User ID
+ * @returns {Promise<{cookies: Array, tokens: Object} | null>}
+ */
+async function getSession(userId) {
+  try {
+    const userDocRef = doc(db, COLLECTION_NAME, userId);
+    const userDoc = await getDoc(userDocRef);
+    
+    if (!userDoc.exists()) {
+      return null;
+    }
+    
+    const data = userDoc.data();
+    if (data.cookies && data.tokens) {
+      return {
+        cookies: data.cookies,
+        tokens: data.tokens,
+        lastUpdated: data.lastUpdated || null
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ Error getting session:', error);
+    return null;
+  }
+}
+
+/**
+ * Remove undefined values from object
+ * CRITICAL: Preserves arrays and empty strings (they might be valid data)
+ */
+function removeUndefined(obj) {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+  
+  // If it's an array, preserve it (even if empty)
+  if (Array.isArray(obj)) {
+    return obj;
+  }
+  
+  // If it's not an object, return as is (preserves strings, numbers, booleans, etc.)
+  if (typeof obj !== 'object') {
+    return obj;
+  }
+  
+  const cleaned = {};
+  for (const key in obj) {
+    // Preserve null, empty strings, arrays, and all non-undefined values
+    if (obj[key] !== undefined) {
+      if (Array.isArray(obj[key])) {
+        // Preserve arrays (even empty ones)
+        cleaned[key] = obj[key];
+      } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+        // Recursively clean nested objects
+        cleaned[key] = removeUndefined(obj[key]);
+      } else {
+        // Preserve all other values (strings, numbers, booleans, null)
+        cleaned[key] = obj[key];
+      }
+    }
+  }
+  return cleaned;
+}
+
+/**
+ * Save session (cookies and tokens) to Firebase
+ * @param {string} userId - User ID
+ * @param {Array} cookies - Array of cookie objects
+ * @param {Object} tokens - Object containing tokens (if any)
+ */
+async function saveSession(userId, cookies, tokens = {}) {
+  try {
+    const userDocRef = doc(db, COLLECTION_NAME, userId);
+    const cleanCookies = (cookies || [])
+      .filter(c => c !== undefined && c !== null)
+      .map(c => removeUndefined(c));
+    const cleanTokens = removeUndefined(tokens);
+    
+    await setDoc(userDocRef, {
+      cookies: cleanCookies,
+      tokens: cleanTokens,
+      lastUpdated: new Date().toISOString()
+    }, { merge: true });
+    
+    console.log('✅ Session saved to database successfully');
+  } catch (error) {
+    console.error('❌ Error saving session:', error);
+    throw error;
+  }
+}
+
+/**
+ * Save admin credentials to Firebase
+ * @param {Object} adminData - Admin data object
+ * @returns {Promise<string>} User ID
+ */
+async function saveAdmin(adminData) {
+  try {
+    const userId = adminData.phoneNumber || `admin_${Date.now()}`;
+    const userDocRef = doc(db, COLLECTION_NAME, userId);
+    
+    const cleanData = removeUndefined({
+      fullName: adminData.fullName,
+      phoneNumber: adminData.phoneNumber,
+      adminQuota: adminData.adminQuota,
+      password: adminData.password,
+      type: adminData.type,
+      createdAt: new Date().toISOString()
+    });
+    
+    await setDoc(userDocRef, cleanData, { merge: true });
+    
+    return userId;
+  } catch (error) {
+    console.error('❌ Error saving admin:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get all admins from Firebase
+ * @returns {Promise<Array>}
+ */
+async function getAllAdmins() {
+  try {
+    const adminsRef = collection(db, COLLECTION_NAME);
+    const snapshot = await getDocs(adminsRef);
+    
+    const admins = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      admins.push({
+        id: docSnap.id,
+        ...data
+      });
+    });
+    
+    return admins;
+  } catch (error) {
+    console.error('❌ Error getting admins:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update admin dashboard data - replaces old data with new data
+ * @param {string} userId - User ID
+ * @param {Object} dashboardData - Dashboard data
+ */
+async function updateDashboardData(userId, dashboardData) {
+  try {
+    const userDocRef = doc(db, COLLECTION_NAME, userId);
+    
+    // Log data before cleaning
+    console.log('💾 Saving dashboard data for user:', userId);
+    console.log('💾 Balance before removeUndefined:', dashboardData.balance);
+    console.log('💾 totalConsumption before removeUndefined:', dashboardData.totalConsumption);
+    console.log('💾 secondarySubscribers before removeUndefined:', dashboardData.secondarySubscribers);
+    console.log('💾 dashboardData keys:', Object.keys(dashboardData));
+    
+    // CRITICAL: Ensure balance is a string (not undefined) before cleaning
+    if (dashboardData.balance) {
+      dashboardData.balance = String(dashboardData.balance).trim();
+      console.log('💾 Balance ensured as string:', dashboardData.balance);
+    } else {
+      console.log('⚠️ WARNING: dashboardData.balance is falsy!');
+    }
+    
+    // CRITICAL: Preserve critical fields BEFORE removeUndefined
+    const totalConsumptionBackup = dashboardData.totalConsumption;
+    const secondarySubscribersBackup = dashboardData.secondarySubscribers ? JSON.parse(JSON.stringify(dashboardData.secondarySubscribers)) : null;
+    const balanceBackup = dashboardData.balance;
+    const adminConsumptionBackup = dashboardData.adminConsumption;
+    const adminConsumptionTemplateBackup = dashboardData.adminConsumptionTemplate ? JSON.parse(JSON.stringify(dashboardData.adminConsumptionTemplate)) : null;
+    // CRITICAL: Backup apiResponses and primaryData - these are needed for admin consumption extraction
+    const apiResponsesBackup = dashboardData.apiResponses ? JSON.parse(JSON.stringify(dashboardData.apiResponses)) : null;
+    const primaryDataBackup = dashboardData.primaryData ? JSON.parse(JSON.stringify(dashboardData.primaryData)) : null;
+    
+    console.log('💾 BACKUP BEFORE removeUndefined:');
+    console.log('   totalConsumption:', totalConsumptionBackup);
+    console.log('   secondarySubscribers:', secondarySubscribersBackup);
+    console.log('   balance:', balanceBackup);
+    console.log('   adminConsumption:', adminConsumptionBackup);
+    console.log('   adminConsumptionTemplate:', adminConsumptionTemplateBackup);
+    console.log('   apiResponses:', apiResponsesBackup ? `${apiResponsesBackup.length} items` : 'null');
+    console.log('   primaryData:', primaryDataBackup ? 'exists' : 'null');
+    
+    // CRITICAL: Ensure arrays are preserved (don't remove empty arrays - they might be valid)
+    const cleanDashboardData = removeUndefined(dashboardData || {});
+    
+    // Log data after cleaning
+    console.log('💾 AFTER removeUndefined:');
+    console.log('   Balance:', cleanDashboardData.balance);
+    console.log('   totalConsumption:', cleanDashboardData.totalConsumption);
+    console.log('   secondarySubscribers:', cleanDashboardData.secondarySubscribers);
+    console.log('   adminConsumption:', cleanDashboardData.adminConsumption);
+    console.log('   adminConsumptionTemplate:', cleanDashboardData.adminConsumptionTemplate);
+    console.log('   apiResponses:', cleanDashboardData.apiResponses ? `${cleanDashboardData.apiResponses.length} items` : 'missing');
+    console.log('   primaryData:', cleanDashboardData.primaryData ? 'exists' : 'missing');
+    console.log('   cleanDashboardData keys:', Object.keys(cleanDashboardData));
+    
+    // FORCE RESTORE: Always restore these critical fields from backup
+    if (totalConsumptionBackup) {
+      cleanDashboardData.totalConsumption = totalConsumptionBackup;
+      console.log('✅✅✅ FORCE RESTORED totalConsumption:', cleanDashboardData.totalConsumption);
+    }
+    
+    if (secondarySubscribersBackup && Array.isArray(secondarySubscribersBackup) && secondarySubscribersBackup.length > 0) {
+      cleanDashboardData.secondarySubscribers = secondarySubscribersBackup;
+      console.log('✅✅✅ FORCE RESTORED secondarySubscribers with', secondarySubscribersBackup.length, 'items');
+    }
+    
+    if (balanceBackup && !cleanDashboardData.balance) {
+      cleanDashboardData.balance = String(balanceBackup).trim();
+      console.log('✅✅✅ FORCE RESTORED balance:', cleanDashboardData.balance);
+    }
+    
+    if (adminConsumptionBackup) {
+      cleanDashboardData.adminConsumption = adminConsumptionBackup;
+      console.log('✅✅✅ FORCE RESTORED adminConsumption:', cleanDashboardData.adminConsumption);
+    }
+    
+    if (adminConsumptionTemplateBackup) {
+      cleanDashboardData.adminConsumptionTemplate = adminConsumptionTemplateBackup;
+      console.log('✅✅✅ FORCE RESTORED adminConsumptionTemplate:', JSON.stringify(adminConsumptionTemplateBackup));
+    }
+    
+    // CRITICAL: Restore apiResponses and primaryData - these are essential for frontend extraction
+    if (apiResponsesBackup && Array.isArray(apiResponsesBackup) && apiResponsesBackup.length > 0) {
+      cleanDashboardData.apiResponses = apiResponsesBackup;
+      console.log('✅✅✅ FORCE RESTORED apiResponses with', apiResponsesBackup.length, 'items');
+      console.log('   API URLs:', apiResponsesBackup.map(r => r.url || 'no-url').join(', '));
+    }
+    
+    // Only restore primaryData if it has the correct structure (ServiceInformationValue)
+    // This ensures we don't restore empty objects or wrong API responses
+    if (primaryDataBackup && typeof primaryDataBackup === 'object' && Object.keys(primaryDataBackup).length > 0) {
+      // Check if it has ServiceInformationValue structure (getconsumption response)
+      if (primaryDataBackup.ServiceInformationValue && Array.isArray(primaryDataBackup.ServiceInformationValue)) {
+        cleanDashboardData.primaryData = primaryDataBackup;
+        console.log('✅✅✅ FORCE RESTORED primaryData (has ServiceInformationValue structure)');
+      } else {
+        console.log('⚠️ primaryData backup exists but does NOT have ServiceInformationValue structure - NOT restoring');
+        console.log('   primaryData keys:', Object.keys(primaryDataBackup));
+      }
+    }
+    
+    console.log('✅ Balance saved:', cleanDashboardData.balance || 'NOT SAVED');
+    console.log('✅ totalConsumption saved:', cleanDashboardData.totalConsumption || 'NOT SAVED');
+    console.log('✅ secondarySubscribers saved:', cleanDashboardData.secondarySubscribers ? `${cleanDashboardData.secondarySubscribers.length} items` : 'NOT SAVED');
+    console.log('✅ adminConsumption saved:', cleanDashboardData.adminConsumption || 'NOT SAVED');
+    console.log('✅ adminConsumptionTemplate saved:', cleanDashboardData.adminConsumptionTemplate ? 'YES' : 'NOT SAVED');
+    console.log('✅ apiResponses saved:', cleanDashboardData.apiResponses ? `${cleanDashboardData.apiResponses.length} items` : 'NOT SAVED');
+    console.log('✅ primaryData saved:', cleanDashboardData.primaryData ? 'YES' : 'NOT SAVED');
+    
+    // Get current document to preserve other fields
+    const currentDoc = await getDoc(userDocRef);
+    const currentData = currentDoc.exists() ? currentDoc.data() : {};
+    
+    // Replace dashboardData completely (remove old, add new)
+    await setDoc(userDocRef, {
+      ...currentData,  // Keep all existing fields (fullName, phoneNumber, etc.)
+      dashboardData: cleanDashboardData,  // Replace entire dashboardData field
+      lastDataFetch: new Date().toISOString()  // Update timestamp
+    }, { merge: false }); // Use merge: false to ensure complete replacement of dashboardData field
+    
+    console.log('✅ Dashboard data replaced in database');
+  } catch (error) {
+    console.error('❌ Error updating dashboard data:', error);
+    throw error;
+  }
+}
+
+module.exports = {
+  getCredentials,
+  getSession,
+  saveSession,
+  saveAdmin,
+  getAllAdmins,
+  updateDashboardData
+};

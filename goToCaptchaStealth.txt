@@ -1,0 +1,109 @@
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const { getCredentials, getSession, saveSession } = require('./firebase-db');
+
+puppeteer.use(StealthPlugin());
+
+(async () => {
+  const browser = await puppeteer.launch({ headless: false }); // 👁️ Browser stays visible
+  const page = await browser.newPage();
+
+  try {
+    // Check for existing session first
+    console.log('🔍 Checking for existing session...');
+    const savedSession = await getSession();
+    
+    let needsLogin = true;
+    
+    if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
+      console.log('✅ Found saved session. Attempting to restore...');
+      
+      // Set cookies before navigating
+      await page.setCookie(...savedSession.cookies);
+      
+      // Navigate to dashboard directly
+      try {
+        await page.goto('https://www.alfa.com.lb/en/dashboard', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        });
+        
+        // Check if we're still on login page (session expired)
+        const currentUrl = page.url();
+        if (currentUrl.includes('/login')) {
+          console.log('⚠️ Session expired. Need to login again.');
+          needsLogin = true;
+        } else {
+          console.log('✅ Session restored successfully! Using cached login.');
+          needsLogin = false;
+        }
+      } catch (error) {
+        console.log('⚠️ Error checking session, will proceed with login:', error.message);
+        needsLogin = true;
+      }
+    }
+    
+    if (needsLogin) {
+      console.log('🔐 Starting login process...');
+      
+      // Get credentials from Firebase
+      const credentials = await getCredentials();
+      console.log('✅ Credentials retrieved from database');
+      
+      // Navigate to login page
+      await page.goto('https://www.alfa.com.lb/en/account/login', {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000
+      });
+
+      console.log('✅ Login page loaded. Waiting for form...');
+
+      await page.waitForSelector('#Username', { timeout: 15000 });
+      await page.type('#Username', credentials.username);
+      await page.type('#Password', credentials.password);
+
+      // ✅ Automatically click the Sign In button
+      await page.click('button[type="submit"]');
+
+      console.log('⏸️ Login submitted. Waiting for login to complete...');
+      
+      // Wait for navigation after login (either dashboard or still on login if CAPTCHA)
+      try {
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+        
+        const currentUrl = page.url();
+        if (!currentUrl.includes('/login')) {
+          // Successfully logged in!
+          console.log('✅ Login successful! Saving session to database...');
+          
+          // Get all cookies
+          const cookies = await page.cookies();
+          
+          // Extract any tokens from localStorage/sessionStorage if needed
+          const tokens = await page.evaluate(() => {
+            return {
+              // Add any token extraction logic here if the site stores tokens
+              // For example: localStorage.getItem('authToken')
+            };
+          });
+          
+          // Save session to Firebase
+          await saveSession(cookies, tokens);
+          console.log('✅ Session saved successfully!');
+        } else {
+          console.log('⏸️ Still on login page. Please complete CAPTCHA manually...');
+        }
+      } catch (error) {
+        console.log('⏸️ Waiting for navigation or CAPTCHA completion...');
+      }
+    }
+    
+    console.log('⏸️ Browser will stay open for manual inspection...');
+    await new Promise(() => {}); // Keeps browser open indefinitely
+    
+  } catch (error) {
+    console.error('❌ Error:', error);
+    await browser.close();
+    process.exit(1);
+  }
+})();

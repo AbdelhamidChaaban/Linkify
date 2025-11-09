@@ -1,0 +1,25 @@
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
+
+(async () => {
+  const browser = await puppeteer.launch({ headless: false }); // 👁️ Browser stays visible
+  const page = await browser.newPage();
+
+  await page.goto('https://myaccount.alfa.com.lb/Account/Login', {
+    waitUntil: 'domcontentloaded',
+    timeout: 60000
+  });
+
+  console.log('✅ Login page loaded. Waiting for form...');
+
+  await page.waitForSelector('#Username', { timeout: 15000 });
+  await page.type('#Username', '03XXXXXX');     // 🔁 Replace with your real Alfa number
+  await page.type('#Password', 'yourPassword'); // 🔁 Replace with your real password
+
+  // ✅ Automatically click the Sign In button
+  await page.click('button[type="submit"]');
+
+  console.log('⏸️ Login submitted. Browser will stay open for manual CAPTCHA inspection...');
+  await new Promise(() => {}); // Keeps browser open indefinitely
+})();
