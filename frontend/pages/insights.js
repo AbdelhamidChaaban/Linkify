@@ -1169,25 +1169,82 @@ class InsightsManager {
             }
             
             // Get admin data from Firestore to get phone and password
-            const adminDoc = await db.collection('admins').doc(id).get();
-            if (!adminDoc.exists) {
-                console.error('Admin not found in Firestore:', id);
+            // Use subscriber phone if available, but we need password from Firestore
+            const phone = subscriber.phone || '';
+            
+            if (!phone) {
+                console.error('Phone not found for subscriber:', id);
+                alert('Cannot refresh: Phone number not found');
                 return;
             }
             
-            const adminData = adminDoc.data();
-            const phone = adminData.phone;
-            const password = adminData.password;
+            // Try to get password from Firestore
+            let password = null;
+            try {
+                // Check if Firestore is online
+                const waitForOnline = () => {
+                    return new Promise((resolve, reject) => {
+                        // Try to get document with a timeout
+                        const timeout = setTimeout(() => {
+                            reject(new Error('Firestore request timed out'));
+                        }, 5000);
+                        
+                        db.collection('admins').doc(id).get()
+                            .then((doc) => {
+                                clearTimeout(timeout);
+                                resolve(doc);
+                            })
+                            .catch((error) => {
+                                clearTimeout(timeout);
+                                reject(error);
+                            });
+                    });
+                };
+                
+                const adminDoc = await waitForOnline();
+                
+                if (adminDoc.exists) {
+                    const adminData = adminDoc.data();
+                    password = adminData.password;
+                } else {
+                    console.warn('Admin document not found in Firestore:', id);
+                }
+            } catch (firestoreError) {
+                console.error('❌ Firestore fetch failed:', firestoreError);
+                // If Firestore is offline, we can't get the password
+                // Show a clear error and stop here - don't try to call backend
+                const errorMsg = firestoreError.message || 'Unknown Firestore error';
+                alert(`Cannot refresh: ${errorMsg}\n\nPlease check your internet connection and try again.`);
+                
+                // Restore row opacity
+                const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
+                if (row) {
+                    row.style.opacity = '1';
+                }
+                return; // Stop here, don't proceed to backend call
+            }
             
-            if (!phone || !password) {
-                console.error('Phone or password missing for admin:', id);
-                alert('Cannot refresh: Phone or password missing');
+            if (!password) {
+                console.error('Password not found for admin:', id);
+                alert('Cannot refresh: Password not found. Please check your internet connection.');
+                
+                // Restore row opacity
+                const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
+                if (row) {
+                    row.style.opacity = '1';
+                }
                 return;
             }
             
             // Check if AlfaAPIService is available
             if (typeof window.AlfaAPIService === 'undefined' || !window.AlfaAPIService) {
                 alert('Backend service not available. Please make sure the server is running and alfa-api.js is loaded.');
+                
+                // Restore row opacity
+                const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
+                if (row) {
+                    row.style.opacity = '1';
+                }
                 return;
             }
             
@@ -1197,15 +1254,23 @@ class InsightsManager {
                 row.style.opacity = '0.5';
             }
             
-            // Fetch Alfa data
+            // Fetch Alfa data from backend
+            console.log('📡 Calling backend API with phone:', phone, 'adminId:', id);
             const alfaData = await window.AlfaAPIService.fetchDashboardData(phone, password, id);
             
             // Update admin document with new Alfa data
-            await db.collection('admins').doc(id).update({
-                alfaData: alfaData,
-                alfaDataFetchedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            // Use set with merge to handle offline mode better
+            try {
+                await db.collection('admins').doc(id).set({
+                    alfaData: alfaData,
+                    alfaDataFetchedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            } catch (updateError) {
+                // If update fails, log but don't fail the whole operation
+                console.warn('Failed to update Firestore (may be offline):', updateError);
+                // The data was fetched successfully, so we can still show it
+            }
             
             console.log('Alfa data refreshed successfully');
             
@@ -1216,7 +1281,26 @@ class InsightsManager {
             
         } catch (error) {
             console.error('Error refreshing subscriber:', error);
-            alert('Failed to refresh data: ' + error.message);
+            console.error('Error type:', typeof error);
+            console.error('Error message:', error?.message);
+            console.error('Error name:', error?.name);
+            console.error('Error stack:', error?.stack);
+            console.error('Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            
+            // Show more detailed error message
+            let errorMessage = error?.message || error?.toString() || 'Unknown error occurred';
+            
+            if (error?.details) {
+                console.error('Backend error details:', error.details);
+                errorMessage += '\n\nCheck the backend console for more details.';
+            }
+            
+            // If error message is empty, provide a default
+            if (!errorMessage || errorMessage.trim() === '') {
+                errorMessage = 'An error occurred. Please check the backend console (where you ran "node server.js") for details.';
+            }
+            
+            alert('Failed to refresh data: ' + errorMessage);
             
             // Restore row opacity
             const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);

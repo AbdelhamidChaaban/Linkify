@@ -177,9 +177,8 @@ class AIAssistantLoginForm {
         
         // Redirect quickly after brief success feedback (500ms)
         setTimeout(() => {
-            // Get the base path - if we're in auth/login.html, go up one level, otherwise from root
-            const basePath = window.location.pathname.includes('/auth/') ? '../' : '';
-            window.location.href = basePath + 'pages/home.html';
+            // Use absolute path from root (server serves from frontend/)
+            window.location.href = '/pages/home.html';
         }, 500);
     }
 }

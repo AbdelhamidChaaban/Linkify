@@ -82,7 +82,8 @@ class NavigationManager {
             if (settingsLink) {
                 settingsLink.addEventListener('click', (e) => {
                     e.preventDefault();
-                    window.location.href = 'settings.html';
+                    // Use absolute path (settings.html is in /pages/)
+                    window.location.href = '/pages/settings.html';
                     dropdown.classList.remove('show');
                 });
             }
@@ -125,14 +126,12 @@ class NavigationManager {
                 await auth.signOut();
             }
             
-            // Redirect to login page
-            const basePath = window.location.pathname.includes('/pages/') ? '../' : '';
-            window.location.href = basePath + 'index.html';
+            // Redirect to login page (use absolute path)
+            window.location.href = '/index.html';
         } catch (error) {
             console.error('Logout error:', error);
-            // Still redirect even if logout fails
-            const basePath = window.location.pathname.includes('/pages/') ? '../' : '';
-            window.location.href = basePath + 'index.html';
+            // Still redirect even if logout fails (use absolute path)
+            window.location.href = '/index.html';
         }
     }
 }

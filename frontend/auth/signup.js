@@ -227,7 +227,8 @@ class AIAssistantSignupForm {
         
         // Redirect to login page after success
         setTimeout(() => {
-            window.location.href = '../index.html';
+            // Use absolute path from root (server serves from frontend/)
+            window.location.href = '/index.html';
         }, 2500);
     }
 }

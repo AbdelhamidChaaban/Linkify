@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Linkify - Login</title>
-    <link rel="icon" type="image/png" href="assets/Logo.png">
-    <link rel="stylesheet" href="auth/auth.css">
+    <link rel="icon" type="image/png" href="/assets/Logo.png">
+    <link rel="stylesheet" href="/auth/auth.css">
 </head>
 <body>
     <div class="neural-background">
@@ -22,7 +22,7 @@
             
             <div class="login-header">
                 <div class="ai-logo">
-                    <img src="assets/Logo.png" alt="Linkify Logo">
+                    <img src="/assets/Logo.png" alt="Linkify Logo">
                 </div>
                 <h1>Welcome Back</h1>
                 <p>Sign in to your Linkify</p>
@@ -75,7 +75,7 @@
 
             <div class="signup-section">
                 <span>New to Linkify? </span>
-                <a href="auth/signup.html" class="neural-signup">Create an account</a>
+                <a href="/auth/signup.html" class="neural-signup">Create an account</a>
             </div>
 
             <div class="success-neural" id="successMessage">
@@ -100,20 +100,10 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     
     <!-- Firebase Config -->
-    <script src="auth/firebase-config.js"></script>
-    
-    <!-- Theme Loader -->
-    <script>
-        // Load theme preference from localStorage
-        document.addEventListener('DOMContentLoaded', () => {
-            const savedTheme = localStorage.getItem('theme');
-            if (savedTheme === 'light') {
-                document.body.classList.add('light-mode');
-            }
-        });
-    </script>
+    <script src="/auth/firebase-config.js"></script>
     
     <!-- Login Script -->
-    <script src="auth/login.js"></script>
+    <script src="/auth/login.js"></script>
 </body>
 </html>
+

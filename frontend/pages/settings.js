@@ -22,18 +22,18 @@ class SettingsManager {
     async checkAuth() {
         try {
             if (typeof auth === 'undefined') {
-                window.location.href = '../index.html';
+                window.location.href = '/index.html';
                 return;
             }
             
             auth.onAuthStateChanged((user) => {
                 if (!user) {
-                    window.location.href = '../index.html';
+                    window.location.href = '/index.html';
                 }
             });
         } catch (error) {
             console.error('Auth check error:', error);
-            window.location.href = '../index.html';
+            window.location.href = '/index.html';
         }
     }
     

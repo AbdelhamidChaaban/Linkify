@@ -1,6 +1,42 @@
+# Dependencies
 node_modules/
+
+# Backend
+backend/node_modules/
+backend/.env
+backend/.env.local
+
+# Frontend (if any frontend build tools are added later)
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# Environment variables
 .env
+.env.local
+.env.*.local
+
+# Firebase
 firebase-service-account.json
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
 .DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build outputs
+dist/
+build/
 
