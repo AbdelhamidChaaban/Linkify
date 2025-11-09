@@ -864,7 +864,28 @@ class InsightsManager {
             totalLimit: 0
         };
         
-        // Get subscriber data from consumption circles
+        // Helper function to parse consumption string (same as in processSubscribers)
+        function parseConsumption(consumptionStr) {
+            if (!consumptionStr || typeof consumptionStr !== 'string') return { used: 0, total: 0 };
+            const match = consumptionStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+            if (match) {
+                return {
+                    used: parseFloat(match[1]) || 0,
+                    total: parseFloat(match[2]) || 0
+                };
+            }
+            return { used: 0, total: 0 };
+        }
+        
+        // Get total consumption from API (same as in insights table)
+        // This ensures the modal shows the exact same value as the table
+        if (subscriber.alfaData && subscriber.alfaData.totalConsumption) {
+            const parsed = parseConsumption(subscriber.alfaData.totalConsumption);
+            data.totalConsumption = parsed.used;
+            data.totalLimit = parsed.total || data.totalLimit;
+        }
+        
+        // Get subscriber data from consumption circles (for displaying individual subscribers)
         if (subscriber.alfaData && subscriber.alfaData.consumptions && Array.isArray(subscriber.alfaData.consumptions)) {
             subscriber.alfaData.consumptions.forEach(circle => {
                 // Check if this is a U-share secondary circle
@@ -926,22 +947,23 @@ class InsightsManager {
                             consumption: used,
                             limit: total
                         });
-                        data.totalConsumption += used;
-                        data.totalLimit += total;
+                        // Note: We don't add to totalConsumption here anymore - it comes from API
                     }
                 }
             });
         }
         
-        // Add admin consumption to total
-        data.totalConsumption += data.adminConsumption;
-        // Total limit should be from totalConsumption API, but if not available, sum admin + subscribers
-        if (subscriber.alfaData && subscriber.alfaData.totalConsumption) {
-            const totalMatch = String(subscriber.alfaData.totalConsumption).match(/([\d.]+)\s*\/\s*([\d.]+)/);
-            if (totalMatch) {
-                data.totalLimit = parseFloat(totalMatch[2]) || data.totalLimit;
-            }
-        } else {
+        // Fallback: If API doesn't have totalConsumption, calculate from admin + subscribers
+        // This should rarely happen, but provides a fallback
+        if (data.totalConsumption === 0 && (!subscriber.alfaData || !subscriber.alfaData.totalConsumption)) {
+            // Sum subscriber consumptions
+            data.subscribers.forEach(sub => {
+                data.totalConsumption += sub.consumption;
+                data.totalLimit += sub.limit;
+            });
+            // Add admin consumption
+            data.totalConsumption += data.adminConsumption;
+            // Total limit is admin limit + subscriber limits
             data.totalLimit = data.adminLimit + data.totalLimit;
         }
         
