@@ -6,14 +6,17 @@
 async function setupApiCapture(page) {
     const apiResponses = [];
 
-    // Listen for requests
+    // Listen for requests (only log essential API requests to reduce noise)
     page.on('request', (request) => {
         const url = request.url();
         const resourceType = request.resourceType();
         
-        if (resourceType === 'xhr' || resourceType === 'fetch' || 
-            url.includes('alfa.com.lb') || url.includes('api') || 
-            url.includes('ajax') || url.includes('json') || url.includes('data')) {
+        // Only log essential API endpoints
+        if ((resourceType === 'xhr' || resourceType === 'fetch') && 
+            (url.includes('getconsumption') || 
+             url.includes('getmyservices') || 
+             url.includes('getexpirydate') || 
+             url.includes('getlastrecharge'))) {
             console.log(`📡 Request: ${request.method()} ${url}`);
         }
     });
@@ -38,13 +41,9 @@ async function setupApiCapture(page) {
                         data: responseData
                     });
                     
-                    // Special logging for important endpoints
-                    if (url.includes('getconsumption')) {
-                        console.log(`🎯 ✅ getconsumption endpoint response captured!`);
-                    } else if (url.includes('getmyservices')) {
-                        console.log(`🎯 ✅ getmyservices endpoint response captured!`);
-                    } else {
-                        console.log(`✅ API Response from ${url}`);
+                    // Only log essential endpoints (reduced logging for performance)
+                    if (url.includes('getconsumption') || url.includes('getmyservices')) {
+                        // Silent - only log if there's an issue
                     }
                 } else {
                     const responseText = await response.text();
@@ -56,11 +55,7 @@ async function setupApiCapture(page) {
                                 status: status,
                                 data: responseData
                             });
-                            if (url.includes('getconsumption')) {
-                                console.log(`🎯 ✅ getconsumption endpoint response captured (parsed from text)!`);
-                            } else if (url.includes('getmyservices')) {
-                                console.log(`🎯 ✅ getmyservices endpoint response captured (parsed from text)!`);
-                            }
+                            // Silent - data captured successfully
                         } catch (e) {
                             // Not JSON
                         }
@@ -83,7 +78,6 @@ async function setupApiCapture(page) {
  * @returns {Promise<void>}
  */
 async function waitForApiEndpoints(apiResponses, endpointNames, maxWaitTime = 15000) {
-    console.log(`⏳ Waiting for API endpoints: ${endpointNames.join(', ')}...`);
     const startTime = Date.now();
     const found = {};
 
@@ -93,7 +87,6 @@ async function waitForApiEndpoints(apiResponses, endpointNames, maxWaitTime = 15
                 const response = apiResponses.find(resp => resp.url && resp.url.includes(name));
                 if (response && response.data) {
                     found[name] = true;
-                    console.log(`✅✅✅ ${name} API found after ${Date.now() - startTime}ms wait!`);
                 }
             }
         });
@@ -120,7 +113,6 @@ async function waitForApiEndpoints(apiResponses, endpointNames, maxWaitTime = 15
  */
 async function fetchApiDirectly(page, url) {
     try {
-        console.log(`📡 Request: GET ${url}`);
         const data = await page.evaluate(async (apiUrl) => {
             try {
                 const response = await fetch(apiUrl, {
@@ -156,7 +148,6 @@ async function fetchApiDirectly(page, url) {
         }, url);
 
         if (data.success && data.data !== null && data.data !== undefined) {
-            console.log(`✅✅✅ Successfully fetched ${url} directly!`);
             return {
                 url: url,
                 status: 200,

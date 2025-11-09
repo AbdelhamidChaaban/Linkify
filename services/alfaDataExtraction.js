@@ -79,10 +79,7 @@ async function extractConsumptionCircles(page) {
 async function extractBalanceFromHtml(page) {
     try {
         await page.waitForSelector('#consumption-container', { timeout: 20000 });
-        console.log('✅ #consumption-container found');
-        
         await page.waitForSelector('#consumption-container h2.white', { timeout: 15000 });
-        console.log('✅ h2.white found in consumption-container');
         
         await new Promise(resolve => setTimeout(resolve, 3000));
         
@@ -114,7 +111,6 @@ async function extractBalanceFromHtml(page) {
         });
         
         if (extractedBalance) {
-            console.log('✅ Balance extracted from HTML:', extractedBalance);
             return extractedBalance;
         }
     } catch (e) {
@@ -155,7 +151,6 @@ async function extractTotalConsumptionFromHtml(page) {
         });
         
         if (totalConsumption) {
-            console.log('✅ Total consumption extracted from HTML:', totalConsumption);
             return totalConsumption;
         }
     } catch (e) {

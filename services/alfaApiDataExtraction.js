@@ -33,7 +33,6 @@ function extractFromGetConsumption(apiResponseData) {
                 }
             }
             extracted.balance = balanceValue;
-            console.log(`✅ Extracted balance from getconsumption.${field}:`, extracted.balance);
             break;
         }
     }
@@ -57,10 +56,9 @@ function extractFromGetConsumption(apiResponseData) {
                 firstServiceDetails.SecondaryValue.length > 0) {
                 
                 const firstSecondary = firstServiceDetails.SecondaryValue[0];
-                if (firstSecondary.ConsumptionValue && firstServiceDetails.PackageValue) {
-                    extracted.totalConsumption = `${firstSecondary.ConsumptionValue} / ${firstServiceDetails.PackageValue} ${firstServiceDetails.PackageUnitValue || 'GB'}`;
-                    console.log(`✅ Extracted totalConsumption: ${extracted.totalConsumption}`);
-                }
+                        if (firstSecondary.ConsumptionValue && firstServiceDetails.PackageValue) {
+                            extracted.totalConsumption = `${firstSecondary.ConsumptionValue} / ${firstServiceDetails.PackageValue} ${firstServiceDetails.PackageUnitValue || 'GB'}`;
+                        }
             }
             
             // Extract secondary subscribers
@@ -91,8 +89,6 @@ function extractFromGetConsumption(apiResponseData) {
                         });
                     }
                 });
-                
-                console.log(`✅ Extracted ${extracted.subscribersCount} secondary subscribers`);
             }
         }
     }
@@ -131,8 +127,6 @@ function extractFromGetMyServices(apiResponseData) {
                 consumptionValue: consumptionValue,
                 consumptionUnit: consumptionUnit
             };
-            
-            console.log(`✅ Extracted admin consumption template: ${consumptionValue} ${consumptionUnit}`);
         }
         
         // Extract dates
@@ -157,11 +151,10 @@ function extractFromGetMyServices(apiResponseData) {
  */
 function extractExpiration(apiResponseData) {
     if (apiResponseData !== null && apiResponseData !== undefined && apiResponseData !== '') {
-        const expiryDays = typeof apiResponseData === 'number' ? apiResponseData : parseInt(apiResponseData);
-        if (!isNaN(expiryDays)) {
-            console.log(`✅ Extracted expiration: ${expiryDays} days`);
-            return expiryDays;
-        }
+                const expiryDays = typeof apiResponseData === 'number' ? apiResponseData : parseInt(apiResponseData);
+                if (!isNaN(expiryDays)) {
+                    return expiryDays;
+                }
     }
     return null;
 }
@@ -211,7 +204,6 @@ function buildAdminConsumption(adminConsumptionTemplate, consumptions) {
     }
 
     const adminConsumption = `${primaryConsumption.used} / ${consumptionValue} ${consumptionUnit}`;
-    console.log(`✅ Built adminConsumption: ${adminConsumption}`);
     return adminConsumption;
 }
 

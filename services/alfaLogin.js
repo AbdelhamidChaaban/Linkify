@@ -191,19 +191,6 @@ async function loginToAlfa(page, phone, password, adminId) {
             const currentUrl = page.url();
             console.log(`📍 URL after navigation: ${currentUrl}`);
             
-            // Debug: Check what's on the page
-            const pageInfo = await page.evaluate(() => {
-                return {
-                    url: window.location.href,
-                    hasLoginForm: !!document.querySelector('#Username, input[type="password"]'),
-                    hasCaptcha: !!document.querySelector('iframe[src*="recaptcha"], [data-sitekey]'),
-                    bodyText: document.body.textContent.substring(0, 500),
-                    errorElements: Array.from(document.querySelectorAll('.error, .alert, [class*="error"], [class*="alert"]')).map(el => el.textContent).filter(t => t)
-                };
-            });
-            
-            console.log('📄 Page info after submit:', JSON.stringify(pageInfo, null, 2));
-            
             if (!currentUrl.includes('/login')) {
                 // Successfully logged in!
                 console.log('✅ Login successful! Saving session to database...');
@@ -211,15 +198,9 @@ async function loginToAlfa(page, phone, password, adminId) {
                 await saveSession(adminId || phone, cookies, {});
                 console.log('✅ Session saved successfully!');
             } else {
-                // Still on login page - check what's wrong
-                console.log('⚠️ Still on login page. Debugging...');
-                console.log('   Has login form:', pageInfo.hasLoginForm);
-                console.log('   Has CAPTCHA:', pageInfo.hasCaptcha);
-                console.log('   Error elements:', pageInfo.errorElements);
-                
-                // Check for CAPTCHA
+                // Still on login page - check for CAPTCHA
+                console.log('⚠️ Still on login page. Checking for CAPTCHA...');
                 const hasCaptcha = await getCaptchaSiteKey(page);
-                console.log('   CAPTCHA site key found:', hasCaptcha ? 'YES' : 'NO');
                 
                 if (hasCaptcha) {
                     console.log('🔍 CAPTCHA detected, solving...');

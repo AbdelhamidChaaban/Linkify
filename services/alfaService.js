@@ -36,32 +36,163 @@ async function fetchAlfaData(phone, password, adminId) {
     page.setDefaultNavigationTimeout(60000);
     page.setDefaultTimeout(40000);
 
+    // Block unnecessary resources to speed up loading
+    // Only block during dashboard navigation, not during login
+    const blockState = { enabled: false };
+    
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+        const url = request.url();
+        const resourceType = request.resourceType();
+        const method = request.method();
+        
+        // Only block resources after login (during dashboard navigation)
+        if (!blockState.enabled) {
+            request.continue();
+            return;
+        }
+        
+        // CRITICAL: Allow essential API endpoints (NEVER block these)
+        if (url.includes('/en/account/getconsumption') ||
+            url.includes('/en/account/manage-services/getmyservices') ||
+            url.includes('/en/account/getexpirydate') ||
+            url.includes('/en/account/getlastrecharge')) {
+            request.continue();
+            return;
+        }
+        
+        // CRITICAL: Allow the main dashboard page
+        if (url === 'https://www.alfa.com.lb/en/account' || 
+            url === 'https://www.alfa.com.lb/en/account/') {
+            request.continue();
+            return;
+        }
+        
+        // Block ALL analytics and tracking
+        if (url.includes('google-analytics.com') || 
+            url.includes('googletagmanager.com') ||
+            url.includes('facebook.com/tr') ||
+            url.includes('facebook.com/privacy_sandbox') ||
+            url.includes('facebook.net') ||
+            url.includes('connect.facebook.net') ||
+            url.includes('doubleclick.net') ||
+            url.includes('googleadservices.com') ||
+            url.includes('analytics') ||
+            url.includes('gtm') ||
+            url.includes('tracking')) {
+            request.abort();
+            return;
+        }
+        
+        // Block ALL images (except data URLs)
+        if (resourceType === 'image' || 
+            url.includes('.png') || 
+            url.includes('.jpg') || 
+            url.includes('.jpeg') || 
+            url.includes('.gif') || 
+            url.includes('.svg') || 
+            url.includes('.webp') ||
+            url.includes('/Images/') ||
+            url.includes('/images/')) {
+            if (!url.startsWith('data:')) {
+                request.abort();
+                return;
+            }
+        }
+        
+        // Block ALL fonts
+        if (resourceType === 'font' || 
+            url.includes('fonts.googleapis.com') || 
+            url.includes('fonts.gstatic.com') ||
+            url.includes('.woff') ||
+            url.includes('.woff2') ||
+            url.includes('.ttf') ||
+            url.includes('.eot')) {
+            request.abort();
+            return;
+        }
+        
+        // Block ALL stylesheets
+        if (resourceType === 'stylesheet' || 
+            url.includes('.css') ||
+            url.includes('/css/') ||
+            url.includes('/content/css/')) {
+            request.abort();
+            return;
+        }
+        
+        // Block non-essential scripts
+        if (resourceType === 'script') {
+            // Block webchat, chatbot, jqueryval, and external scripts
+            if (url.includes('webchat') || 
+                url.includes('chatbot') ||
+                url.includes('jqueryval') ||
+                url.includes('bundles/') ||
+                !url.includes('alfa.com.lb')) {
+                request.abort();
+                return;
+            }
+            // Allow only essential scripts from alfa.com.lb (app.js, common.js might be needed)
+            // But we'll block them too since we don't need JS execution for data extraction
+            if (url.includes('/content/scripts/')) {
+                request.abort();
+                return;
+            }
+        }
+        
+        // Allow XHR and fetch requests ONLY for essential API endpoints
+        if (resourceType === 'xhr' || resourceType === 'fetch') {
+            // Only allow essential API endpoints
+            if (url.includes('/en/account/getconsumption') ||
+                url.includes('/en/account/manage-services/getmyservices') ||
+                url.includes('/en/account/getexpirydate') ||
+                url.includes('/en/account/getlastrecharge')) {
+                request.continue();
+                return;
+            } else {
+                // Block all other XHR/fetch requests (analytics, tracking, etc.)
+                request.abort();
+                return;
+            }
+        }
+        
+        // Allow document requests (HTML pages)
+        if (resourceType === 'document') {
+            request.continue();
+            return;
+        }
+        
+        // Block everything else by default
+        request.abort();
+    });
+
     try {
-        // Step 1: Login
+        // Step 1: Login (resources not blocked during login)
         await loginToAlfa(page, phone, password, adminId);
 
         // Step 2: Set up API capture BEFORE navigating
         const apiResponses = await setupApiCapture(page);
 
-        // Step 3: Navigate to dashboard
+        // Step 3: Enable resource blocking for dashboard navigation
+        blockState.enabled = true;
         console.log('🔄 Navigating to dashboard...');
         await page.goto(AEFA_DASHBOARD_URL, {
-            waitUntil: 'networkidle0',
-            timeout: 60000
+            waitUntil: 'domcontentloaded',
+            timeout: 30000
         });
 
-        await delay(5000);
+        // Wait just for the page structure, not all resources
+        await delay(2000);
 
-        // Wait for consumption container
+        // Wait for consumption container (reduced timeout)
         try {
-            await page.waitForSelector('#consumption-container', { timeout: 10000 });
-            await delay(2000);
+            await page.waitForSelector('#consumption-container', { timeout: 5000 });
         } catch (e) {
             console.log('⚠️ #consumption-container not found');
         }
 
-        // Step 4: Wait for API endpoints
-        await waitForApiEndpoints(apiResponses, ['getconsumption', 'getmyservices'], 15000);
+        // Step 4: Wait for API endpoints (reduced wait time)
+        await waitForApiEndpoints(apiResponses, ['getconsumption', 'getmyservices'], 10000);
 
         // Step 5: Fetch missing APIs directly if needed
         let getExpiryDateResponse = apiResponses.find(resp => resp.url && resp.url.includes('getexpirydate'));
@@ -85,7 +216,6 @@ async function fetchAlfaData(phone, password, adminId) {
         }
 
         // Step 6: Extract data
-        console.log('📊 Extracting dashboard data...');
 
         // Extract from HTML
         const consumptions = await extractConsumptionCircles(page);
@@ -131,8 +261,6 @@ async function fetchAlfaData(phone, password, adminId) {
 
         // Step 7: Save to Firebase
         await updateDashboardData(adminId, dashboardData);
-
-        console.log('✅ Dashboard data saved to database');
 
         await browser.close();
         return dashboardData;
