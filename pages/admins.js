@@ -36,21 +36,12 @@ class AdminsManager {
                 };
             });
             
-            // Sort client-side by updatedAt or createdAt if available (optimized)
+            // Sort alphabetically by name (A to Z) - optimized
             if (this.admins.length > 0) {
                 this.admins.sort((a, b) => {
-                    // Pre-extract dates to avoid repeated checks
-                    const getDate = (item) => {
-                        if (item.updatedAt) {
-                            return item.updatedAt.toDate ? item.updatedAt.toDate().getTime() : new Date(item.updatedAt).getTime();
-                        }
-                        if (item.createdAt) {
-                            return item.createdAt.toDate ? item.createdAt.toDate().getTime() : new Date(item.createdAt).getTime();
-                        }
-                        return 0;
-                    };
-                    
-                    return getDate(b) - getDate(a);
+                    const nameA = (a.name || '').toLowerCase();
+                    const nameB = (b.name || '').toLowerCase();
+                    return nameA.localeCompare(nameB);
                 });
             }
             

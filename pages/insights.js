@@ -174,13 +174,39 @@ class InsightsManager {
                     totalLimit = parsed.total || totalLimit;
                 }
                 
-                // Extract admin consumption (format: "13 / 15 GB")
+                // Extract admin consumption from U-Share Main circle
+                // Format: number before "/" from U-Share Main circle / admin quota
                 let adminConsumption = 0;
-                let adminLimit = data.quota || 0;
-                if (hasAlfaData && alfaData.adminConsumption) {
-                    const parsed = parseConsumption(alfaData.adminConsumption);
-                    adminConsumption = parsed.used;
-                    adminLimit = parsed.total || adminLimit;
+                let adminLimit = 0;
+                
+                // Admin limit is always the quota set when creating admin (extract number only)
+                if (data.quota) {
+                    // Handle if quota is a string with units (e.g., "15 GB" or "15")
+                    const quotaStr = String(data.quota).trim();
+                    const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                    adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+                }
+                
+                // Get the "used" value from the first consumption circle (U-Share Main)
+                if (hasAlfaData && alfaData.consumptions && Array.isArray(alfaData.consumptions) && alfaData.consumptions.length > 0) {
+                    // Find U-Share Main circle (first circle or one with "U-share Main" in planName)
+                    const uShareMain = alfaData.consumptions.find(c => 
+                        c.planName && c.planName.toLowerCase().includes('u-share main')
+                    ) || alfaData.consumptions[0]; // Fallback to first circle
+                    
+                    if (uShareMain) {
+                        // Extract just the number from "used" field (e.g., "17.11" from "17.11" or "17.11 / 77 GB")
+                        if (uShareMain.used) {
+                            const usedStr = String(uShareMain.used).trim();
+                            const usedMatch = usedStr.match(/^([\d.]+)/);
+                            adminConsumption = usedMatch ? parseFloat(usedMatch[1]) : parseFloat(usedStr) || 0;
+                        } else if (uShareMain.usage) {
+                            // Fallback to usage field if used doesn't exist
+                            const usageStr = String(uShareMain.usage).trim();
+                            const usageMatch = usageStr.match(/^([\d.]+)/);
+                            adminConsumption = usageMatch ? parseFloat(usageMatch[1]) : 0;
+                        }
+                    }
                 }
                 
                 // Extract balance (format: "$ 3.05" or "$ -0.29")
@@ -226,13 +252,19 @@ class InsightsManager {
                     balance: balance,
                     expiration: expiration,
                     lastUpdate: updatedAt,
-                    createdAt: createdAt
+                    createdAt: createdAt,
+                    alfaData: alfaData, // Store full alfaData for View Details modal
+                    quota: data.quota // Store quota for admin limit
                 };
             });
             
-            // Sort by lastUpdate date (newest first) - optimized
+            // Sort alphabetically by name (A to Z) - optimized
             if (this.subscribers.length > 0) {
-                this.subscribers.sort((a, b) => b.lastUpdate.getTime() - a.lastUpdate.getTime());
+                this.subscribers.sort((a, b) => {
+                    const nameA = (a.name || '').toLowerCase();
+                    const nameB = (b.name || '').toLowerCase();
+                    return nameA.localeCompare(nameB);
+                });
             }
             
             // Use requestAnimationFrame for non-blocking operations
@@ -809,8 +841,224 @@ class InsightsManager {
     }
     
     viewSubscriber(id) {
-        console.log('View subscriber:', id);
-        // Implement view functionality
+        const subscriber = this.subscribers.find(s => s.id === id);
+        if (!subscriber) {
+            console.error('Subscriber not found:', id);
+            return;
+        }
+        
+        // Extract view details data
+        const viewData = this.extractViewDetailsData(subscriber);
+        
+        // Show modal
+        this.showViewDetailsModal(viewData);
+    }
+    
+    extractViewDetailsData(subscriber) {
+        const data = {
+            adminPhone: subscriber.phone,
+            adminConsumption: subscriber.adminConsumption || 0,
+            adminLimit: subscriber.adminLimit || 0,
+            subscribers: [],
+            totalConsumption: 0,
+            totalLimit: 0
+        };
+        
+        // Get subscriber data from consumption circles
+        if (subscriber.alfaData && subscriber.alfaData.consumptions && Array.isArray(subscriber.alfaData.consumptions)) {
+            subscriber.alfaData.consumptions.forEach(circle => {
+                // Check if this is a U-share secondary circle
+                if (circle.planName && circle.planName.toLowerCase().includes('u-share secondary')) {
+                    // Extract phone number from circle
+                    let phoneNumber = null;
+                    if (circle.phoneNumber) {
+                        phoneNumber = circle.phoneNumber;
+                    } else {
+                        // Try to extract from circle data (might be in different format)
+                        const circleStr = JSON.stringify(circle);
+                        const phoneMatch = circleStr.match(/(\d{8,})/);
+                        if (phoneMatch) {
+                            phoneNumber = phoneMatch[1];
+                        }
+                    }
+                    
+                    // Extract consumption values
+                    let used = 0;
+                    let total = 0;
+                    
+                    // First try to parse from usage string (format: "1.18 / 30 GB" or "1.18/30 GB")
+                    if (circle.usage) {
+                        const usageStr = String(circle.usage).trim();
+                        const usageMatch = usageStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                        if (usageMatch) {
+                            used = parseFloat(usageMatch[1]) || 0;
+                            total = parseFloat(usageMatch[2]) || 0;
+                        }
+                    }
+                    
+                    // If usage didn't work, try used field (might contain "1.18/30")
+                    if (used === 0 && circle.used) {
+                        const usedStr = String(circle.used).trim();
+                        // Check if it contains "/" (format: "1.18/30")
+                        if (usedStr.includes('/')) {
+                            const usedMatch = usedStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                            if (usedMatch) {
+                                used = parseFloat(usedMatch[1]) || 0;
+                                total = parseFloat(usedMatch[2]) || 0;
+                            }
+                        } else {
+                            // Just a number
+                            const usedMatch = usedStr.match(/^([\d.]+)/);
+                            used = usedMatch ? parseFloat(usedMatch[1]) : parseFloat(usedStr) || 0;
+                        }
+                    }
+                    
+                    // Extract total from circle.total if still not found
+                    if (total === 0 && circle.total) {
+                        const totalStr = String(circle.total).trim();
+                        const totalMatch = totalStr.match(/^([\d.]+)/);
+                        total = totalMatch ? parseFloat(totalMatch[1]) : parseFloat(totalStr) || 0;
+                    }
+                    
+                    if (phoneNumber && (used > 0 || total > 0)) {
+                        data.subscribers.push({
+                            phoneNumber: phoneNumber,
+                            consumption: used,
+                            limit: total
+                        });
+                        data.totalConsumption += used;
+                        data.totalLimit += total;
+                    }
+                }
+            });
+        }
+        
+        // Add admin consumption to total
+        data.totalConsumption += data.adminConsumption;
+        // Total limit should be from totalConsumption API, but if not available, sum admin + subscribers
+        if (subscriber.alfaData && subscriber.alfaData.totalConsumption) {
+            const totalMatch = String(subscriber.alfaData.totalConsumption).match(/([\d.]+)\s*\/\s*([\d.]+)/);
+            if (totalMatch) {
+                data.totalLimit = parseFloat(totalMatch[2]) || data.totalLimit;
+            }
+        } else {
+            data.totalLimit = data.adminLimit + data.totalLimit;
+        }
+        
+        return data;
+    }
+    
+    showViewDetailsModal(data) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('viewDetailsModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.id = 'viewDetailsModal';
+        modal.className = 'view-details-modal-overlay';
+        modal.innerHTML = `
+            <div class="view-details-modal">
+                <div class="view-details-modal-header">
+                    <h2>View Details</h2>
+                </div>
+                <div class="view-details-modal-body">
+                    <table class="view-details-table">
+                        <thead>
+                            <tr>
+                                <th>User Number</th>
+                                <th>Consumption</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${this.generateViewDetailsRows(data)}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="view-details-modal-footer">
+                    <button class="btn-cancel" onclick="this.closest('.view-details-modal-overlay').remove()">Cancel</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+        
+        // Close on Escape key
+        const escapeHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escapeHandler);
+            }
+        };
+        document.addEventListener('keydown', escapeHandler);
+    }
+    
+    generateViewDetailsRows(data) {
+        let rows = '';
+        
+        // Admin row
+        const adminPercent = data.adminLimit > 0 ? (data.adminConsumption / data.adminLimit) * 100 : 0;
+        const adminProgressClass = adminPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+        rows += `
+            <tr>
+                <td>Admin - ${data.adminPhone}</td>
+                <td>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div class="${adminProgressClass}" style="width: ${Math.min(100, adminPercent)}%"></div>
+                        </div>
+                        <div class="progress-text">${data.adminConsumption.toFixed(2)} / ${data.adminLimit} GB</div>
+                    </div>
+                </td>
+            </tr>
+        `;
+        
+        // Subscriber rows
+        data.subscribers.forEach(sub => {
+            const subPercent = sub.limit > 0 ? (sub.consumption / sub.limit) * 100 : 0;
+            const subProgressClass = subPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+            rows += `
+                <tr>
+                    <td>${sub.phoneNumber}</td>
+                    <td>
+                        <div class="progress-container">
+                            <div class="progress-bar">
+                                <div class="${subProgressClass}" style="width: ${Math.min(100, subPercent)}%"></div>
+                            </div>
+                            <div class="progress-text">${sub.consumption.toFixed(2)} / ${sub.limit} GB</div>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        // Total row
+        const totalPercent = data.totalLimit > 0 ? (data.totalConsumption / data.totalLimit) * 100 : 0;
+        const totalProgressClass = totalPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+        rows += `
+            <tr class="total-row">
+                <td><strong>Total</strong></td>
+                <td>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div class="${totalProgressClass}" style="width: ${Math.min(100, totalPercent)}%"></div>
+                        </div>
+                        <div class="progress-text">${data.totalConsumption.toFixed(2)} / ${data.totalLimit} GB</div>
+                    </div>
+                </td>
+            </tr>
+        `;
+        
+        return rows;
     }
     
     toggleMenu(id, button) {

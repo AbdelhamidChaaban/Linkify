@@ -1,6 +1,6 @@
 const axios = require('axios');
 
-const API_KEY = 'e74a03c847e54bad7ba217fc4b65b552';
+const API_KEY = process.env.CAPTCHA_API_KEY || '';
 const API_URL = 'http://2captcha.com';
 
 /**

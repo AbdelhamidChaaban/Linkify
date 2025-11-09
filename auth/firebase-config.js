@@ -1,6 +1,8 @@
 // Firebase Configuration
+// NOTE: Firebase web API keys are meant to be public, but MUST be restricted using Firebase Security Rules
+// Make sure your Firestore Security Rules properly restrict access to authenticated users only
 const firebaseConfig = {
-    apiKey: "AIzaSyCz83EAYIqHZgfjdyhsNr1m1d0lfe7SHRg",
+    apiKey: "AIzaSyCz83EAYIqHZgfjdyhsNr1m1d0lfe7SHRg", // Public web API key - restrict with Security Rules
     authDomain: "linkify-1f8e7.firebaseapp.com",
     projectId: "linkify-1f8e7",
     storageBucket: "linkify-1f8e7.firebasestorage.app",
