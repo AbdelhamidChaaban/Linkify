@@ -5,6 +5,114 @@
     to { transform: rotate(360deg); }
 }
 
+/* Refresh loading animation */
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.05); }
+}
+
+@keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes checkmark {
+    0% { 
+        stroke-dashoffset: 100;
+        opacity: 0;
+    }
+    50% {
+        opacity: 1;
+    }
+    100% { 
+        stroke-dashoffset: 0;
+        opacity: 1;
+    }
+}
+
+@keyframes successScale {
+    0% { transform: scale(0); opacity: 0; }
+    50% { transform: scale(1.2); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+/* Refresh loading indicator */
+.refresh-loading {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+}
+
+.refresh-loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(59, 130, 246, 0.2);
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: rotate 0.8s linear infinite;
+}
+
+.refresh-success {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%) scale(0);
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    animation: successScale 0.5s ease-out forwards;
+}
+
+.refresh-success svg {
+    width: 20px;
+    height: 20px;
+    stroke: #10b981;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    fill: none;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    animation: checkmark 0.6s ease-out 0.2s forwards;
+}
+
+/* Row with refresh indicator */
+tr.refreshing {
+    position: relative;
+    background: linear-gradient(90deg, 
+        rgba(59, 130, 246, 0.05) 0%, 
+        rgba(59, 130, 246, 0.1) 50%, 
+        rgba(59, 130, 246, 0.05) 100%);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+tr.refreshing td {
+    opacity: 0.7;
+}
+
+tr.refresh-success {
+    position: relative;
+    background: linear-gradient(90deg, 
+        rgba(16, 185, 129, 0.05) 0%, 
+        rgba(16, 185, 129, 0.1) 50%, 
+        rgba(16, 185, 129, 0.05) 100%);
+    transition: background 0.3s ease;
+}
+
+tr.refresh-success td {
+    opacity: 1;
+}
+
 /* Make page fixed height, only table scrolls */
 html.insights-page,
 body.insights-page {

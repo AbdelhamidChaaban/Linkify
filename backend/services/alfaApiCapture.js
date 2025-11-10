@@ -81,6 +81,7 @@ async function waitForApiEndpoints(apiResponses, endpointNames, maxWaitTime = 15
     const startTime = Date.now();
     const found = {};
 
+    // Check more frequently (every 200ms instead of 500ms) for faster response
     while (Date.now() - startTime < maxWaitTime) {
         endpointNames.forEach(name => {
             if (!found[name]) {
@@ -95,7 +96,7 @@ async function waitForApiEndpoints(apiResponses, endpointNames, maxWaitTime = 15
             break;
         }
 
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 200)); // Faster polling
     }
 
     endpointNames.forEach(name => {

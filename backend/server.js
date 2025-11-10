@@ -8,10 +8,8 @@ const rootEnvPath = path.join(__dirname, '..', '.env');
 
 if (fs.existsSync(backendEnvPath)) {
     require('dotenv').config({ path: backendEnvPath });
-    console.log('✅ Loaded .env from backend folder');
 } else if (fs.existsSync(rootEnvPath)) {
     require('dotenv').config({ path: rootEnvPath });
-    console.log('✅ Loaded .env from root folder');
 } else {
     // Try default location (current directory)
     require('dotenv').config();
@@ -23,6 +21,8 @@ const cors = require('cors');
 
 // Load services
 const { fetchAlfaData } = require('./services/alfaService');
+const browserPool = require('./services/browserPool');
+const cacheLayer = require('./services/cacheLayer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -52,7 +52,51 @@ app.use(express.json());
 
 // Health check (before static files to avoid conflicts)
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        browserPool: {
+            initialized: browserPool.isInitialized(),
+            activeContexts: browserPool.getActiveContextCount()
+        },
+        cache: {
+            enabled: cacheLayer.isAvailable(),
+            ttl: cacheLayer.getTTL(),
+            ttlMinutes: Math.round(cacheLayer.getTTL() / 60)
+        }
+    });
+});
+
+// Cache management endpoint (optional - for debugging/admin)
+app.delete('/api/cache/:identifier', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        const deleted = await cacheLayer.delete(identifier);
+        
+        res.json({
+            success: deleted,
+            message: deleted ? `Cache cleared for ${identifier}` : `Failed to clear cache for ${identifier}`
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error?.message || 'Unknown error occurred'
+        });
+    }
+});
+
+// Get cache stats (optional - for debugging)
+app.get('/api/cache/:identifier/stats', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        const stats = await cacheLayer.getStats(identifier);
+        res.json(stats);
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error?.message || 'Unknown error occurred'
+        });
+    }
 });
 
 // Serve frontend static files
@@ -81,13 +125,15 @@ app.post('/api/alfa/fetch', async (req, res) => {
             });
         }
 
-        console.log(`[${new Date().toISOString()}] Fetching Alfa data for admin: ${adminId || phone}`);
+        const identifier = adminId || phone;
+        console.log(`[${new Date().toISOString()}] Fetching fresh Alfa data for admin: ${identifier}`);
 
+        // Always perform fresh scrape - Redis is used internally during scraping for performance
         const startTime = Date.now();
-        const data = await fetchAlfaData(phone, password, adminId);
+        const data = await fetchAlfaData(phone, password, adminId, identifier);
         const duration = Date.now() - startTime;
 
-        console.log(`[${new Date().toISOString()}] Completed in ${duration}ms`);
+        console.log(`[${new Date().toISOString()}] Completed fresh scrape in ${duration}ms`);
 
         res.json({
             success: true,
@@ -106,17 +152,61 @@ app.post('/api/alfa/fetch', async (req, res) => {
     }
 });
 
-// Start server on available port
-findAvailablePort(PORT).then(actualPort => {
-    app.listen(actualPort, () => {
-        console.log(`🚀 Linkify backend server running on port ${actualPort}`);
-        console.log(`📁 Serving static files from: ${frontendPath}`);
-        console.log(`🌐 Access frontend at: http://localhost:${actualPort}/`);
-        console.log(`📄 Home page: http://localhost:${actualPort}/pages/home.html`);
-        console.log(`\n⚠️  Note: If port ${PORT} was in use, server is running on port ${actualPort}`);
-    });
-}).catch(err => {
-    console.error('❌ Failed to start server:', err);
+// Initialize browser pool and start server
+async function startServer() {
+    try {
+        // Initialize browser pool first
+        console.log('🔧 Initializing browser pool...');
+        await browserPool.initialize();
+        
+        // Start server on available port
+        const actualPort = await findAvailablePort(PORT);
+        
+        app.listen(actualPort, () => {
+            console.log(`🚀 Linkify backend server running on port ${actualPort}`);
+            console.log(`📁 Serving static files from: ${frontendPath}`);
+            console.log(`🌐 Access frontend at: http://localhost:${actualPort}/`);
+            console.log(`📄 Home page: http://localhost:${actualPort}/pages/home.html`);
+            console.log(`\n⚠️  Note: If port ${PORT} was in use, server is running on port ${actualPort}`);
+        });
+    } catch (err) {
+        console.error('❌ Failed to start server:', err);
+        process.exit(1);
+    }
+}
+
+// Graceful shutdown handler
+async function gracefulShutdown(signal) {
+    console.log(`\n${signal} received. Starting graceful shutdown...`);
+    
+    try {
+        // Close browser pool
+        await browserPool.shutdown();
+        console.log('✅ Graceful shutdown complete');
+        process.exit(0);
+    } catch (error) {
+        console.error('❌ Error during shutdown:', error);
+        process.exit(1);
+    }
+}
+
+// Handle shutdown signals
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', async (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    await browserPool.shutdown();
     process.exit(1);
 });
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', async (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    // Don't exit on unhandled rejection, but log it
+});
+
+// Start the server
+startServer();
 

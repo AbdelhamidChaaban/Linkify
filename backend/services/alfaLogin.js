@@ -14,43 +14,79 @@ function delay(ms) {
  * @param {string} phone - Phone number (username)
  * @param {string} password - Password
  * @param {string} adminId - Admin ID for session storage
- * @returns {Promise<boolean>} True if login successful
+ * @returns {Promise<{success: boolean, alreadyOnDashboard: boolean}>} Login result
  */
 async function loginToAlfa(page, phone, password, adminId) {
     try {
-        // Check for existing session
+        // Check for existing session from Redis
+        // Note: Session cookies should already be injected in fetchAlfaData before this is called
+        // But we check again here as a fallback
         const savedSession = await getSession(adminId || phone);
         let needsLogin = true;
+        let alreadyOnDashboard = false;
 
         if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
-            console.log('✅ Found saved session. Attempting to restore...');
-            await page.setCookie(...savedSession.cookies);
+            console.log('✅ Found saved session in Redis. Verifying session validity...');
+            
+            // If cookies weren't already injected, inject them now
+            try {
+                const existingCookies = await page.cookies();
+                if (existingCookies.length === 0) {
+                    await page.setCookie(...savedSession.cookies);
+                    console.log(`✅ Injected ${savedSession.cookies.length} cookies from Redis`);
+                }
+            } catch (cookieError) {
+                console.warn('⚠️ Error injecting cookies:', cookieError.message);
+            }
 
+            // Verify session by navigating to dashboard
+            // This navigation will be reused - no need to navigate again in fetchAlfaData
             try {
                 await page.goto(AEFA_DASHBOARD_URL, {
                     waitUntil: 'domcontentloaded',
                     timeout: 30000
                 });
 
-                await delay(2000);
+                await delay(1000);
                 const currentUrl = page.url();
                 if (!currentUrl.includes('/login')) {
-                    console.log('✅ Session restored successfully!');
+                    console.log('✅ Session restored successfully from Redis!');
                     needsLogin = false;
+                    // Don't set alreadyOnDashboard - we'll navigate again in fetchAlfaData to ensure APIs are captured
                 } else {
-                    console.log('⚠️ Session expired. Need to login again.');
+                    console.log('⚠️ Session expired or invalid. Need to login again.');
+                    // Delete invalid session from Redis
+                    const { deleteSession } = require('./sessionManager');
+                    await deleteSession(adminId || phone);
                     needsLogin = true;
                 }
             } catch (error) {
-                console.log('⚠️ Error checking session, will proceed with login:', error.message);
+                console.log('⚠️ Error verifying session, will proceed with login:', error.message);
                 needsLogin = true;
             }
         } else {
-            console.log('ℹ️ No saved session found, will login');
+            console.log('ℹ️ No saved session found in Redis, will login');
         }
 
         if (needsLogin) {
+            alreadyOnDashboard = false; // We need to login, so we're not on dashboard yet
             const credentials = { username: phone, password: password };
+            
+            // Check current URL - if we're already on dashboard, navigate to login page first
+            const initialUrl = page.url();
+            if (initialUrl.includes('/account') && !initialUrl.includes('/login')) {
+                console.log('🔐 Currently on dashboard, navigating to login page first...');
+                try {
+                    await page.goto(AEFA_LOGIN_URL, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 30000
+                    });
+                    await delay(1000); // Small delay after navigation
+                } catch (navError) {
+                    console.warn('⚠️ Error navigating to login page:', navError.message);
+                }
+            }
+            
             console.log('🔐 Navigating to login page...');
             
             // Retry navigation with different strategies (handle 503 errors) - EXACTLY like alfa-automation.txt
@@ -251,7 +287,7 @@ async function loginToAlfa(page, phone, password, adminId) {
             }
         }
 
-        return true;
+        return { success: true, alreadyOnDashboard: alreadyOnDashboard };
     } catch (error) {
         console.error('❌ Login error:', error.message);
         throw error;

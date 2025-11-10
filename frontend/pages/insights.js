@@ -1179,59 +1179,114 @@ class InsightsManager {
             }
             
             // Try to get password from Firestore
-            let password = null;
-            try {
-                // Check if Firestore is online
-                const waitForOnline = () => {
-                    return new Promise((resolve, reject) => {
-                        // Try to get document with a timeout
-                        const timeout = setTimeout(() => {
-                            reject(new Error('Firestore request timed out'));
-                        }, 5000);
-                        
-                        db.collection('admins').doc(id).get()
-                            .then((doc) => {
-                                clearTimeout(timeout);
-                                resolve(doc);
-                            })
-                            .catch((error) => {
-                                clearTimeout(timeout);
-                                reject(error);
-                            });
-                    });
-                };
-                
-                const adminDoc = await waitForOnline();
-                
-                if (adminDoc.exists) {
+            // First check if we have it cached in the subscriber object
+            let password = subscriber.password || null;
+            
+            // If not in subscriber object, try to get from Firestore with improved error handling
+            if (!password) {
+                try {
+                    // Use a shorter timeout and better error handling
+                    const waitForOnline = () => {
+                        return new Promise((resolve, reject) => {
+                            // Reduced timeout to 3 seconds
+                            const timeout = setTimeout(() => {
+                                reject(new Error('Firestore request timed out. Trying to use cached data...'));
+                            }, 3000);
+                            
+                            // Try to get document
+                            const docRef = db.collection('admins').doc(id);
+                            
+                            // Use get() with timeout
+                            docRef.get()
+                                .then((doc) => {
+                                    clearTimeout(timeout);
+                                    resolve(doc);
+                                })
+                                .catch((error) => {
+                                    clearTimeout(timeout);
+                                    reject(error);
+                                });
+                        });
+                    };
+                    
+                    const adminDoc = await waitForOnline();
+                    
+                    if (adminDoc.exists) {
                     const adminData = adminDoc.data();
                     password = adminData.password;
-                } else {
-                    console.warn('Admin document not found in Firestore:', id);
+                    
+                    // Cache password in subscriber object and localStorage for next time
+                    if (password) {
+                        subscriber.password = password;
+                        // Also cache in localStorage as backup
+                        try {
+                            localStorage.setItem(`admin_${id}`, JSON.stringify({
+                                password: password,
+                                phone: phone,
+                                cachedAt: Date.now()
+                            }));
+                        } catch (e) {
+                            console.warn('Could not cache to localStorage:', e);
+                        }
+                    }
+                    } else {
+                        console.warn('Admin document not found in Firestore:', id);
+                    }
+                } catch (firestoreError) {
+                    console.warn('⚠️ Firestore fetch failed (will try to continue):', firestoreError.message);
+                    
+                    // Try to get password from cache/localStorage as fallback
+                    try {
+                        const cachedAdmin = localStorage.getItem(`admin_${id}`);
+                        if (cachedAdmin) {
+                            const adminData = JSON.parse(cachedAdmin);
+                            if (adminData.password) {
+                                password = adminData.password;
+                                console.log('✅ Using cached password from localStorage');
+                            }
+                        }
+                    } catch (cacheError) {
+                        console.warn('Could not read from cache:', cacheError);
+                    }
+                    
+                    // If still no password, show error but don't block - let user know
+                    if (!password) {
+                        const errorMsg = firestoreError.message || 'Cannot connect to Firestore';
+                        const userChoice = confirm(
+                            `Cannot get password from Firestore: ${errorMsg}\n\n` +
+                            `Would you like to:\n` +
+                            `- Click OK to try refreshing anyway (if password is cached)\n` +
+                            `- Click Cancel to abort`
+                        );
+                        
+                        if (!userChoice) {
+                            // Remove any loading indicators
+                            const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
+                            if (row) {
+                                row.classList.remove('refreshing', 'refresh-success');
+                                const loadingIndicator = row.querySelector('.refresh-loading');
+                                const successIndicator = row.querySelector('.refresh-success');
+                                if (loadingIndicator) loadingIndicator.remove();
+                                if (successIndicator) successIndicator.remove();
+                            }
+                            return;
+                        }
+                    }
                 }
-            } catch (firestoreError) {
-                console.error('❌ Firestore fetch failed:', firestoreError);
-                // If Firestore is offline, we can't get the password
-                // Show a clear error and stop here - don't try to call backend
-                const errorMsg = firestoreError.message || 'Unknown Firestore error';
-                alert(`Cannot refresh: ${errorMsg}\n\nPlease check your internet connection and try again.`);
-                
-                // Restore row opacity
-                const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
-                if (row) {
-                    row.style.opacity = '1';
-                }
-                return; // Stop here, don't proceed to backend call
             }
             
             if (!password) {
                 console.error('Password not found for admin:', id);
-                alert('Cannot refresh: Password not found. Please check your internet connection.');
+                alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
                 
-                // Restore row opacity
+                // Remove any loading indicators
                 const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
                 if (row) {
-                    row.style.opacity = '1';
+                    row.classList.remove('refreshing', 'refresh-success');
+                    const loadingIndicator = row.querySelector('.refresh-loading');
+                    const successIndicator = row.querySelector('.refresh-success');
+                    if (loadingIndicator) loadingIndicator.remove();
+                    if (successIndicator) successIndicator.remove();
                 }
                 return;
             }
@@ -1240,18 +1295,39 @@ class InsightsManager {
             if (typeof window.AlfaAPIService === 'undefined' || !window.AlfaAPIService) {
                 alert('Backend service not available. Please make sure the server is running and alfa-api.js is loaded.');
                 
-                // Restore row opacity
+                // Remove any loading indicators
                 const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
                 if (row) {
-                    row.style.opacity = '1';
+                    row.classList.remove('refreshing', 'refresh-success');
+                    const loadingIndicator = row.querySelector('.refresh-loading');
+                    const successIndicator = row.querySelector('.refresh-success');
+                    if (loadingIndicator) loadingIndicator.remove();
+                    if (successIndicator) successIndicator.remove();
                 }
                 return;
             }
             
-            // Show loading indicator
+            // Show animated loading indicator
             const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
+            let loadingIndicator = null;
+            let successIndicator = null;
+            
             if (row) {
-                row.style.opacity = '0.5';
+                // Add refreshing class for animation
+                row.classList.add('refreshing');
+                
+                // Remove any existing indicators
+                const existingLoading = row.querySelector('.refresh-loading');
+                const existingSuccess = row.querySelector('.refresh-success');
+                if (existingLoading) existingLoading.remove();
+                if (existingSuccess) existingSuccess.remove();
+                
+                // Create and add loading spinner
+                loadingIndicator = document.createElement('div');
+                loadingIndicator.className = 'refresh-loading';
+                loadingIndicator.innerHTML = '<div class="refresh-loading-spinner"></div>';
+                row.style.position = 'relative';
+                row.appendChild(loadingIndicator);
             }
             
             // Fetch Alfa data from backend
@@ -1274,9 +1350,36 @@ class InsightsManager {
             
             console.log('Alfa data refreshed successfully');
             
-            // Data will automatically update via real-time listener
+            // Show success animation
             if (row) {
-                row.style.opacity = '1';
+                // Remove loading indicator
+                if (loadingIndicator) {
+                    loadingIndicator.remove();
+                }
+                
+                // Remove refreshing class
+                row.classList.remove('refreshing');
+                
+                // Add success class and indicator
+                row.classList.add('refresh-success');
+                
+                // Create and add success checkmark
+                successIndicator = document.createElement('div');
+                successIndicator.className = 'refresh-success';
+                successIndicator.innerHTML = `
+                    <svg viewBox="0 0 24 24">
+                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                    </svg>
+                `;
+                row.appendChild(successIndicator);
+                
+                // Remove success indicator after animation completes
+                setTimeout(() => {
+                    if (successIndicator) {
+                        successIndicator.remove();
+                    }
+                    row.classList.remove('refresh-success');
+                }, 2000); // Keep success animation for 2 seconds
             }
             
         } catch (error) {
@@ -1302,10 +1405,14 @@ class InsightsManager {
             
             alert('Failed to refresh data: ' + errorMessage);
             
-            // Restore row opacity
+            // Remove loading indicators and restore row
             const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
             if (row) {
-                row.style.opacity = '1';
+                row.classList.remove('refreshing', 'refresh-success');
+                const loadingIndicator = row.querySelector('.refresh-loading');
+                const successIndicator = row.querySelector('.refresh-success');
+                if (loadingIndicator) loadingIndicator.remove();
+                if (successIndicator) successIndicator.remove();
             }
         }
     }
