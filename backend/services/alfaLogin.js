@@ -26,7 +26,7 @@ async function loginToAlfa(page, phone, password, adminId) {
         let alreadyOnDashboard = false;
 
         if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
-            console.log('✅ Found saved session in Redis. Verifying session validity...');
+            const sessionNeedsRefresh = savedSession.needsRefresh || false;
             
             // If cookies weren't already injected, inject them now
             try {
@@ -39,30 +39,57 @@ async function loginToAlfa(page, phone, password, adminId) {
                 console.warn('⚠️ Error injecting cookies:', cookieError.message);
             }
 
-            // Verify session by navigating to dashboard
-            // This navigation will be reused - no need to navigate again in fetchAlfaData
-            try {
-                await page.goto(AEFA_DASHBOARD_URL, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 30000
-                });
+            // Only verify session if it's expiring (to refresh it)
+            // If session is fresh, skip verification to save time
+            if (sessionNeedsRefresh) {
+                console.log('⚠️ Session is expiring soon. Verifying and refreshing...');
+                try {
+                    // Use networkidle0 with shorter timeout for faster verification
+                    await page.goto(AEFA_DASHBOARD_URL, {
+                        waitUntil: 'networkidle0',
+                        timeout: 15000 // Reduced from 30s to 15s
+                    });
 
-                await delay(1000);
-                const currentUrl = page.url();
-                if (!currentUrl.includes('/login')) {
-                    console.log('✅ Session restored successfully from Redis!');
-                    needsLogin = false;
-                    // Don't set alreadyOnDashboard - we'll navigate again in fetchAlfaData to ensure APIs are captured
-                } else {
-                    console.log('⚠️ Session expired or invalid. Need to login again.');
-                    // Delete invalid session from Redis
-                    const { deleteSession } = require('./sessionManager');
-                    await deleteSession(adminId || phone);
-                    needsLogin = true;
+                    // No delay needed - networkidle0 already waits for network
+                    const currentUrl = page.url();
+                    if (!currentUrl.includes('/login')) {
+                        console.log('✅ Session verified, refreshing cookies...');
+                        const currentCookies = await page.cookies();
+                        await saveSession(adminId || phone, currentCookies, {});
+                        console.log('✅ Session refreshed successfully!');
+                        needsLogin = false;
+                    } else {
+                        console.log('⚠️ Session expired. Will login again.');
+                        needsLogin = true;
+                    }
+                } catch (error) {
+                    // If timeout, try with domcontentloaded (faster fallback)
+                    try {
+                        await page.goto(AEFA_DASHBOARD_URL, {
+                            waitUntil: 'domcontentloaded',
+                            timeout: 10000
+                        });
+                        const currentUrl = page.url();
+                        if (!currentUrl.includes('/login')) {
+                            console.log('✅ Session verified (fast check), refreshing cookies...');
+                            const currentCookies = await page.cookies();
+                            await saveSession(adminId || phone, currentCookies, {});
+                            console.log('✅ Session refreshed successfully!');
+                            needsLogin = false;
+                        } else {
+                            console.log('⚠️ Session expired. Will login again.');
+                            needsLogin = true;
+                        }
+                    } catch (fallbackError) {
+                        console.log('⚠️ Error verifying session, will proceed with login:', fallbackError.message);
+                        needsLogin = true;
+                    }
                 }
-            } catch (error) {
-                console.log('⚠️ Error verifying session, will proceed with login:', error.message);
-                needsLogin = true;
+            } else {
+                // Session is fresh - skip verification to save time
+                // We'll verify it during the actual data fetch by checking if APIs work
+                console.log('✅ Found fresh session in Redis (skipping verification for speed)');
+                needsLogin = false;
             }
         } else {
             console.log('ℹ️ No saved session found in Redis, will login');
@@ -229,10 +256,12 @@ async function loginToAlfa(page, phone, password, adminId) {
             
             if (!currentUrl.includes('/login')) {
                 // Successfully logged in!
-                console.log('✅ Login successful! Saving session to database...');
+                console.log('✅ Login successful! Saving session to Redis...');
                 const cookies = await page.cookies();
+                // Save session immediately after successful login
+                // This ensures session persists even if later operations fail
                 await saveSession(adminId || phone, cookies, {});
-                console.log('✅ Session saved successfully!');
+                console.log(`✅ Session saved successfully! (${cookies.length} cookies)`);
             } else {
                 // Still on login page - check for CAPTCHA
                 console.log('⚠️ Still on login page. Checking for CAPTCHA...');
@@ -250,10 +279,11 @@ async function loginToAlfa(page, phone, password, adminId) {
                         const newUrl = page.url();
                         console.log(`📍 URL after CAPTCHA submit: ${newUrl}`);
                         if (!newUrl.includes('/login')) {
-                            console.log('✅ Login successful after CAPTCHA!');
+                            console.log('✅ Login successful after CAPTCHA! Saving session to Redis...');
                             const cookies = await page.cookies();
+                            // Save session immediately after successful login
                             await saveSession(adminId || phone, cookies, {});
-                            console.log('✅ Session saved successfully!');
+                            console.log(`✅ Session saved successfully! (${cookies.length} cookies)`);
                         } else {
                             throw new Error('Login failed after CAPTCHA solve');
                         }

@@ -18,13 +18,49 @@ class AdminsManager {
             // Try to get all admins without orderBy to avoid index issues
             let snapshot;
             try {
-                snapshot = await db.collection('admins').get();
+                // Get admins with timeout handling
+                // Firestore will automatically use cache if server is unavailable (thanks to persistence)
+                const queryPromise = db.collection('admins').get();
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Firestore timeout')), 20000) // 20s timeout (increased)
+                );
+                
+                snapshot = await Promise.race([queryPromise, timeoutPromise]);
+                
+                // Check if data is from cache (offline mode)
+                if (snapshot.metadata && snapshot.metadata.fromCache) {
+                    console.log('ℹ️ Loaded admins from cache (offline mode)');
+                } else {
+                    console.log('✅ Loaded admins from server');
+                }
             } catch (error) {
-                console.error('Error fetching admins:', error);
+                console.warn('⚠️ Firestore query timeout or error:', error.message);
+                
+                // Firestore persistence should have cached data, but if not, show error
                 this.admins = [];
                 this.renderTable();
                 this.updatePagination();
                 this.updatePageInfo();
+                
+                // Show user-friendly error message
+                const tbody = document.getElementById('adminsTableBody');
+                if (tbody) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="empty-state" style="text-align: center; padding: 3rem;">
+                                <p style="color: #f59e0b; margin-bottom: 1rem;">
+                                    ⚠️ Connection timeout. Firestore is operating in offline mode.
+                                </p>
+                                <p style="color: #94a3b8; margin-bottom: 1rem; font-size: 0.9rem;">
+                                    If you have previously loaded admins, they should appear automatically when connection is restored.
+                                </p>
+                                <button onclick="location.reload()" style="padding: 0.5rem 1rem; background: #3a0a4e; color: white; border: none; border-radius: 0.5rem; cursor: pointer;">
+                                    Retry
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }
                 return;
             }
             

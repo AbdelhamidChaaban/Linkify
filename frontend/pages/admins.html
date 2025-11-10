@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="admins-page">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Linkify - Admins</title>
     <link rel="icon" type="image/png" href="/assets/Logo.png">
     <link rel="stylesheet" href="/shared/layout.css">
     <link rel="stylesheet" href="/pages/admins.css">
 </head>
-<body>
+<body class="admins-page">
     <!-- Navigation -->
     <nav class="navbar">
         <div class="nav-container">
@@ -57,73 +57,79 @@
 
     <!-- Main Content -->
     <main class="main-content">
-        <div class="page-header">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
-                <div>
-                    <h2>Admins Management</h2>
-                    <p>Manage and view all system administrators</p>
+        <div class="container">
+            <div class="page-header">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <h2>Admins Management</h2>
+                        <p>Manage and view all system administrators</p>
+                    </div>
+                    <button class="new-admin-btn" id="newAdminBtn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 5v14M5 12h14"/>
+                        </svg>
+                        New Admin
+                    </button>
                 </div>
-                <button class="new-admin-btn" id="newAdminBtn">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 5v14M5 12h14"/>
-                    </svg>
-                    New Admin
-                </button>
-            </div>
-        </div>
-
-        <div class="admins-container">
-            <div class="table-wrapper">
-                <table class="admins-table" id="adminsTable">
-                    <thead>
-                        <tr>
-                            <th>
-                                <input type="checkbox" id="selectAll" class="row-checkbox">
-                            </th>
-                            <th>Name</th>
-                            <th>Phone</th>
-                            <th>Status</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="adminsTableBody">
-                        <!-- Rows will be populated by JavaScript -->
-                    </tbody>
-                </table>
             </div>
 
-            <!-- Pagination -->
-            <div class="pagination-container">
-                <div class="pagination-controls">
-                    <div class="rows-per-page">
-                        <label for="rowsPerPage">Rows per page:</label>
-                        <select id="rowsPerPage">
-                            <option value="10">10</option>
-                            <option value="25" selected>25</option>
-                            <option value="50">50</option>
-                            <option value="100">100</option>
-                        </select>
+            <div class="admins-container">
+                <div class="admins-container-inner">
+                    <div class="table-wrapper">
+                        <table class="admins-table" id="adminsTable">
+                            <thead>
+                                <tr>
+                                    <th>
+                                        <input type="checkbox" id="selectAll" class="row-checkbox">
+                                    </th>
+                                    <th>Name</th>
+                                    <th>Phone</th>
+                                    <th>Status</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminsTableBody">
+                                <!-- Rows will be populated by JavaScript -->
+                            </tbody>
+                        </table>
                     </div>
-                    <span class="page-info" id="pageInfo">1–25 of 161</span>
-                    <div class="pagination-buttons">
-                        <button class="pagination-btn" id="prevPage" disabled>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M15 18l-6-6 6-6"/>
-                            </svg>
-                            Previous
-                        </button>
-                        <button class="pagination-btn" id="nextPage">
-                            Next
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M9 18l6-6-6-6"/>
-                            </svg>
-                        </button>
+
+                    <!-- Pagination -->
+                    <div class="pagination-section">
+                        <div class="pagination-container">
+                            <div class="pagination-controls">
+                                <div class="rows-per-page">
+                                    <label for="rowsPerPage">Rows per page:</label>
+                                    <select id="rowsPerPage">
+                                        <option value="10">10</option>
+                                        <option value="25" selected>25</option>
+                                        <option value="50">50</option>
+                                        <option value="100">100</option>
+                                    </select>
+                                </div>
+                                <span class="page-info" id="pageInfo">1–25 of 161</span>
+                                <div class="pagination-buttons">
+                                    <button class="pagination-btn" id="prevPage" disabled>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M15 18l-6-6 6-6"/>
+                                        </svg>
+                                        Previous
+                                    </button>
+                                    <button class="pagination-btn" id="nextPage">
+                                        Next
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M9 18l6-6-6-6"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="dense-toggle">
+                                <input type="checkbox" id="denseToggle">
+                                <label for="denseToggle">Dense</label>
+                                <div class="toggle-switch" id="denseSwitch"></div>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="dense-toggle">
-                    <input type="checkbox" id="denseToggle">
-                    <label for="denseToggle">Dense</label>
-                    <div class="toggle-switch" id="denseSwitch"></div>
                 </div>
             </div>
         </div>
@@ -132,6 +138,7 @@
     <!-- New Admin Modal -->
     <div class="modal-overlay" id="newAdminModal">
         <div class="modal-container">
+            <div class="modal-container-inner">
             <div class="modal-header">
                 <h3>Add New Admin</h3>
                 <button class="modal-close" id="closeModal">
@@ -191,6 +198,7 @@
                     </button>
                 </div>
             </form>
+            </div>
         </div>
     </div>
 

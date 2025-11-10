@@ -18,9 +18,19 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
-// Enable offline persistence (caches data locally)
+// Configure Firestore settings for better performance and resilience
 // Note: Using compat version syntax
 try {
+    // Set cache settings first (always available in compat version)
+    if (db.settings) {
+        db.settings({
+            cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED,
+            // Increase timeout for slow connections
+            // Note: Compat version may not support all settings, but we try
+        });
+    }
+    
+    // Enable offline persistence (caches data locally)
     if (db.enablePersistence) {
         db.enablePersistence({
             synchronizeTabs: true
@@ -32,27 +42,26 @@ try {
                 // Browser doesn't support persistence
                 console.warn('⚠️ This browser does not support Firestore persistence');
             } else {
-                console.error('❌ Error enabling Firestore persistence:', err);
+                console.warn('⚠️ Error enabling Firestore persistence:', err.message);
             }
-        });
-    } else {
-        // For compat version, use settings instead
-        db.settings({
-            cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED
         });
     }
 } catch (error) {
-    console.warn('⚠️ Could not enable Firestore persistence:', error);
-    // Fallback: just set cache settings
-    try {
-        if (db.settings) {
-            db.settings({
-                cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED
-            });
+    console.warn('⚠️ Could not configure Firestore settings:', error.message);
+}
+
+// Add global error handler for Firestore connection issues
+if (typeof window !== 'undefined') {
+    // Listen for Firestore connection errors
+    window.addEventListener('unhandledrejection', (event) => {
+        if (event.reason && event.reason.message && 
+            (event.reason.message.includes('Could not reach Cloud Firestore') ||
+             event.reason.message.includes('Backend didn\'t respond'))) {
+            console.warn('⚠️ Firestore connection timeout - using cached data if available');
+            // Don't prevent default - let Firestore handle offline mode
+            // The app should continue working with cached data
         }
-    } catch (e) {
-        console.warn('⚠️ Could not set Firestore cache settings:', e);
-    }
+    });
 }
 
 // Export for use in other scripts (optional, but helpful)

@@ -23,6 +23,7 @@ const cors = require('cors');
 const { fetchAlfaData } = require('./services/alfaService');
 const browserPool = require('./services/browserPool');
 const cacheLayer = require('./services/cacheLayer');
+const scheduledRefresh = require('./services/scheduledRefresh');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -113,7 +114,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Fetch Alfa dashboard data
+// Fetch Alfa dashboard data (with incremental scraping support)
 app.post('/api/alfa/fetch', async (req, res) => {
     try {
         const { phone, password, adminId } = req.body;
@@ -126,25 +127,60 @@ app.post('/api/alfa/fetch', async (req, res) => {
         }
 
         const identifier = adminId || phone;
-        console.log(`[${new Date().toISOString()}] Fetching fresh Alfa data for admin: ${identifier}`);
+        console.log(`[${new Date().toISOString()}] Fetching Alfa data for admin: ${identifier}`);
 
-        // Always perform fresh scrape - Redis is used internally during scraping for performance
         const startTime = Date.now();
         const data = await fetchAlfaData(phone, password, adminId, identifier);
         const duration = Date.now() - startTime;
 
-        console.log(`[${new Date().toISOString()}] Completed fresh scrape in ${duration}ms`);
-
-        res.json({
-            success: true,
-            data: data,
-            duration: duration
-        });
+        // Check if this was an incremental (no-changes) response
+        if (data.incremental && data.noChanges) {
+            console.log(`[${new Date().toISOString()}] ⚡ Incremental check: No changes (${duration}ms)`);
+            res.json({
+                success: true,
+                incremental: true,
+                noChanges: true,
+                message: data.message || 'No changes detected since last refresh',
+                data: data.data || {},
+                duration: duration,
+                timestamp: data.timestamp,
+                lastUpdate: data.lastUpdate
+            });
+        } else {
+            console.log(`[${new Date().toISOString()}] ✅ Completed ${data.incremental ? 'incremental' : 'full'} scrape in ${duration}ms`);
+            res.json({
+                success: true,
+                incremental: data.incremental || false,
+                noChanges: false,
+                data: data,
+                duration: duration,
+                timestamp: data.timestamp || Date.now()
+            });
+        }
     } catch (error) {
         console.error('❌ Error fetching Alfa data:', error);
         console.error('Error message:', error?.message);
         console.error('Stack trace:', error?.stack);
         
+        res.status(500).json({
+            success: false,
+            incremental: false,
+            error: error?.message || 'Unknown error occurred'
+        });
+    }
+});
+
+// Manual trigger for scheduled refresh (for testing/admin)
+app.post('/api/scheduled-refresh/trigger', async (req, res) => {
+    try {
+        console.log('🔧 Manual scheduled refresh triggered via API');
+        await scheduledRefresh.manualRefresh();
+        res.json({
+            success: true,
+            message: 'Scheduled refresh completed'
+        });
+    } catch (error) {
+        console.error('❌ Error triggering scheduled refresh:', error);
         res.status(500).json({
             success: false,
             error: error?.message || 'Unknown error occurred'
@@ -158,6 +194,10 @@ async function startServer() {
         // Initialize browser pool first
         console.log('🔧 Initializing browser pool...');
         await browserPool.initialize();
+        
+        // Start scheduled refresh service
+        console.log('🔧 Initializing scheduled refresh service...');
+        scheduledRefresh.startScheduledRefresh();
         
         // Start server on available port
         const actualPort = await findAvailablePort(PORT);

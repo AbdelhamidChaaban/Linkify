@@ -8,9 +8,10 @@ class CacheLayer {
     constructor() {
         this.redis = null;
         this.enabled = false;
-        // Cache TTL: default 3 minutes for intermediate structures, configurable via CACHE_TTL env var (in minutes)
-        const cacheTTLMinutes = parseInt(process.env.CACHE_TTL) || 3;
-        this.cacheTTL = cacheTTLMinutes * 60; // Convert to seconds
+        // Cache TTL: 24 hours (for scheduled refresh at 6:00 AM daily)
+        // This ensures HTML and JSON structures persist until the next scheduled refresh
+        const cacheTTLHours = parseInt(process.env.CACHE_TTL_HOURS) || 24;
+        this.cacheTTL = cacheTTLHours * 60 * 60; // Convert to seconds (86400 for 24 hours)
         this.initialize();
     }
 

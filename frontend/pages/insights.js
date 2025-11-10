@@ -983,24 +983,26 @@ class InsightsManager {
         modal.className = 'view-details-modal-overlay';
         modal.innerHTML = `
             <div class="view-details-modal">
-                <div class="view-details-modal-header">
-                    <h2>View Details</h2>
-                </div>
-                <div class="view-details-modal-body">
-                    <table class="view-details-table">
-                        <thead>
-                            <tr>
-                                <th>User Number</th>
-                                <th>Consumption</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${this.generateViewDetailsRows(data)}
-                        </tbody>
-                    </table>
-                </div>
-                <div class="view-details-modal-footer">
-                    <button class="btn-cancel" onclick="this.closest('.view-details-modal-overlay').remove()">Cancel</button>
+                <div class="view-details-modal-inner">
+                    <div class="view-details-modal-header">
+                        <h2>View Details</h2>
+                    </div>
+                    <div class="view-details-modal-body">
+                        <table class="view-details-table">
+                            <thead>
+                                <tr>
+                                    <th>User Number</th>
+                                    <th>Consumption</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${this.generateViewDetailsRows(data)}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="view-details-modal-footer">
+                        <button class="btn-cancel" onclick="this.closest('.view-details-modal-overlay').remove()">Cancel</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -1261,7 +1263,8 @@ class InsightsManager {
                         
                         if (!userChoice) {
                             // Remove any loading indicators
-                            const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
+                            const checkbox = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
+                            const row = checkbox ? checkbox.closest('tr') : null;
                             if (row) {
                                 row.classList.remove('refreshing', 'refresh-success');
                                 const loadingIndicator = row.querySelector('.refresh-loading');
@@ -1280,11 +1283,12 @@ class InsightsManager {
                 alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
                 
                 // Remove any loading indicators
-                const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
-                if (row) {
-                    row.classList.remove('refreshing', 'refresh-success');
-                    const loadingIndicator = row.querySelector('.refresh-loading');
-                    const successIndicator = row.querySelector('.refresh-success');
+                const checkbox2 = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
+                const row2 = checkbox2 ? checkbox2.closest('tr') : null;
+                if (row2) {
+                    row2.classList.remove('refreshing', 'refresh-success');
+                    const loadingIndicator = row2.querySelector('.refresh-loading');
+                    const successIndicator = row2.querySelector('.refresh-success');
                     if (loadingIndicator) loadingIndicator.remove();
                     if (successIndicator) successIndicator.remove();
                 }
@@ -1296,11 +1300,12 @@ class InsightsManager {
                 alert('Backend service not available. Please make sure the server is running and alfa-api.js is loaded.');
                 
                 // Remove any loading indicators
-                const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
-                if (row) {
-                    row.classList.remove('refreshing', 'refresh-success');
-                    const loadingIndicator = row.querySelector('.refresh-loading');
-                    const successIndicator = row.querySelector('.refresh-success');
+                const checkbox3 = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
+                const row3 = checkbox3 ? checkbox3.closest('tr') : null;
+                if (row3) {
+                    row3.classList.remove('refreshing', 'refresh-success');
+                    const loadingIndicator = row3.querySelector('.refresh-loading');
+                    const successIndicator = row3.querySelector('.refresh-success');
                     if (loadingIndicator) loadingIndicator.remove();
                     if (successIndicator) successIndicator.remove();
                 }
@@ -1308,7 +1313,10 @@ class InsightsManager {
             }
             
             // Show animated loading indicator
-            const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
+            // Find row by finding checkbox or button with data-subscriber-id, then get parent tr
+            const checkbox = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
+            const button = document.querySelector(`button[data-subscriber-id="${id}"]`);
+            const row = checkbox ? checkbox.closest('tr') : (button ? button.closest('tr') : null);
             let loadingIndicator = null;
             let successIndicator = null;
             
@@ -1322,12 +1330,23 @@ class InsightsManager {
                 if (existingLoading) existingLoading.remove();
                 if (existingSuccess) existingSuccess.remove();
                 
-                // Create and add loading spinner
+                // Ensure row has relative positioning for absolute child positioning
+                row.style.position = 'relative';
+                
+                // Create and add 3D rotating loader
                 loadingIndicator = document.createElement('div');
                 loadingIndicator.className = 'refresh-loading';
-                loadingIndicator.innerHTML = '<div class="refresh-loading-spinner"></div>';
-                row.style.position = 'relative';
+                loadingIndicator.innerHTML = `
+                    <div class="loader">
+                        <div class="inner one"></div>
+                        <div class="inner two"></div>
+                        <div class="inner three"></div>
+                    </div>
+                `;
                 row.appendChild(loadingIndicator);
+                console.log('✅ 3D loader added to row');
+            } else {
+                console.warn('⚠️ Row not found for subscriber:', id);
             }
             
             // Fetch Alfa data from backend
@@ -1349,6 +1368,10 @@ class InsightsManager {
             }
             
             console.log('Alfa data refreshed successfully');
+            
+            // Wait a bit for Firebase real-time listener to update the UI
+            // This ensures the loader stays visible until data actually appears
+            await new Promise(resolve => setTimeout(resolve, 500));
             
             // Show success animation
             if (row) {
@@ -1406,11 +1429,12 @@ class InsightsManager {
             alert('Failed to refresh data: ' + errorMessage);
             
             // Remove loading indicators and restore row
-            const row = document.querySelector(`tr[data-subscriber-id="${id}"]`);
-            if (row) {
-                row.classList.remove('refreshing', 'refresh-success');
-                const loadingIndicator = row.querySelector('.refresh-loading');
-                const successIndicator = row.querySelector('.refresh-success');
+            const errorCheckbox = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
+            const errorRow = errorCheckbox ? errorCheckbox.closest('tr') : null;
+            if (errorRow) {
+                errorRow.classList.remove('refreshing', 'refresh-success');
+                const loadingIndicator = errorRow.querySelector('.refresh-loading');
+                const successIndicator = errorRow.querySelector('.refresh-success');
                 if (loadingIndicator) loadingIndicator.remove();
                 if (successIndicator) successIndicator.remove();
             }

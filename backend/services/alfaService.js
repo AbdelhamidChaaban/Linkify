@@ -5,6 +5,7 @@ const { setupApiCapture, waitForApiEndpoints, fetchApiDirectly } = require('./al
 const { extractConsumptionCircles, extractBalanceFromHtml, extractTotalConsumptionFromHtml } = require('./alfaDataExtraction');
 const { extractFromGetConsumption, extractFromGetMyServices, extractExpiration, buildAdminConsumption } = require('./alfaApiDataExtraction');
 const { updateDashboardData } = require('./firebaseDbService');
+const snapshotManager = require('./snapshotManager');
 
 /**
  * Fetch Alfa dashboard data for an admin
@@ -184,56 +185,221 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
         const apiResponses = await setupApiCapture(page);
 
         // Step 2: Login (resources not blocked during login)
-        // Returns {success, alreadyOnDashboard} - if alreadyOnDashboard is true, we skip redundant navigation
+        // Returns {success, alreadyOnDashboard, sessionWasFresh}
         const loginResult = await loginToAlfa(page, phone, password, adminId);
         const alreadyOnDashboard = loginResult.alreadyOnDashboard || false;
+        const sessionWasFresh = loginResult.sessionWasFresh || false;
+        const needsLogin = !loginResult.success;
 
-        // Step 3: Check for cached HTML structure to potentially skip page load
-        const cachedHtml = await cacheLayer.getHtmlStructure(cacheIdentifier);
-        let pageHtml = null;
-        
-        if (cachedHtml) {
-            console.log('📄 Found cached HTML structure, using it to skip page load');
-            // Still navigate to get fresh data, but we can use cached structure for parsing hints
-            // For now, we'll still navigate but cache can help with parsing optimization
+        // Step 3: If we have a session (fresh or refreshed), try to fetch APIs directly first (faster)
+        // OPTIMIZATION: Parallel API fetching with timeouts for faster snapshot check
+        if ((sessionWasFresh || !needsLogin) && apiResponses.length < 2) {
+            console.log('⚡ Attempting direct API fetch for faster snapshot check...');
+            try {
+                // Fetch APIs directly without full page navigation (parallel with timeouts)
+                const { fetchApiDirectly } = require('./alfaApiCapture');
+                
+                // Check what we already have
+                const hasConsumption = apiResponses.find(r => r.url && r.url.includes('getconsumption') && r.data);
+                const hasServices = apiResponses.find(r => r.url && r.url.includes('getmyservices') && r.data);
+                
+                const directApiPromises = [];
+                if (!hasConsumption) {
+                    directApiPromises.push(
+                        Promise.race([
+                            fetchApiDirectly(page, `https://www.alfa.com.lb/en/account/getconsumption?_=${Date.now()}`),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000)) // 2s timeout
+                        ]).catch(() => null)
+                    );
+                }
+                if (!hasServices) {
+                    directApiPromises.push(
+                        Promise.race([
+                            fetchApiDirectly(page, `https://www.alfa.com.lb/en/account/manage-services/getmyservices?_=${Date.now()}`),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000)) // 2s timeout
+                        ]).catch(() => null)
+                    );
+                }
+                if (directApiPromises.length > 0) {
+                    directApiPromises.push(
+                        Promise.race([
+                            fetchApiDirectly(page, `https://www.alfa.com.lb/en/account/getexpirydate?_=${Date.now()}`),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000)) // 2s timeout
+                        ]).catch(() => null)
+                    );
+                }
+                
+                if (directApiPromises.length > 0) {
+                    const directResults = await Promise.all(directApiPromises);
+                    
+                    // Add successful results to apiResponses (avoid duplicates)
+                    directResults.forEach(result => {
+                        if (result && result.data !== null && result.data !== undefined) {
+                            const exists = apiResponses.find(r => r.url === result.url);
+                            if (!exists) {
+                                apiResponses.push(result);
+                            }
+                        }
+                    });
+                    
+                    // Check if we got the essential APIs
+                    const finalHasConsumption = apiResponses.find(r => r.url && r.url.includes('getconsumption') && r.data);
+                    const finalHasServices = apiResponses.find(r => r.url && r.url.includes('getmyservices') && r.data);
+                    
+                    if (finalHasConsumption && finalHasServices) {
+                        console.log('✅ Direct API fetch successful - can do snapshot check without navigation');
+                    } else {
+                        console.log(`⚠️ Direct API fetch incomplete (consumption: ${finalHasConsumption ? '✅' : '❌'}, services: ${finalHasServices ? '✅' : '❌'})`);
+                    }
+                }
+            } catch (directError) {
+                console.log('⚠️ Direct API fetch failed, will navigate normally:', directError.message);
+            }
         }
-        
-        // Step 4: Always navigate to dashboard (even if already there from session verification)
-        // This ensures APIs are properly triggered and captured
-        // Enable resource blocking for dashboard navigation
-        blockState.enabled = true;
-        console.log('🔄 Navigating to dashboard (always fresh)...');
-        await page.goto(AEFA_DASHBOARD_URL, {
-            waitUntil: 'domcontentloaded',
-            timeout: 30000
-        });
 
-        // Get fresh HTML and cache it for next time
-        // Only try if page is still valid (not destroyed)
+        // Step 4: Quick snapshot check BEFORE navigation (if we have APIs from direct fetch)
+        // This allows us to skip navigation entirely if no changes detected
+        let shouldSkipNavigation = false;
+        
+        // Wait briefly for any APIs that might be captured during session verification
+        // But only if we don't already have both essential APIs
+        const hasConsumption = apiResponses.find(r => r.url && r.url.includes('getconsumption') && r.data);
+        const hasServices = apiResponses.find(r => r.url && r.url.includes('getmyservices') && r.data);
+        
+        if (!hasConsumption || !hasServices) {
+            console.log('⏳ Waiting for API endpoints (500ms timeout)...');
+            await waitForApiEndpoints(apiResponses, ['getconsumption', 'getmyservices'], 500); // Reduced to 500ms
+        }
+        console.log(`📡 Captured ${apiResponses.length} API response(s) so far`);
+        
+        console.log('🔍 Checking for incremental update (snapshot comparison)...');
+        
         try {
-            // Check if page is still valid before getting content
-            if (!page.isClosed()) {
-                pageHtml = await page.content();
-                // Cache HTML structure (non-blocking)
-                if (pageHtml) {
-                    cacheLayer.setHtmlStructure(cacheIdentifier, pageHtml).catch(() => {});
+            const getConsumptionResponse = apiResponses.find(resp => resp.url && resp.url.includes('getconsumption'));
+            const getMyServicesResponse = apiResponses.find(resp => resp.url && resp.url.includes('getmyservices'));
+            
+            console.log(`   - getconsumption: ${getConsumptionResponse?.data ? '✅' : '❌'}`);
+            console.log(`   - getmyservices: ${getMyServicesResponse?.data ? '✅' : '❌'}`);
+            
+            // Check if we have the required API data
+            if (!getConsumptionResponse?.data && !getMyServicesResponse?.data) {
+                console.log('⚠️ API data not yet available for snapshot check, will navigate to dashboard');
+            } else {
+                console.log('📊 API data available, creating quick snapshot...');
+                const quickData = {};
+                
+                // Extract essential fields from APIs
+                if (getConsumptionResponse?.data) {
+                    const extracted = extractFromGetConsumption(getConsumptionResponse.data);
+                    if (extracted.balance) quickData.balance = extracted.balance;
+                    if (extracted.totalConsumption) quickData.totalConsumption = extracted.totalConsumption;
+                    if (extracted.subscribersCount !== undefined) quickData.subscribersCount = extracted.subscribersCount;
+                    console.log(`   - Balance: ${quickData.balance || 'N/A'}, Consumption: ${quickData.totalConsumption || 'N/A'}, Subscribers: ${quickData.subscribersCount || 'N/A'}`);
+                }
+                
+                if (getMyServicesResponse?.data) {
+                    const extracted = extractFromGetMyServices(getMyServicesResponse.data);
+                    if (extracted.subscriptionDate) quickData.subscriptionDate = extracted.subscriptionDate;
+                    if (extracted.validityDate) quickData.validityDate = extracted.validityDate;
+                    // Note: adminConsumption requires consumption circles, so we'll get it during full scrape
+                }
+                
+                // Get expiration if available
+                const getExpiryDateResponse = apiResponses.find(resp => resp.url && resp.url.includes('getexpirydate'));
+                if (getExpiryDateResponse?.data !== undefined && getExpiryDateResponse?.data !== null) {
+                    quickData.expiration = extractExpiration(getExpiryDateResponse.data);
+                }
+                
+                // Create snapshot from quick data
+                const quickSnapshot = snapshotManager.createSnapshot(quickData);
+                
+                if (quickSnapshot) {
+                    console.log('🔍 Comparing with last snapshot...');
+                    // Check for changes
+                    const changeCheck = await snapshotManager.checkForChanges(cacheIdentifier, quickSnapshot);
+                    
+                    if (!changeCheck.hasChanges) {
+                        console.log('⚡ No changes detected - skipping navigation and full scrape');
+                        shouldSkipNavigation = true;
+                        
+                        // Close the context before returning
+                        await browserPool.closeContext(context);
+                        
+                        // Return early with cached data structure
+                        const lastSnapshot = changeCheck.lastSnapshot;
+                        return {
+                            success: true,
+                            incremental: true,
+                            noChanges: true,
+                            message: 'No changes detected since last refresh',
+                            timestamp: Date.now(),
+                            lastUpdate: lastSnapshot?.timestamp || null,
+                            data: {
+                                balance: quickData.balance || null,
+                                totalConsumption: quickData.totalConsumption || null,
+                                subscribersCount: quickData.subscribersCount || null,
+                                expiration: quickData.expiration || null,
+                                subscriptionDate: quickData.subscriptionDate || null,
+                                validityDate: quickData.validityDate || null
+                            }
+                        };
+                    } else {
+                        const changedFields = Object.keys(changeCheck.comparison.changes || {});
+                        if (changedFields.length > 0) {
+                            console.log(`📊 Changes detected in: ${changedFields.join(', ')} - proceeding with full scrape`);
+                        } else {
+                            console.log('📊 No previous snapshot found (first refresh) - proceeding with full scrape');
+                        }
+                    }
+                } else {
+                    console.log('⚠️ Could not create snapshot from quick data, continuing with full scrape');
                 }
             }
-        } catch (e) {
-            // Silently ignore - HTML caching is optional
-            // Only log if it's not a context destroyed error (which is expected sometimes)
-            if (!e.message.includes('Execution context was destroyed') && 
-                !e.message.includes('Target closed') &&
-                !e.message.includes('Session closed')) {
-                console.warn('⚠️ Could not cache HTML structure:', e.message);
-            }
+        } catch (snapshotError) {
+            // Non-critical - continue with full scrape if snapshot check fails
+            console.warn('⚠️ Snapshot check failed, continuing with full scrape:', snapshotError.message);
+            console.warn('   Error details:', snapshotError.stack);
         }
 
-        // Minimal wait for page structure
-        await delay(1000);
+        // Step 5: Navigate to dashboard (only if needed - skip if snapshot check found no changes)
+        if (!shouldSkipNavigation) {
+            // Check for cached HTML structure
+            const cachedHtml = await cacheLayer.getHtmlStructure(cacheIdentifier);
+            let pageHtml = null;
+            
+            if (cachedHtml) {
+                console.log('📄 Found cached HTML structure');
+            }
+            
+            // Enable resource blocking for dashboard navigation
+            blockState.enabled = true;
+            console.log('🔄 Navigating to dashboard...');
+            await page.goto(AEFA_DASHBOARD_URL, {
+                waitUntil: 'domcontentloaded',
+                timeout: 15000 // Reduced from 30s to 15s for faster performance
+            });
 
-        // Step 5: Check for cached API structures, but always fetch fresh
-        // Cache can help identify which APIs to prioritize, but we always fetch fresh
+            // Get fresh HTML and cache it for next time
+            try {
+                if (!page.isClosed()) {
+                    pageHtml = await page.content();
+                    if (pageHtml) {
+                        cacheLayer.setHtmlStructure(cacheIdentifier, pageHtml).catch(() => {});
+                    }
+                }
+            } catch (e) {
+                if (!e.message.includes('Execution context was destroyed') && 
+                    !e.message.includes('Target closed') &&
+                    !e.message.includes('Session closed')) {
+                    console.warn('⚠️ Could not cache HTML structure:', e.message);
+                }
+            }
+
+            // Minimal wait for page structure (optimized)
+            await delay(300); // Reduced from 500ms to 300ms
+        }
+
+        // Step 6: Check for cached API structures, but always fetch fresh
         const cachedConsumption = await cacheLayer.getApiStructure(cacheIdentifier, 'getconsumption');
         const cachedServices = await cacheLayer.getApiStructure(cacheIdentifier, 'getmyservices');
         
@@ -241,40 +407,42 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
             console.log('📡 Found cached API structures (using as reference, but fetching fresh)');
         }
 
-        // Step 6: Wait for API endpoints with reduced timeout (APIs are more important than HTML)
-        // Don't wait too long - we can fetch them directly if needed
-        await waitForApiEndpoints(apiResponses, ['getconsumption', 'getmyservices'], 5000);
-
         // Step 7: Fetch missing APIs directly in parallel (faster than sequential)
+        // OPTIMIZATION: Parallel API fetching with timeouts
         const missingApiPromises = [];
         
         let getExpiryDateResponse = apiResponses.find(resp => resp.url && resp.url.includes('getexpirydate'));
         if (!getExpiryDateResponse || getExpiryDateResponse.data === undefined || getExpiryDateResponse.data === null) {
             console.log('⚠️ getexpirydate not captured, fetching directly...');
             missingApiPromises.push(
-                fetchApiDirectly(page, `https://www.alfa.com.lb/en/account/getexpirydate?_=${Date.now()}`)
-                    .then(response => {
-                        if (response) {
-                            apiResponses.push(response);
-                            return response;
-                        }
-                        return null;
-                    })
+                Promise.race([
+                    fetchApiDirectly(page, `https://www.alfa.com.lb/en/account/getexpirydate?_=${Date.now()}`),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000)) // 2s timeout
+                ]).then(response => {
+                    if (response) {
+                        apiResponses.push(response);
+                        return response;
+                    }
+                    return null;
+                }).catch(() => null)
             );
         }
 
         let getMyServicesResponse = apiResponses.find(resp => resp.url && resp.url.includes('getmyservices'));
         if (!getMyServicesResponse || !getMyServicesResponse.data) {
             console.log('⚠️ getmyservices not captured, fetching directly...');
+            // Use timeout to prevent long waits
             missingApiPromises.push(
-                fetchApiDirectly(page, `https://www.alfa.com.lb/en/account/manage-services/getmyservices?_=${Date.now()}`)
-                    .then(response => {
-                        if (response) {
-                            apiResponses.push(response);
-                            return response;
-                        }
-                        return null;
-                    })
+                Promise.race([
+                    fetchApiDirectly(page, `https://www.alfa.com.lb/en/account/manage-services/getmyservices?_=${Date.now()}`),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000)) // 2s timeout
+                ]).then(response => {
+                    if (response) {
+                        apiResponses.push(response);
+                        return response;
+                    }
+                    return null;
+                }).catch(() => null)
             );
         }
         
@@ -303,38 +471,36 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
         }
 
         // Step 9: Wait for consumption circles to render (they're rendered dynamically by JavaScript)
-        // Only wait if we need HTML data - if we have all API data, we can skip this
-        const hasAllApiData = getConsumptionResponse?.data && getMyServicesResponse?.data;
-        
-        if (!hasAllApiData) {
-            console.log('⏳ Waiting for consumption circles to render...');
-            try {
-                // Wait for at least one circle to appear
-                await page.waitForFunction(
-                    () => {
-                        const circles = document.querySelectorAll('#consumptions .circle');
-                        return circles.length > 0;
-                    },
-                    { timeout: 8000 } // Reduced from 15s to 8s
-                );
-                console.log('✅ Consumption circles rendered');
-                // Minimal delay for rendering
-                await delay(1000);
-            } catch (e) {
-                console.log('⚠️ Timeout waiting for consumption circles, proceeding with API data...');
-            }
-        } else {
-            console.log('✅ All API data available, skipping HTML wait');
-            // Still try to get circles quickly if possible, but don't wait long
-            await delay(500);
+        // ALWAYS wait for circles - they're needed for the consumptions array even if API data is available
+        // The circles contain important data like plan names and phone numbers that APIs don't provide
+        console.log('⏳ Waiting for consumption circles to render...');
+        try {
+            // Wait for at least one circle to appear
+            await page.waitForFunction(
+                () => {
+                    const circles = document.querySelectorAll('#consumptions .circle');
+                    return circles.length > 0;
+                },
+                { timeout: 8000 } // Reduced from 15s to 8s for faster performance
+            );
+            console.log('✅ Consumption circles rendered');
+            // Reduced delay - circles should be ready after waitForFunction
+            await delay(500); // Reduced from 2s to 500ms
+        } catch (e) {
+            console.log('⚠️ Timeout waiting for consumption circles, proceeding anyway...');
+            // Minimal delay if timeout
+            await delay(500); // Reduced from 2s to 500ms
         }
 
         // Step 10: Extract data (always fresh from current scrape)
+        // OPTIMIZATION: Parallel extraction for faster performance
 
-        // Extract from HTML
-        const consumptions = await extractConsumptionCircles(page);
-        const balanceFromHtml = await extractBalanceFromHtml(page);
-        const totalConsumptionFromHtml = await extractTotalConsumptionFromHtml(page);
+        // Extract from HTML in parallel (concurrency optimization)
+        const [consumptions, balanceFromHtml, totalConsumptionFromHtml] = await Promise.all([
+            extractConsumptionCircles(page),
+            extractBalanceFromHtml(page),
+            extractTotalConsumptionFromHtml(page)
+        ]);
 
         // Extract from API
         const dashboardData = {
@@ -388,6 +554,34 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
             });
         });
 
+        // Step 11: Save snapshot after successful data extraction
+        // Only save if we have valid, complete data
+        try {
+            if (dashboardData && !dashboardData.error && !dashboardData.failed) {
+                console.log('💾 Saving snapshot for next incremental check...');
+                const saved = await snapshotManager.saveSnapshot(cacheIdentifier, dashboardData);
+                if (saved) {
+                    console.log('✅ Snapshot saved successfully');
+                } else {
+                    console.log('⚠️ Snapshot save returned false (data might be invalid)');
+                }
+            } else {
+                console.log('⚠️ Not saving snapshot - data has errors or is incomplete');
+            }
+        } catch (snapshotError) {
+            // Non-critical - log but don't fail
+            console.warn('⚠️ Could not save snapshot (non-critical):', snapshotError.message);
+        }
+
+        // Step 12: Refresh session cookies after successful operation (non-blocking)
+        // OPTIMIZATION: Moved to Step 11 parallel saves - this is now handled there
+        // Session refresh is now part of the parallel save operations
+
+        // Mark as full scrape (not incremental)
+        dashboardData.incremental = false;
+        dashboardData.noChanges = false;
+        dashboardData.timestamp = Date.now();
+
         // Close the context (browser stays alive for reuse)
         await browserPool.closeContext(context);
         return dashboardData;
@@ -405,6 +599,18 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
         const errorMessage = error.message || String(error);
         console.error(`❌ Error fetching Alfa data for ${adminId || phone}:`, errorMessage);
         console.error('Stack trace:', error.stack);
+        
+        // Only delete session if it's a login/authentication error
+        // Don't delete for other errors (network, parsing, etc.) - session might still be valid
+        if (errorMessage.includes('Login') || 
+            errorMessage.includes('login') || 
+            errorMessage.includes('Invalid credentials') ||
+            errorMessage.includes('CAPTCHA') ||
+            errorMessage.includes('authentication')) {
+            console.log('⚠️ Login/authentication error detected. Session may be invalid.');
+            // Note: We don't delete the session here - let the next attempt verify it
+            // If it's truly invalid, loginToAlfa will handle it
+        }
         
         // Re-throw with more context
         throw new Error(`Failed to fetch Alfa data: ${errorMessage}`);

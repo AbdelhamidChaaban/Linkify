@@ -1,12 +1,10 @@
 const cacheLayer = require('./cacheLayer');
 
-// Session expiry: default 30 days, configurable via SESSION_EXPIRY_DAYS env var
-// Set to 0 or -1 for no expiration (sessions never expire)
-const SESSION_EXPIRY_DAYS = parseInt(process.env.SESSION_EXPIRY_DAYS);
-let SESSION_TTL = 0; // Default: no expiration
-if (SESSION_EXPIRY_DAYS && SESSION_EXPIRY_DAYS > 0) {
-    SESSION_TTL = SESSION_EXPIRY_DAYS * 24 * 60 * 60; // Convert to seconds
-}
+// Session expiry: 24 hours (for scheduled refresh at 6:00 AM daily)
+// This ensures sessions persist until the next scheduled refresh
+// Can be overridden via SESSION_EXPIRY_HOURS env var
+const SESSION_EXPIRY_HOURS = parseInt(process.env.SESSION_EXPIRY_HOURS) || 24;
+const SESSION_TTL = SESSION_EXPIRY_HOURS * 60 * 60; // Convert to seconds (86400 for 24 hours)
 
 /**
  * Generate Redis key for session
@@ -19,9 +17,55 @@ function generateSessionKey(adminId) {
 }
 
 /**
+ * Check if cookies are expired or about to expire
+ * @param {Array} cookies - Array of cookie objects
+ * @param {number} daysBeforeExpiry - Number of days before expiry to consider "about to expire" (default: 1)
+ * @returns {boolean} True if cookies are expired or about to expire
+ */
+function areCookiesExpiring(cookies, daysBeforeExpiry = 1) {
+    if (!cookies || !Array.isArray(cookies) || cookies.length === 0) {
+        return true; // No cookies = expired
+    }
+
+    const now = Date.now();
+    const expiryThreshold = daysBeforeExpiry * 24 * 60 * 60 * 1000; // Convert to milliseconds
+
+    // Check each cookie's expiration
+    for (const cookie of cookies) {
+        if (cookie.expires) {
+            // Cookie expiration can be:
+            // - Unix timestamp (seconds)
+            // - Unix timestamp (milliseconds)
+            // - Date string
+            let expiryTime;
+            
+            if (typeof cookie.expires === 'number') {
+                // If it's a number, check if it's seconds or milliseconds
+                expiryTime = cookie.expires < 10000000000 ? cookie.expires * 1000 : cookie.expires;
+            } else if (typeof cookie.expires === 'string') {
+                expiryTime = new Date(cookie.expires).getTime();
+            } else {
+                continue; // Skip if we can't parse
+            }
+
+            // Check if cookie is expired or expiring soon
+            const timeUntilExpiry = expiryTime - now;
+            if (timeUntilExpiry <= 0) {
+                return true; // Already expired
+            }
+            if (timeUntilExpiry <= expiryThreshold) {
+                return true; // Expiring soon
+            }
+        }
+    }
+
+    return false; // Cookies are still valid
+}
+
+/**
  * Get saved session for an admin from Redis
  * @param {string} adminId - Admin ID (phone number or document ID)
- * @returns {Promise<{cookies: Array, tokens: Object} | null>}
+ * @returns {Promise<{cookies: Array, tokens: Object, savedAt: number, needsRefresh: boolean} | null>}
  */
 async function getSession(adminId) {
     // Fallback to null if Redis is not available
@@ -69,16 +113,48 @@ async function getSession(adminId) {
             return null;
         }
 
-        console.log(`✅ Retrieved session from Redis for ${adminId} (${sessionData.cookies.length} cookies)`);
+        // Check if cookies are expiring (within 1 day)
+        const needsRefresh = areCookiesExpiring(sessionData.cookies, 1);
+        
+        if (needsRefresh) {
+            console.log(`⚠️ Session for ${adminId} is expiring soon or expired, will refresh on next use`);
+        }
+
+        console.log(`✅ Retrieved session from Redis for ${adminId} (${sessionData.cookies.length} cookies${needsRefresh ? ', needs refresh' : ''})`);
         return {
             cookies: sessionData.cookies,
             tokens: sessionData.tokens || {},
-            savedAt: sessionData.savedAt || sessionData.timestamp
+            savedAt: sessionData.savedAt || sessionData.timestamp,
+            needsRefresh: needsRefresh
         };
     } catch (error) {
         // Redis errors should not crash - fallback to login
         console.warn(`⚠️ Redis get session error for ${adminId}:`, error.message);
         return null;
+    }
+}
+
+/**
+ * Delete session for an admin from Redis
+ * @param {string} adminId - Admin ID
+ * @returns {Promise<boolean>} Success status
+ */
+async function deleteSession(adminId) {
+    if (!cacheLayer.isAvailable()) {
+        return false;
+    }
+
+    try {
+        const key = generateSessionKey(adminId);
+        if (!cacheLayer.redis) {
+            return false;
+        }
+
+        await cacheLayer.redis.del(key);
+        return true;
+    } catch (error) {
+        console.warn(`⚠️ Redis delete session error for ${adminId}:`, error.message);
+        return false;
     }
 }
 
@@ -121,16 +197,10 @@ async function saveSession(adminId, cookies, tokens = {}) {
 
         const value = JSON.stringify(sessionData);
 
-        if (SESSION_TTL === 0) {
-            // No expiration - use SET
-            await cacheLayer.redis.set(key, value);
-            console.log(`✅ Session saved to Redis for ${adminId} (no expiration, ${cookies.length} cookies, old session deleted)`);
-        } else {
-            // With TTL - use SETEX
-            await cacheLayer.redis.setex(key, SESSION_TTL, value);
-            const days = Math.round(SESSION_TTL / (24 * 60 * 60));
-            console.log(`✅ Session saved to Redis for ${adminId} (TTL: ${days} days, ${cookies.length} cookies, old session deleted)`);
-        }
+        // Always use SETEX with 24-hour TTL
+        await cacheLayer.redis.setex(key, SESSION_TTL, value);
+        const hours = Math.round(SESSION_TTL / (60 * 60));
+        console.log(`✅ Session saved to Redis for ${adminId} (TTL: ${hours} hours, ${cookies.length} cookies, old session deleted)`);
     } catch (error) {
         // Redis errors should not crash - log and continue
         console.warn(`⚠️ Redis save session error for ${adminId}:`, error.message);
