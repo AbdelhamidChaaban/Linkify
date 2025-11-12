@@ -109,12 +109,33 @@ async function waitForApiEndpoints(apiResponses, endpointNames, maxWaitTime = 15
 /**
  * Fetch API endpoint directly if not captured
  * @param {Object} page - Puppeteer page object
- * @param {string} url - API endpoint URL
+ * @param {string} endpointOrUrl - API endpoint name (e.g., 'getmyservices') or full URL
+ * @param {number} timeout - Optional timeout in milliseconds
  * @returns {Promise<Object|null>} Response data or null
  */
-async function fetchApiDirectly(page, url) {
+async function fetchApiDirectly(page, endpointOrUrl, timeout = 3000) {
+    // Check if page is still open
+    if (page.isClosed()) {
+        return null;
+    }
+    
+    // Build full URL if endpoint name is provided
+    let url;
+    if (endpointOrUrl.startsWith('http')) {
+        url = endpointOrUrl;
+    } else {
+        // Map endpoint names to full URLs
+        const endpointMap = {
+            'getconsumption': `https://www.alfa.com.lb/en/account/getconsumption?_=${Date.now()}`,
+            'getmyservices': `https://www.alfa.com.lb/en/account/manage-services/getmyservices?_=${Date.now()}`,
+            'getexpirydate': `https://www.alfa.com.lb/en/account/getexpirydate?_=${Date.now()}`
+        };
+        url = endpointMap[endpointOrUrl] || endpointOrUrl;
+    }
+    
     try {
-        const data = await page.evaluate(async (apiUrl) => {
+        // Use Promise.race to add timeout
+        const fetchPromise = page.evaluate(async (apiUrl) => {
             try {
                 const response = await fetch(apiUrl, {
                     method: 'GET',
@@ -128,38 +149,57 @@ async function fetchApiDirectly(page, url) {
                 if (response.ok) {
                     const contentType = response.headers.get('content-type') || '';
                     if (contentType.includes('json')) {
-                        return { success: true, data: await response.json() };
+                        return { success: true, data: await response.json(), status: response.status };
                     } else {
                         const text = await response.text();
                         // Try to parse as JSON
                         try {
-                            return { success: true, data: JSON.parse(text) };
+                            return { success: true, data: JSON.parse(text), status: response.status };
                         } catch {
                             // Return as string/number if it's just a number
                             const numValue = text.trim().match(/^\d+$/) ? text.trim() : (isNaN(text.trim()) ? null : text.trim());
-                            return { success: true, data: numValue || text.trim() };
+                            return { success: true, data: numValue || text.trim(), status: response.status };
                         }
                     }
                 } else {
-                    return { success: false, error: `HTTP ${response.status}` };
+                    return { success: false, error: `HTTP ${response.status}`, status: response.status };
                 }
             } catch (error) {
-                return { success: false, error: error.message };
+                return { success: false, error: error.message, status: 0 };
             }
         }, url);
+        
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout')), timeout)
+        );
+        
+        const data = await Promise.race([fetchPromise, timeoutPromise]);
 
-        if (data.success && data.data !== null && data.data !== undefined) {
+        if (data && data.success && data.data !== null && data.data !== undefined) {
             return {
                 url: url,
-                status: 200,
+                status: data.status || 200,
                 data: data.data
             };
+        } else if (data && data.status === 404) {
+            // Silently skip 404 errors - endpoint might not be available
+            return null;
         } else {
-            console.log(`❌ Failed to fetch ${url}:`, data.error);
+            // Only log non-404 errors
+            if (data && data.status !== 404) {
+                console.log(`⚠️ Failed to fetch ${endpointOrUrl}: ${data.error || 'Unknown error'}`);
+            }
             return null;
         }
     } catch (error) {
-        console.log(`❌ Error making direct API call to ${url}:`, error.message);
+        // Silently handle "Target closed" and timeout errors during concurrent operations
+        if (error.message.includes('Target closed') || 
+            error.message.includes('Session closed') || 
+            error.message.includes('Protocol error') ||
+            error.message === 'Timeout') {
+            return null;
+        }
+        console.log(`⚠️ Error making direct API call to ${endpointOrUrl}:`, error.message);
         return null;
     }
 }

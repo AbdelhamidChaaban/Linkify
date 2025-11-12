@@ -88,7 +88,9 @@ async function loginToAlfa(page, phone, password, adminId) {
             } else {
                 // Session is fresh - skip verification to save time
                 // We'll verify it during the actual data fetch by checking if APIs work
-                console.log('✅ Found fresh session in Redis (skipping verification for speed)');
+                // IMPORTANT: Even if session is fresh, we should still refresh it periodically to extend lifetime
+                // But we skip the verification step to save time - the session will be refreshed after successful data fetch
+                console.log('✅ Found fresh session in Redis (skipping verification for speed, will refresh after successful operation)');
                 needsLogin = false;
             }
         } else {

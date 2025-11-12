@@ -63,8 +63,17 @@ function extractFromGetConsumption(apiResponseData) {
             
             // Extract secondary subscribers
             if (firstServiceDetails.SecondaryValue && Array.isArray(firstServiceDetails.SecondaryValue)) {
-                firstServiceDetails.SecondaryValue.forEach((secondary) => {
-                    if (secondary.BundleNameValue && secondary.BundleNameValue.includes('U-share secondary')) {
+                console.log(`📊 Found ${firstServiceDetails.SecondaryValue.length} SecondaryValue items in getconsumption API`);
+                firstServiceDetails.SecondaryValue.forEach((secondary, index) => {
+                    const bundleName = secondary.BundleNameValue || '';
+                    console.log(`   [${index}] BundleNameValue: "${bundleName}"`);
+                    
+                    // Check for U-share secondary (case-insensitive, flexible matching)
+                    if (bundleName && (
+                        bundleName.toLowerCase().includes('u-share secondary') ||
+                        bundleName.toLowerCase().includes('ushare secondary') ||
+                        bundleName.toLowerCase().includes('secondary')
+                    )) {
                         extracted.subscribersCount++;
                         
                         let consumptionValue = secondary.ConsumptionValue || '';
@@ -72,6 +81,8 @@ function extractFromGetConsumption(apiResponseData) {
                         let quotaValue = secondary.QuotaValue || '';
                         let quotaUnit = secondary.QuotaUnitValue || '';
                         let secondaryNumber = secondary.SecondaryNumberValue || '';
+                        
+                        console.log(`   ✅ Found secondary subscriber: ${secondaryNumber}, consumption: ${consumptionValue} ${consumptionUnit}, quota: ${quotaValue} ${quotaUnit}`);
                         
                         // Convert MB to GB if needed
                         let displayConsumption = consumptionValue;
@@ -89,6 +100,9 @@ function extractFromGetConsumption(apiResponseData) {
                         });
                     }
                 });
+                console.log(`📊 Extracted ${extracted.secondarySubscribers.length} secondary subscribers from getconsumption API`);
+            } else {
+                console.log('⚠️ No SecondaryValue array found in getconsumption API response');
             }
         }
     }
@@ -108,36 +122,115 @@ function extractFromGetMyServices(apiResponseData) {
         validityDate: null
     };
 
-    if (apiResponseData.ServiceInformationValue && 
-        Array.isArray(apiResponseData.ServiceInformationValue) && 
-        apiResponseData.ServiceInformationValue.length > 0) {
+    // Handle different response structures
+    let servicesArray = null;
+    
+    // Check if response is directly an array
+    if (Array.isArray(apiResponseData)) {
+        servicesArray = apiResponseData;
+    }
+    // Check if response has ServiceInformationValue property
+    else if (apiResponseData.ServiceInformationValue && Array.isArray(apiResponseData.ServiceInformationValue)) {
+        servicesArray = apiResponseData.ServiceInformationValue;
+    }
+    
+    if (!servicesArray || servicesArray.length === 0) {
+        return extracted;
+    }
+    
+    // Extract adminConsumptionTemplate from first service (for backward compatibility)
+    // Try to find ServiceDetailsInformationValue structure first
+    const firstService = servicesArray[0];
+    
+    if (firstService.ServiceDetailsInformationValue && 
+        Array.isArray(firstService.ServiceDetailsInformationValue) && 
+        firstService.ServiceDetailsInformationValue.length > 0) {
         
-        const firstService = apiResponseData.ServiceInformationValue[0];
+        const firstServiceDetails = firstService.ServiceDetailsInformationValue[0];
+        const consumptionValue = firstServiceDetails.ConsumptionValue;
+        const consumptionUnit = firstServiceDetails.ConsumptionUnitValue || '';
         
-        if (firstService.ServiceDetailsInformationValue && 
-            Array.isArray(firstService.ServiceDetailsInformationValue) && 
-            firstService.ServiceDetailsInformationValue.length > 0) {
-            
-            const firstServiceDetails = firstService.ServiceDetailsInformationValue[0];
-            const consumptionValue = firstServiceDetails.ConsumptionValue;
-            const consumptionUnit = firstServiceDetails.ConsumptionUnitValue || '';
-            
+        if (consumptionValue) {
             extracted.adminConsumptionTemplate = {
                 serviceName: firstService.ServiceNameValue || 'U-share Main',
                 consumptionValue: consumptionValue,
                 consumptionUnit: consumptionUnit
             };
         }
+    }
+    
+    // Extract dates from services array
+    // Subscription Date = ActivationDate
+    // Validity Date = CycleDate
+    // PRIORITY: Look for active services with ActiveBundle first, then Mobile Internet, then any service with dates
+    let bestService = null;
+    let bestServicePriority = 0;
+    
+    for (const service of servicesArray) {
+        let priority = 0;
         
-        // Extract dates
-        const serviceWithActivation = apiResponseData.ServiceInformationValue.find(service => service.ActivationDate);
-        if (serviceWithActivation && serviceWithActivation.ActivationDate) {
-            extracted.subscriptionDate = formatDate(serviceWithActivation.ActivationDate);
+        // Priority 3: Service has ActiveBundle (active subscription)
+        if (service.ActiveBundle && service.ActiveBundle !== null) {
+            priority = 3;
+        }
+        // Priority 2: Service is "Mobile Internet" (most relevant service)
+        else if (service.Name && (
+            service.Name.toLowerCase().includes('mobile internet') ||
+            service.Name.toLowerCase().includes('mobile-internet') ||
+            service.Alias === 'MCRBWG'
+        )) {
+            priority = 2;
+        }
+        // Priority 1: Service has dates (any service with dates)
+        else if ((service.ActivationDate && service.ActivationDate !== null) ||
+                 (service.CycleDate && service.CycleDate !== null)) {
+            priority = 1;
         }
         
-        const serviceWithCycle = apiResponseData.ServiceInformationValue.find(service => service.CycleDate);
-        if (serviceWithCycle && serviceWithCycle.CycleDate) {
-            extracted.validityDate = formatDate(serviceWithCycle.CycleDate);
+        // Update best service if this one has higher priority
+        if (priority > bestServicePriority) {
+            bestService = service;
+            bestServicePriority = priority;
+        }
+    }
+    
+    // Extract dates from the best service found
+    if (bestService) {
+        console.log(`📅 Extracting dates from service: "${bestService.Name || 'Unknown'}" (priority: ${bestServicePriority})`);
+        
+        // Get ActivationDate for subscription date
+        if (bestService.ActivationDate && bestService.ActivationDate !== null) {
+            extracted.subscriptionDate = formatDate(bestService.ActivationDate);
+            console.log(`   ✅ Subscription Date (ActivationDate): ${extracted.subscriptionDate}`);
+        } else {
+            console.log(`   ⚠️ No ActivationDate found in service "${bestService.Name || 'Unknown'}"`);
+        }
+        
+        // Get CycleDate for validity date
+        if (bestService.CycleDate && bestService.CycleDate !== null) {
+            extracted.validityDate = formatDate(bestService.CycleDate);
+            console.log(`   ✅ Validity Date (CycleDate): ${extracted.validityDate}`);
+        } else {
+            console.log(`   ⚠️ No CycleDate found in service "${bestService.Name || 'Unknown'}"`);
+        }
+    } else {
+        console.log('⚠️ No suitable service found with dates in getmyservices response');
+        // Fallback: try to get dates from any service (original logic)
+        for (const service of servicesArray) {
+            // Get ActivationDate for subscription date (skip null values)
+            if (service.ActivationDate && service.ActivationDate !== null && !extracted.subscriptionDate) {
+                extracted.subscriptionDate = formatDate(service.ActivationDate);
+                console.log(`   ✅ Fallback: Subscription Date from "${service.Name || 'Unknown'}": ${extracted.subscriptionDate}`);
+            }
+            // Get CycleDate for validity date (skip null values)
+            if (service.CycleDate && service.CycleDate !== null && !extracted.validityDate) {
+                extracted.validityDate = formatDate(service.CycleDate);
+                console.log(`   ✅ Fallback: Validity Date from "${service.Name || 'Unknown'}": ${extracted.validityDate}`);
+            }
+            // If we found both, we can break early
+            if (extracted.subscriptionDate && extracted.validityDate) {
+                break;
+            }
         }
     }
 

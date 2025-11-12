@@ -114,6 +114,9 @@ app.use((req, res, next) => {
     next();
 });
 
+// Import request queue for handling concurrent requests
+const requestQueue = require('./services/requestQueue');
+
 // Fetch Alfa dashboard data (with incremental scraping support)
 app.post('/api/alfa/fetch', async (req, res) => {
     try {
@@ -129,8 +132,11 @@ app.post('/api/alfa/fetch', async (req, res) => {
         const identifier = adminId || phone;
         console.log(`[${new Date().toISOString()}] Fetching Alfa data for admin: ${identifier}`);
 
+        // Use request queue to prevent concurrent refreshes for the same admin
         const startTime = Date.now();
-        const data = await fetchAlfaData(phone, password, adminId, identifier);
+        const data = await requestQueue.execute(identifier, async () => {
+            return await fetchAlfaData(phone, password, adminId, identifier);
+        });
         const duration = Date.now() - startTime;
 
         // Check if this was an incremental (no-changes) response
@@ -166,6 +172,22 @@ app.post('/api/alfa/fetch', async (req, res) => {
             success: false,
             incremental: false,
             error: error?.message || 'Unknown error occurred'
+        });
+    }
+});
+
+// Get request queue status (for monitoring)
+app.get('/api/queue/status', (req, res) => {
+    try {
+        const status = requestQueue.getStatus();
+        res.json({
+            success: true,
+            ...status
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
         });
     }
 });

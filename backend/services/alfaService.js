@@ -261,15 +261,34 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
         // This allows us to skip navigation entirely if no changes detected
         let shouldSkipNavigation = false;
         
-        // Wait briefly for any APIs that might be captured during session verification
-        // But only if we don't already have both essential APIs
+        // Wait for APIs that might be captured during session verification
+        // CRITICAL: Wait for BOTH APIs with sufficient timeout (getmyservices can be slower)
         const hasConsumption = apiResponses.find(r => r.url && r.url.includes('getconsumption') && r.data);
         const hasServices = apiResponses.find(r => r.url && r.url.includes('getmyservices') && r.data);
         
         if (!hasConsumption || !hasServices) {
-            console.log('⏳ Waiting for API endpoints (500ms timeout)...');
-            await waitForApiEndpoints(apiResponses, ['getconsumption', 'getmyservices'], 500); // Reduced to 500ms
+            console.log('⏳ Waiting for API endpoints (3000ms timeout to ensure getmyservices is captured)...');
+            await waitForApiEndpoints(apiResponses, ['getconsumption', 'getmyservices'], 3000); // Increased to 3000ms
         }
+        
+        // If getmyservices still not captured, try direct fetch as fallback
+        const finalHasServices = apiResponses.find(r => r.url && r.url.includes('getmyservices') && r.data);
+        if (!finalHasServices && !page.isClosed()) {
+            console.log('⚠️ getmyservices not captured via interception, trying direct fetch...');
+            try {
+                const directServices = await fetchApiDirectly(page, 'getmyservices', 3000);
+                if (directServices && directServices.data) {
+                    const exists = apiResponses.find(r => r.url === directServices.url);
+                    if (!exists) {
+                        apiResponses.push(directServices);
+                        console.log('✅ Successfully fetched getmyservices via direct call');
+                    }
+                }
+            } catch (fetchError) {
+                console.log(`⚠️ Direct fetch of getmyservices failed: ${fetchError.message}`);
+            }
+        }
+        
         console.log(`📡 Captured ${apiResponses.length} API response(s) so far`);
         
         console.log('🔍 Checking for incremental update (snapshot comparison)...');
@@ -294,14 +313,32 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
                     if (extracted.balance) quickData.balance = extracted.balance;
                     if (extracted.totalConsumption) quickData.totalConsumption = extracted.totalConsumption;
                     if (extracted.subscribersCount !== undefined) quickData.subscribersCount = extracted.subscribersCount;
+                    // CRITICAL: Include secondarySubscribers array for frontend modal display
+                    if (extracted.secondarySubscribers && Array.isArray(extracted.secondarySubscribers) && extracted.secondarySubscribers.length > 0) {
+                        quickData.secondarySubscribers = extracted.secondarySubscribers;
+                        console.log(`   - Found ${extracted.secondarySubscribers.length} secondary subscribers`);
+                    }
                     console.log(`   - Balance: ${quickData.balance || 'N/A'}, Consumption: ${quickData.totalConsumption || 'N/A'}, Subscribers: ${quickData.subscribersCount || 'N/A'}`);
                 }
                 
                 if (getMyServicesResponse?.data) {
                     const extracted = extractFromGetMyServices(getMyServicesResponse.data);
-                    if (extracted.subscriptionDate) quickData.subscriptionDate = extracted.subscriptionDate;
-                    if (extracted.validityDate) quickData.validityDate = extracted.validityDate;
+                    // CRITICAL: Always include subscription and validity dates in quick snapshot
+                    if (extracted.subscriptionDate) {
+                        quickData.subscriptionDate = extracted.subscriptionDate;
+                        console.log(`   - Subscription Date: ${extracted.subscriptionDate}`);
+                    } else {
+                        console.log(`   - Subscription Date: N/A (not found)`);
+                    }
+                    if (extracted.validityDate) {
+                        quickData.validityDate = extracted.validityDate;
+                        console.log(`   - Validity Date: ${extracted.validityDate}`);
+                    } else {
+                        console.log(`   - Validity Date: N/A (not found)`);
+                    }
                     // Note: adminConsumption requires consumption circles, so we'll get it during full scrape
+                } else {
+                    console.log('   ⚠️ getMyServicesResponse data not available for quick snapshot');
                 }
                 
                 // Get expiration if available
@@ -319,14 +356,158 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
                     const changeCheck = await snapshotManager.checkForChanges(cacheIdentifier, quickSnapshot);
                     
                     if (!changeCheck.hasChanges) {
-                        console.log('⚡ No changes detected - skipping navigation and full scrape');
+                        console.log('⚡ No changes detected - extracting consumption circles for adminConsumption...');
+                        
+                        // Even though no changes detected, we still need to extract consumption circles
+                        // to build adminConsumption (it requires HTML extraction)
+                        // Check if we're already on the dashboard
+                        const currentUrl = page.url();
+                        const isOnDashboard = currentUrl.includes('/account') && !currentUrl.includes('/login');
+                        
+                        if (isOnDashboard) {
+                            try {
+                                // Wait for consumption circles to render
+                                console.log('⏳ Waiting for consumption circles to render...');
+                                try {
+                                    await page.waitForFunction(
+                                        () => {
+                                            const circles = document.querySelectorAll('#consumptions .circle');
+                                            return circles.length > 0;
+                                        },
+                                        { timeout: 8000 }
+                                    );
+                                    console.log('✅ Consumption circles rendered');
+                                    await delay(500);
+                                } catch (e) {
+                                    console.log('⚠️ Timeout waiting for consumption circles, proceeding anyway...');
+                                    await delay(500);
+                                }
+                                
+                                // Extract consumption circles
+                                const consumptions = await extractConsumptionCircles(page);
+                                
+                                // Get getmyservices response to build adminConsumption
+                                let getMyServicesResponse = apiResponses.find(resp => resp.url && resp.url.includes('getmyservices'));
+                                
+                                // If getmyservices wasn't captured, try to fetch it directly
+                                if (!getMyServicesResponse || !getMyServicesResponse.data) {
+                                    // Check if page is still open before attempting fetch
+                                    if (!page.isClosed()) {
+                                        try {
+                                            const directResponse = await fetchApiDirectly(page, 'getmyservices', 3000);
+                                            if (directResponse && directResponse.data && directResponse.status !== 404) {
+                                                getMyServicesResponse = directResponse;
+                                                console.log('✅ Successfully fetched getmyservices directly');
+                                            }
+                                        } catch (fetchError) {
+                                            // Silently handle errors during concurrent operations
+                                            if (!fetchError.message.includes('Target closed') && 
+                                                !fetchError.message.includes('Session closed')) {
+                                                console.log(`⚠️ Could not fetch getmyservices directly: ${fetchError.message}`);
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                if (consumptions && consumptions.length > 0) {
+                                    let adminConsumption = null;
+                                    
+                                    // Try to build from template if getmyservices is available
+                                    if (getMyServicesResponse && getMyServicesResponse.data) {
+                                        const extracted = extractFromGetMyServices(getMyServicesResponse.data);
+                                        if (extracted.adminConsumptionTemplate) {
+                                            adminConsumption = buildAdminConsumption(extracted.adminConsumptionTemplate, consumptions);
+                                        }
+                                    }
+                                    
+                                    // Fallback: Build directly from consumption circles if template not available
+                                    if (!adminConsumption && consumptions[0]) {
+                                        const firstCircle = consumptions[0];
+                                        if (firstCircle.used && firstCircle.total) {
+                                            // Extract numeric value and unit from total (e.g., "77 GB" -> value: "77", unit: "GB")
+                                            const totalMatch = firstCircle.total.match(/^([\d.]+)\s*(GB|MB)$/i);
+                                            if (totalMatch) {
+                                                adminConsumption = `${firstCircle.used} / ${totalMatch[1]} ${totalMatch[2].toUpperCase()}`;
+                                            } else {
+                                                // Fallback: use total as-is
+                                                adminConsumption = `${firstCircle.used} / ${firstCircle.total}`;
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (adminConsumption) {
+                                        quickData.adminConsumption = adminConsumption;
+                                        console.log(`✅ Extracted adminConsumption from HTML circles: ${adminConsumption}`);
+                                    } else {
+                                        console.log('⚠️ Could not build adminConsumption from circles or template');
+                                    }
+                                } else {
+                                    console.log('⚠️ No consumption circles found - cannot build adminConsumption');
+                                }
+                            } catch (circleError) {
+                                console.log('⚠️ Error extracting consumption circles:', circleError.message);
+                            }
+                        } else {
+                            console.log('⚠️ Not on dashboard, cannot extract consumption circles - will use cached adminConsumption');
+                        }
+                        
                         shouldSkipNavigation = true;
+                        
+                        // Build final data with adminConsumption
+                        const lastSnapshot = changeCheck.lastSnapshot;
+                        const finalData = {
+                            balance: quickData.balance || null,
+                            totalConsumption: quickData.totalConsumption || null,
+                            subscribersCount: quickData.subscribersCount || null,
+                            expiration: quickData.expiration || null,
+                            subscriptionDate: quickData.subscriptionDate || null,
+                            validityDate: quickData.validityDate || null,
+                            adminConsumption: quickData.adminConsumption || lastSnapshot?.adminConsumption || null,
+                            // CRITICAL: Include secondarySubscribers for frontend modal display
+                            secondarySubscribers: quickData.secondarySubscribers || lastSnapshot?.secondarySubscribers || null,
+                            // Include consumptions array if available (from HTML circles)
+                            consumptions: consumptions && consumptions.length > 0 ? consumptions : (lastSnapshot?.consumptions || null),
+                            // Include apiResponses for fallback extraction in frontend
+                            apiResponses: apiResponses && apiResponses.length > 0 ? apiResponses : null
+                        };
+                        
+                        // Update Firebase with the data (non-blocking)
+                        process.nextTick(() => {
+                            (async () => {
+                                try {
+                                    await updateDashboardData(adminId, finalData);
+                                } catch (firebaseError) {
+                                    console.warn('⚠️ Firebase save skipped (non-critical):', firebaseError?.message || String(firebaseError));
+                                }
+                            })().catch((err) => {
+                                console.warn('⚠️ Firebase promise rejection (ignored):', err?.message || String(err));
+                            });
+                        });
+                        
+                        // Step 12.5: Refresh session cookies after successful incremental operation (CRITICAL: extends session lifetime)
+                        // Always refresh session after successful operation to extend its lifetime indefinitely
+                        // Do this BEFORE closing the context to ensure we can get the cookies
+                        try {
+                            const { saveSession } = require('./sessionManager');
+                            if (!page.isClosed()) {
+                                const currentCookies = await page.cookies();
+                                if (currentCookies && currentCookies.length > 0) {
+                                    await saveSession(adminId || phone, currentCookies, {});
+                                    console.log(`✅ Session refreshed after successful incremental operation (${currentCookies.length} cookies)`);
+                                }
+                            }
+                        } catch (sessionError) {
+                            // Non-critical - log but don't fail
+                            console.warn('⚠️ Could not refresh session (non-critical):', sessionError?.message || String(sessionError));
+                        }
+                        
+                        // Wait a moment to ensure all async operations complete
+                        await delay(100);
                         
                         // Close the context before returning
                         await browserPool.closeContext(context);
                         
                         // Return early with cached data structure
-                        const lastSnapshot = changeCheck.lastSnapshot;
                         return {
                             success: true,
                             incremental: true,
@@ -334,14 +515,7 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
                             message: 'No changes detected since last refresh',
                             timestamp: Date.now(),
                             lastUpdate: lastSnapshot?.timestamp || null,
-                            data: {
-                                balance: quickData.balance || null,
-                                totalConsumption: quickData.totalConsumption || null,
-                                subscribersCount: quickData.subscribersCount || null,
-                                expiration: quickData.expiration || null,
-                                subscriptionDate: quickData.subscriptionDate || null,
-                                validityDate: quickData.validityDate || null
-                            }
+                            data: finalData
                         };
                     } else {
                         const changedFields = Object.keys(changeCheck.comparison.changes || {});
@@ -431,18 +605,24 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
         let getMyServicesResponse = apiResponses.find(resp => resp.url && resp.url.includes('getmyservices'));
         if (!getMyServicesResponse || !getMyServicesResponse.data) {
             console.log('⚠️ getmyservices not captured, fetching directly...');
-            // Use timeout to prevent long waits
+            // CRITICAL: Use longer timeout (3000ms) to ensure getmyservices is captured reliably
             missingApiPromises.push(
                 Promise.race([
-                    fetchApiDirectly(page, `https://www.alfa.com.lb/en/account/manage-services/getmyservices?_=${Date.now()}`),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000)) // 2s timeout
+                    fetchApiDirectly(page, 'getmyservices', 3000), // Use endpoint name with 3s timeout
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3500)) // 3.5s fallback timeout
                 ]).then(response => {
-                    if (response) {
-                        apiResponses.push(response);
+                    if (response && response.data) {
+                        const exists = apiResponses.find(r => r.url === response.url);
+                        if (!exists) {
+                            apiResponses.push(response);
+                        }
                         return response;
                     }
                     return null;
-                }).catch(() => null)
+                }).catch((err) => {
+                    console.log(`⚠️ Direct fetch of getmyservices failed: ${err.message}`);
+                    return null;
+                })
             );
         }
         
@@ -512,6 +692,14 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
         if (getConsumptionResponse && getConsumptionResponse.data) {
             const extracted = extractFromGetConsumption(getConsumptionResponse.data);
             Object.assign(dashboardData, extracted);
+            // Log secondary subscribers extraction
+            if (extracted.secondarySubscribers && extracted.secondarySubscribers.length > 0) {
+                console.log(`✅ Extracted ${extracted.secondarySubscribers.length} secondary subscribers from getconsumption API`);
+            } else {
+                console.log('⚠️ No secondary subscribers found in getconsumption API extraction');
+            }
+        } else {
+            console.log('⚠️ getConsumptionResponse or data is missing');
         }
 
         // Extract from getmyservices API
@@ -521,8 +709,21 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
                 dashboardData.adminConsumptionTemplate = extracted.adminConsumptionTemplate;
                 dashboardData.adminConsumption = buildAdminConsumption(extracted.adminConsumptionTemplate, consumptions);
             }
-            if (extracted.subscriptionDate) dashboardData.subscriptionDate = extracted.subscriptionDate;
-            if (extracted.validityDate) dashboardData.validityDate = extracted.validityDate;
+            // CRITICAL: Always include subscription and validity dates if extracted
+            if (extracted.subscriptionDate) {
+                dashboardData.subscriptionDate = extracted.subscriptionDate;
+                console.log(`✅ Extracted subscriptionDate: ${extracted.subscriptionDate}`);
+            } else {
+                console.log('⚠️ No subscriptionDate extracted from getmyservices API');
+            }
+            if (extracted.validityDate) {
+                dashboardData.validityDate = extracted.validityDate;
+                console.log(`✅ Extracted validityDate: ${extracted.validityDate}`);
+            } else {
+                console.log('⚠️ No validityDate extracted from getmyservices API');
+            }
+        } else {
+            console.log('⚠️ getMyServicesResponse or data is missing');
         }
 
         // Extract expiration
@@ -573,9 +774,22 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
             console.warn('⚠️ Could not save snapshot (non-critical):', snapshotError.message);
         }
 
-        // Step 12: Refresh session cookies after successful operation (non-blocking)
-        // OPTIMIZATION: Moved to Step 11 parallel saves - this is now handled there
-        // Session refresh is now part of the parallel save operations
+        // Step 12: Refresh session cookies after successful operation (CRITICAL: extends session lifetime)
+        // Always refresh session after successful operation to extend its lifetime indefinitely
+        // Do this BEFORE closing the context to ensure we can get the cookies
+        try {
+            const { saveSession } = require('./sessionManager');
+            if (!page.isClosed()) {
+                const currentCookies = await page.cookies();
+                if (currentCookies && currentCookies.length > 0) {
+                    await saveSession(adminId || phone, currentCookies, {});
+                    console.log(`✅ Session refreshed after successful operation (${currentCookies.length} cookies)`);
+                }
+            }
+        } catch (sessionError) {
+            // Non-critical - log but don't fail
+            console.warn('⚠️ Could not refresh session (non-critical):', sessionError?.message || String(sessionError));
+        }
 
         // Mark as full scrape (not incremental)
         dashboardData.incremental = false;

@@ -1,10 +1,10 @@
 const cacheLayer = require('./cacheLayer');
 
-// Session expiry: 24 hours (for scheduled refresh at 6:00 AM daily)
-// This ensures sessions persist until the next scheduled refresh
+// Session expiry: 30 days (sessions should persist indefinitely unless they fail)
+// This ensures sessions persist for a very long time
 // Can be overridden via SESSION_EXPIRY_HOURS env var
-const SESSION_EXPIRY_HOURS = parseInt(process.env.SESSION_EXPIRY_HOURS) || 24;
-const SESSION_TTL = SESSION_EXPIRY_HOURS * 60 * 60; // Convert to seconds (86400 for 24 hours)
+const SESSION_EXPIRY_HOURS = parseInt(process.env.SESSION_EXPIRY_HOURS) || 720; // 30 days = 720 hours
+const SESSION_TTL = SESSION_EXPIRY_HOURS * 60 * 60; // Convert to seconds (2592000 for 30 days)
 
 /**
  * Generate Redis key for session
@@ -17,18 +17,18 @@ function generateSessionKey(adminId) {
 }
 
 /**
- * Check if cookies are expired or about to expire
+ * Check if cookies are actually expired (not just expiring soon)
+ * We only mark as expired if cookies are actually past their expiry date
+ * Sessions should persist indefinitely unless they actually fail
  * @param {Array} cookies - Array of cookie objects
- * @param {number} daysBeforeExpiry - Number of days before expiry to consider "about to expire" (default: 1)
- * @returns {boolean} True if cookies are expired or about to expire
+ * @returns {boolean} True if cookies are actually expired (not just expiring soon)
  */
-function areCookiesExpiring(cookies, daysBeforeExpiry = 1) {
+function areCookiesExpiring(cookies) {
     if (!cookies || !Array.isArray(cookies) || cookies.length === 0) {
         return true; // No cookies = expired
     }
 
     const now = Date.now();
-    const expiryThreshold = daysBeforeExpiry * 24 * 60 * 60 * 1000; // Convert to milliseconds
 
     // Check each cookie's expiration
     for (const cookie of cookies) {
@@ -48,18 +48,17 @@ function areCookiesExpiring(cookies, daysBeforeExpiry = 1) {
                 continue; // Skip if we can't parse
             }
 
-            // Check if cookie is expired or expiring soon
+            // Only return true if cookie is ACTUALLY expired (past expiry date)
+            // Don't check for "expiring soon" - we want sessions to persist
             const timeUntilExpiry = expiryTime - now;
             if (timeUntilExpiry <= 0) {
                 return true; // Already expired
             }
-            if (timeUntilExpiry <= expiryThreshold) {
-                return true; // Expiring soon
-            }
+            // Don't check for "expiring soon" - let sessions persist until they actually expire
         }
     }
 
-    return false; // Cookies are still valid
+    return false; // Cookies are still valid (not expired)
 }
 
 /**
@@ -113,14 +112,15 @@ async function getSession(adminId) {
             return null;
         }
 
-        // Check if cookies are expiring (within 1 day)
-        const needsRefresh = areCookiesExpiring(sessionData.cookies, 1);
+        // Only mark as needsRefresh if cookies are ACTUALLY expired (not just expiring soon)
+        // Sessions should persist indefinitely unless they actually fail
+        const needsRefresh = areCookiesExpiring(sessionData.cookies);
         
         if (needsRefresh) {
-            console.log(`⚠️ Session for ${adminId} is expiring soon or expired, will refresh on next use`);
+            console.log(`⚠️ Session for ${adminId} has expired cookies, will refresh on next use`);
         }
 
-        console.log(`✅ Retrieved session from Redis for ${adminId} (${sessionData.cookies.length} cookies${needsRefresh ? ', needs refresh' : ''})`);
+        console.log(`✅ Retrieved session from Redis for ${adminId} (${sessionData.cookies.length} cookies${needsRefresh ? ', expired - will refresh' : ', valid'})`);
         return {
             cookies: sessionData.cookies,
             tokens: sessionData.tokens || {},

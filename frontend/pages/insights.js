@@ -187,8 +187,18 @@ class InsightsManager {
                     adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
                 }
                 
-                // Get the "used" value from the first consumption circle (U-Share Main)
-                if (hasAlfaData && alfaData.consumptions && Array.isArray(alfaData.consumptions) && alfaData.consumptions.length > 0) {
+                // Try to get admin consumption from alfaData.adminConsumption first (backend-built string like "17.11 / 15 GB")
+                if (hasAlfaData && alfaData.adminConsumption) {
+                    const adminConsumptionStr = String(alfaData.adminConsumption).trim();
+                    // Parse "17.11 / 15 GB" format to extract the used value
+                    const match = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
+                    if (match) {
+                        adminConsumption = parseFloat(match[1]) || 0;
+                    }
+                }
+                
+                // Fallback: Get the "used" value from the first consumption circle (U-Share Main)
+                if (adminConsumption === 0 && hasAlfaData && alfaData.consumptions && Array.isArray(alfaData.consumptions) && alfaData.consumptions.length > 0) {
                     // Find U-Share Main circle (first circle or one with "U-share Main" in planName)
                     const uShareMain = alfaData.consumptions.find(c => 
                         c.planName && c.planName.toLowerCase().includes('u-share main')
@@ -847,8 +857,21 @@ class InsightsManager {
             return;
         }
         
+        // DEBUG: Log the full subscriber data to see what's available
+        console.log('🔍 Full subscriber data:', subscriber);
+        console.log('🔍 alfaData:', subscriber.alfaData);
+        if (subscriber.alfaData) {
+            console.log('🔍 alfaData keys:', Object.keys(subscriber.alfaData));
+            console.log('🔍 secondarySubscribers:', subscriber.alfaData.secondarySubscribers);
+            console.log('🔍 consumptions:', subscriber.alfaData.consumptions);
+        }
+        
         // Extract view details data
         const viewData = this.extractViewDetailsData(subscriber);
+        
+        // DEBUG: Log extracted view data
+        console.log('🔍 Extracted view data:', viewData);
+        console.log('🔍 Subscribers count:', viewData.subscribers.length);
         
         // Show modal
         this.showViewDetailsModal(viewData);
@@ -885,11 +908,106 @@ class InsightsManager {
             data.totalLimit = parsed.total || data.totalLimit;
         }
         
-        // Get subscriber data from consumption circles (for displaying individual subscribers)
-        if (subscriber.alfaData && subscriber.alfaData.consumptions && Array.isArray(subscriber.alfaData.consumptions)) {
+        // PRIORITY 1: Get subscriber data from secondarySubscribers array (from getconsumption API - most reliable)
+        if (subscriber.alfaData && subscriber.alfaData.secondarySubscribers && Array.isArray(subscriber.alfaData.secondarySubscribers) && subscriber.alfaData.secondarySubscribers.length > 0) {
+            console.log('📊 Using secondarySubscribers from API:', subscriber.alfaData.secondarySubscribers.length, 'subscribers');
+            subscriber.alfaData.secondarySubscribers.forEach(secondary => {
+                if (secondary && secondary.phoneNumber) {
+                    // Parse consumption string (format: "1.18 / 30 GB" or "1.18/30 GB")
+                    const consumptionStr = secondary.consumption || '';
+                    let used = 0;
+                    let total = 0;
+                    
+                    // Try to parse from consumption string first
+                    if (consumptionStr) {
+                        const consumptionMatch = consumptionStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                        if (consumptionMatch) {
+                            used = parseFloat(consumptionMatch[1]) || 0;
+                            total = parseFloat(consumptionMatch[2]) || 0;
+                        }
+                    }
+                    
+                    // Fallback: use raw values if consumption string parsing failed
+                    if ((used === 0 && total === 0) && secondary.rawConsumption && secondary.quota) {
+                        used = parseFloat(secondary.rawConsumption) || 0;
+                        total = parseFloat(secondary.quota) || 0;
+                        
+                        // Convert MB to GB if needed
+                        if (secondary.rawConsumptionUnit === 'MB' && secondary.quotaUnit === 'GB') {
+                            used = used / 1024;
+                        }
+                    }
+                    
+                    if (used > 0 || total > 0) {
+                        data.subscribers.push({
+                            phoneNumber: secondary.phoneNumber,
+                            consumption: used,
+                            limit: total
+                        });
+                        console.log(`✅ Added subscriber from API: ${secondary.phoneNumber} - ${used} / ${total} GB`);
+                    }
+                }
+            });
+        }
+        
+        // PRIORITY 1.5: Try to extract from apiResponses if secondarySubscribers not available
+        if (data.subscribers.length === 0 && subscriber.alfaData && subscriber.alfaData.apiResponses && Array.isArray(subscriber.alfaData.apiResponses)) {
+            console.log('📊 Trying to extract from apiResponses array...');
+            const getConsumptionResponse = subscriber.alfaData.apiResponses.find(resp => resp.url && resp.url.includes('getconsumption'));
+            if (getConsumptionResponse && getConsumptionResponse.data) {
+                console.log('📊 Found getconsumption in apiResponses, extracting...');
+                try {
+                    // Extract from ServiceInformationValue structure (same as backend)
+                    const apiData = getConsumptionResponse.data;
+                    if (apiData.ServiceInformationValue && Array.isArray(apiData.ServiceInformationValue) && apiData.ServiceInformationValue.length > 0) {
+                        const firstService = apiData.ServiceInformationValue[0];
+                        if (firstService.ServiceDetailsInformationValue && Array.isArray(firstService.ServiceDetailsInformationValue) && firstService.ServiceDetailsInformationValue.length > 0) {
+                            const firstServiceDetails = firstService.ServiceDetailsInformationValue[0];
+                            if (firstServiceDetails.SecondaryValue && Array.isArray(firstServiceDetails.SecondaryValue)) {
+                                firstServiceDetails.SecondaryValue.forEach((secondary) => {
+                                    if (secondary.BundleNameValue && secondary.BundleNameValue.includes('U-share secondary')) {
+                                        const secondaryNumber = secondary.SecondaryNumberValue || '';
+                                        let consumptionValue = secondary.ConsumptionValue || '';
+                                        let consumptionUnit = secondary.ConsumptionUnitValue || '';
+                                        let quotaValue = secondary.QuotaValue || '';
+                                        let quotaUnit = secondary.QuotaUnitValue || '';
+                                        
+                                        if (secondaryNumber) {
+                                            // Convert MB to GB if needed
+                                            let displayConsumption = consumptionValue;
+                                            if (consumptionUnit === 'MB' && quotaUnit === 'GB') {
+                                                displayConsumption = (parseFloat(consumptionValue) / 1024).toFixed(2);
+                                            }
+                                            
+                                            const used = parseFloat(displayConsumption) || 0;
+                                            const total = parseFloat(quotaValue) || 0;
+                                            
+                                            if (used > 0 || total > 0) {
+                                                data.subscribers.push({
+                                                    phoneNumber: secondaryNumber,
+                                                    consumption: used,
+                                                    limit: total
+                                                });
+                                                console.log(`✅ Added subscriber from apiResponses: ${secondaryNumber} - ${used} / ${total} GB`);
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                } catch (extractError) {
+                    console.warn('⚠️ Error extracting from apiResponses:', extractError.message);
+                }
+            }
+        }
+        
+        // PRIORITY 2: Fallback to consumption circles from HTML (if secondarySubscribers not available)
+        if (data.subscribers.length === 0 && subscriber.alfaData && subscriber.alfaData.consumptions && Array.isArray(subscriber.alfaData.consumptions)) {
+            console.log('📊 Using consumption circles from HTML:', subscriber.alfaData.consumptions.length, 'circles');
             subscriber.alfaData.consumptions.forEach(circle => {
                 // Check if this is a U-share secondary circle
-                if (circle.planName && circle.planName.toLowerCase().includes('u-share secondary')) {
+                if (circle && circle.planName && circle.planName.toLowerCase().includes('u-share secondary')) {
                     // Extract phone number from circle
                     let phoneNumber = null;
                     if (circle.phoneNumber) {
@@ -947,10 +1065,17 @@ class InsightsManager {
                             consumption: used,
                             limit: total
                         });
-                        // Note: We don't add to totalConsumption here anymore - it comes from API
+                        console.log(`✅ Added subscriber from HTML: ${phoneNumber} - ${used} / ${total} GB`);
                     }
                 }
             });
+        }
+        
+        // Log final result
+        if (data.subscribers.length === 0) {
+            console.warn('⚠️ No subscribers found in alfaData. Available keys:', subscriber.alfaData ? Object.keys(subscriber.alfaData) : 'no alfaData');
+        } else {
+            console.log(`✅ Total subscribers found: ${data.subscribers.length}`);
         }
         
         // Fallback: If API doesn't have totalConsumption, calculate from admin + subscribers
