@@ -271,12 +271,13 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
             await waitForApiEndpoints(apiResponses, ['getconsumption', 'getmyservices'], 3000); // Increased to 3000ms
         }
         
-        // If getmyservices still not captured, try direct fetch as fallback
+        // If getmyservices still not captured, try direct fetch as fallback (with shorter timeout)
         const finalHasServices = apiResponses.find(r => r.url && r.url.includes('getmyservices') && r.data);
         if (!finalHasServices && !page.isClosed()) {
             console.log('⚠️ getmyservices not captured via interception, trying direct fetch...');
             try {
-                const directServices = await fetchApiDirectly(page, 'getmyservices', 3000);
+                // Use shorter timeout (2s) since we're already on the page
+                const directServices = await fetchApiDirectly(page, 'getmyservices', 2000);
                 if (directServices && directServices.data) {
                     const exists = apiResponses.find(r => r.url === directServices.url);
                     if (!exists) {
@@ -366,21 +367,33 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
                         
                         if (isOnDashboard) {
                             try {
-                                // Wait for consumption circles to render
+                                // Wait for consumption circles to render (with shorter timeout and early check)
                                 console.log('⏳ Waiting for consumption circles to render...');
                                 try {
-                                    await page.waitForFunction(
-                                        () => {
-                                            const circles = document.querySelectorAll('#consumptions .circle');
-                                            return circles.length > 0;
-                                        },
-                                        { timeout: 8000 }
-                                    );
-                                    console.log('✅ Consumption circles rendered');
-                                    await delay(500);
+                                    // First, check if circles are already rendered (common after first refresh)
+                                    const circlesAlreadyRendered = await page.evaluate(() => {
+                                        const circles = document.querySelectorAll('#consumptions .circle');
+                                        return circles.length > 0;
+                                    });
+                                    
+                                    if (circlesAlreadyRendered) {
+                                        console.log('✅ Consumption circles already rendered (skipping wait)');
+                                        await delay(200); // Brief delay for stability
+                                    } else {
+                                        // Wait with shorter timeout (5s instead of 8s)
+                                        await page.waitForFunction(
+                                            () => {
+                                                const circles = document.querySelectorAll('#consumptions .circle');
+                                                return circles.length > 0;
+                                            },
+                                            { timeout: 5000 }
+                                        );
+                                        console.log('✅ Consumption circles rendered');
+                                        await delay(200); // Reduced from 500ms
+                                    }
                                 } catch (e) {
                                     console.log('⚠️ Timeout waiting for consumption circles, proceeding anyway...');
-                                    await delay(500);
+                                    await delay(200); // Reduced from 500ms
                                 }
                                 
                                 // Extract consumption circles
@@ -537,40 +550,50 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
 
         // Step 5: Navigate to dashboard (only if needed - skip if snapshot check found no changes)
         if (!shouldSkipNavigation) {
-            // Check for cached HTML structure
-            const cachedHtml = await cacheLayer.getHtmlStructure(cacheIdentifier);
-            let pageHtml = null;
+            // OPTIMIZATION: Check if we're already on dashboard before navigating
+            const currentUrl = page.url();
+            const alreadyOnDashboard = currentUrl.includes('/account') && !currentUrl.includes('/login');
             
-            if (cachedHtml) {
-                console.log('📄 Found cached HTML structure');
-            }
-            
-            // Enable resource blocking for dashboard navigation
-            blockState.enabled = true;
-            console.log('🔄 Navigating to dashboard...');
-            await page.goto(AEFA_DASHBOARD_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 15000 // Reduced from 30s to 15s for faster performance
-            });
+            if (alreadyOnDashboard) {
+                console.log('✅ Already on dashboard, skipping navigation');
+                // Just refresh the page content without full navigation
+                await delay(300);
+            } else {
+                // Check for cached HTML structure
+                const cachedHtml = await cacheLayer.getHtmlStructure(cacheIdentifier);
+                let pageHtml = null;
+                
+                if (cachedHtml) {
+                    console.log('📄 Found cached HTML structure');
+                }
+                
+                // Enable resource blocking for dashboard navigation
+                blockState.enabled = true;
+                console.log('🔄 Navigating to dashboard...');
+                await page.goto(AEFA_DASHBOARD_URL, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 10000 // Reduced to 10s for faster performance
+                });
 
-            // Get fresh HTML and cache it for next time
-            try {
-                if (!page.isClosed()) {
-                    pageHtml = await page.content();
-                    if (pageHtml) {
-                        cacheLayer.setHtmlStructure(cacheIdentifier, pageHtml).catch(() => {});
+                // Get fresh HTML and cache it for next time
+                try {
+                    if (!page.isClosed()) {
+                        pageHtml = await page.content();
+                        if (pageHtml) {
+                            cacheLayer.setHtmlStructure(cacheIdentifier, pageHtml).catch(() => {});
+                        }
+                    }
+                } catch (e) {
+                    if (!e.message.includes('Execution context was destroyed') && 
+                        !e.message.includes('Target closed') &&
+                        !e.message.includes('Session closed')) {
+                        console.warn('⚠️ Could not cache HTML structure:', e.message);
                     }
                 }
-            } catch (e) {
-                if (!e.message.includes('Execution context was destroyed') && 
-                    !e.message.includes('Target closed') &&
-                    !e.message.includes('Session closed')) {
-                    console.warn('⚠️ Could not cache HTML structure:', e.message);
-                }
-            }
 
-            // Minimal wait for page structure (optimized)
-            await delay(300); // Reduced from 500ms to 300ms
+                // Minimal wait for page structure (optimized)
+                await delay(300); // Reduced from 500ms to 300ms
+            }
         }
 
         // Step 6: Check for cached API structures, but always fetch fresh
@@ -655,21 +678,30 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
         // The circles contain important data like plan names and phone numbers that APIs don't provide
         console.log('⏳ Waiting for consumption circles to render...');
         try {
-            // Wait for at least one circle to appear
-            await page.waitForFunction(
-                () => {
-                    const circles = document.querySelectorAll('#consumptions .circle');
-                    return circles.length > 0;
-                },
-                { timeout: 8000 } // Reduced from 15s to 8s for faster performance
-            );
-            console.log('✅ Consumption circles rendered');
-            // Reduced delay - circles should be ready after waitForFunction
-            await delay(500); // Reduced from 2s to 500ms
+            // First, check if circles are already rendered (common after first refresh)
+            const circlesAlreadyRendered = await page.evaluate(() => {
+                const circles = document.querySelectorAll('#consumptions .circle');
+                return circles.length > 0;
+            });
+            
+            if (circlesAlreadyRendered) {
+                console.log('✅ Consumption circles already rendered (skipping wait)');
+                await delay(200); // Brief delay for stability
+            } else {
+                // Wait with shorter timeout (5s instead of 8s)
+                await page.waitForFunction(
+                    () => {
+                        const circles = document.querySelectorAll('#consumptions .circle');
+                        return circles.length > 0;
+                    },
+                    { timeout: 5000 }
+                );
+                console.log('✅ Consumption circles rendered');
+                await delay(200); // Reduced from 500ms
+            }
         } catch (e) {
             console.log('⚠️ Timeout waiting for consumption circles, proceeding anyway...');
-            // Minimal delay if timeout
-            await delay(500); // Reduced from 2s to 500ms
+            await delay(200); // Reduced from 500ms
         }
 
         // Step 10: Extract data (always fresh from current scrape)

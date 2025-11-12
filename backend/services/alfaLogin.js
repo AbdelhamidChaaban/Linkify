@@ -43,47 +43,57 @@ async function loginToAlfa(page, phone, password, adminId) {
             // If session is fresh, skip verification to save time
             if (sessionNeedsRefresh) {
                 console.log('⚠️ Session is expiring soon. Verifying and refreshing...');
+                
+                // OPTIMIZATION: Check current URL first - if already on dashboard, skip navigation
                 try {
-                    // Use networkidle0 with shorter timeout for faster verification
-                    await page.goto(AEFA_DASHBOARD_URL, {
-                        waitUntil: 'networkidle0',
-                        timeout: 15000 // Reduced from 30s to 15s
-                    });
-
-                    // No delay needed - networkidle0 already waits for network
                     const currentUrl = page.url();
-                    if (!currentUrl.includes('/login')) {
-                        console.log('✅ Session verified, refreshing cookies...');
+                    if (currentUrl.includes('/account') && !currentUrl.includes('/login')) {
+                        // Already on dashboard - just refresh cookies without navigation
+                        console.log('✅ Already on dashboard, refreshing cookies without navigation...');
                         const currentCookies = await page.cookies();
                         await saveSession(adminId || phone, currentCookies, {});
                         console.log('✅ Session refreshed successfully!');
                         needsLogin = false;
                     } else {
-                        console.log('⚠️ Session expired. Will login again.');
-                        needsLogin = true;
+                        // Need to navigate - use optimized settings
+                        try {
+                            await page.goto(AEFA_DASHBOARD_URL, {
+                                waitUntil: 'domcontentloaded',
+                                timeout: 8000 // Faster than networkidle0 but still reliable
+                            });
+                            
+                            // Brief delay to allow redirects
+                            await delay(500);
+                            
+                            const finalUrl = page.url();
+                            if (!finalUrl.includes('/login')) {
+                                console.log('✅ Session verified, refreshing cookies...');
+                                const currentCookies = await page.cookies();
+                                await saveSession(adminId || phone, currentCookies, {});
+                                console.log('✅ Session refreshed successfully!');
+                                needsLogin = false;
+                            } else {
+                                console.log('⚠️ Session expired. Will login again.');
+                                needsLogin = true;
+                            }
+                        } catch (navError) {
+                            // If navigation fails, check URL - might already be on dashboard
+                            const checkUrl = page.url();
+                            if (checkUrl.includes('/account') && !checkUrl.includes('/login')) {
+                                console.log('✅ Navigation timeout but already on dashboard, refreshing cookies...');
+                                const currentCookies = await page.cookies();
+                                await saveSession(adminId || phone, currentCookies, {});
+                                console.log('✅ Session refreshed successfully!');
+                                needsLogin = false;
+                            } else {
+                                console.log('⚠️ Navigation failed and not on dashboard, will proceed with login:', navError.message);
+                                needsLogin = true;
+                            }
+                        }
                     }
                 } catch (error) {
-                    // If timeout, try with domcontentloaded (faster fallback)
-                    try {
-                        await page.goto(AEFA_DASHBOARD_URL, {
-                            waitUntil: 'domcontentloaded',
-                            timeout: 10000
-                        });
-                        const currentUrl = page.url();
-                        if (!currentUrl.includes('/login')) {
-                            console.log('✅ Session verified (fast check), refreshing cookies...');
-                            const currentCookies = await page.cookies();
-                            await saveSession(adminId || phone, currentCookies, {});
-                            console.log('✅ Session refreshed successfully!');
-                            needsLogin = false;
-                        } else {
-                            console.log('⚠️ Session expired. Will login again.');
-                            needsLogin = true;
-                        }
-                    } catch (fallbackError) {
-                        console.log('⚠️ Error verifying session, will proceed with login:', fallbackError.message);
-                        needsLogin = true;
-                    }
+                    console.log('⚠️ Error during session verification, will proceed with login:', error.message);
+                    needsLogin = true;
                 }
             } else {
                 // Session is fresh - skip verification to save time
