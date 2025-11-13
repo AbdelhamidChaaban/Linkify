@@ -7,6 +7,7 @@ function extractFromGetConsumption(apiResponseData) {
     const extracted = {
         balance: null,
         totalConsumption: null,
+        adminConsumption: null,
         secondarySubscribers: [],
         subscribersCount: 0,
         primaryData: apiResponseData // Save full response for later use
@@ -50,15 +51,64 @@ function extractFromGetConsumption(apiResponseData) {
             
             const firstServiceDetails = firstService.ServiceDetailsInformationValue[0];
             
-            // Extract total consumption from SecondaryValue[0]
+            // Extract admin consumption from first service details
+            // Admin consumption is ConsumptionValue (in MB) and PackageValue (in GB)
+            // Format: "consumption / limit GB" (consumption converted from MB to GB)
+            const adminConsumptionValue = firstServiceDetails.ConsumptionValue || '';
+            const adminConsumptionUnit = firstServiceDetails.ConsumptionUnitValue || '';
+            const adminPackageValue = firstServiceDetails.PackageValue || '';
+            const adminPackageUnit = firstServiceDetails.PackageUnitValue || '';
+            
+            if (adminConsumptionValue && adminPackageValue) {
+                // Convert MB to GB if needed
+                let displayConsumption = parseFloat(adminConsumptionValue);
+                if (adminConsumptionUnit === 'MB' && adminPackageUnit === 'GB') {
+                    displayConsumption = displayConsumption / 1024;
+                }
+                
+                // Format: "X / Y GB" (same format as total consumption)
+                extracted.adminConsumption = `${displayConsumption.toFixed(2)} / ${adminPackageValue} ${adminPackageUnit}`;
+                console.log(`✅ Extracted admin consumption: ${extracted.adminConsumption} (from ConsumptionValue: ${adminConsumptionValue} ${adminConsumptionUnit})`);
+            }
+            
+            // Extract total consumption
+            // Format: "consumption / quota" (numbers only, no units)
+            // QuotaValue is the number after "/"
             if (firstServiceDetails.SecondaryValue && 
                 Array.isArray(firstServiceDetails.SecondaryValue) && 
                 firstServiceDetails.SecondaryValue.length > 0) {
                 
-                const firstSecondary = firstServiceDetails.SecondaryValue[0];
-                        if (firstSecondary.ConsumptionValue && firstServiceDetails.PackageValue) {
-                            extracted.totalConsumption = `${firstSecondary.ConsumptionValue} / ${firstServiceDetails.PackageValue} ${firstServiceDetails.PackageUnitValue || 'GB'}`;
+                // Find the "U-Share Total Bundle" item to get QuotaValue (the number after "/")
+                const totalBundle = firstServiceDetails.SecondaryValue.find(secondary => {
+                    const bundleName = (secondary.BundleNameValue || '').toLowerCase();
+                    return bundleName.includes('u-share total') || 
+                           bundleName.includes('total bundle') ||
+                           bundleName === 'u-share total bundle';
+                }) || firstServiceDetails.SecondaryValue[0]; // Fallback to first item if not found
+                
+                if (totalBundle) {
+                    // QuotaValue is the number after "/" in total consumption
+                    const quotaValue = totalBundle.QuotaValue || '';
+                    
+                    // Consumption value can come from either:
+                    // 1. Total Bundle's ConsumptionValue (preferred)
+                    // 2. Parent level ConsumptionValue (fallback)
+                    let consumptionValue = totalBundle.ConsumptionValue || firstServiceDetails.ConsumptionValue || '';
+                    let consumptionUnit = totalBundle.ConsumptionUnitValue || firstServiceDetails.ConsumptionUnitValue || '';
+                    const quotaUnit = totalBundle.QuotaUnitValue || '';
+                    
+                    if (consumptionValue && quotaValue) {
+                        // Convert MB to GB if needed for consistent display (quota is usually in GB)
+                        let displayConsumption = parseFloat(consumptionValue);
+                        if (consumptionUnit === 'MB' && quotaUnit === 'GB') {
+                            displayConsumption = displayConsumption / 1024;
                         }
+                        
+                        // Format: "X / Y" (numbers only, no units - frontend will add "GB")
+                        extracted.totalConsumption = `${displayConsumption.toFixed(2)} / ${quotaValue}`;
+                        console.log(`✅ Extracted total consumption: ${extracted.totalConsumption} (QuotaValue: ${quotaValue} is after "/")`);
+                    }
+                }
             }
             
             // Extract secondary subscribers

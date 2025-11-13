@@ -181,8 +181,49 @@ class CacheLayer {
         return `user:${sanitized}:${type}`;
     }
 
-    // Removed get() and set() methods - we no longer cache final responses
-    // Only cache intermediate structures (HTML/API) during scraping
+    /**
+     * Generic get method for Redis keys
+     * @param {string} key - Redis key
+     * @returns {Promise<string|Object|null>} Value or null
+     */
+    async get(key) {
+        if (!this.enabled || !this.redis) {
+            return null;
+        }
+
+        try {
+            const value = await this.redis.get(key);
+            return value;
+        } catch (error) {
+            console.warn(`⚠️ Redis get error for ${key}:`, error.message);
+            return null;
+        }
+    }
+
+    /**
+     * Generic set method for Redis keys
+     * @param {string} key - Redis key
+     * @param {string} value - Value to set
+     * @param {number} ttl - TTL in seconds
+     * @returns {Promise<boolean>} Success status
+     */
+    async set(key, value, ttl) {
+        if (!this.enabled || !this.redis) {
+            return false;
+        }
+
+        try {
+            if (ttl && ttl > 0) {
+                await this.redis.setex(key, ttl, value);
+            } else {
+                await this.redis.set(key, value);
+            }
+            return true;
+        } catch (error) {
+            console.warn(`⚠️ Redis set error for ${key}:`, error.message);
+            return false;
+        }
+    }
 
     /**
      * Get last refresh timestamp

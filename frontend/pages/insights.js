@@ -140,6 +140,45 @@ class InsightsManager {
                     createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
                 }
                 
+                // Use refresh timestamp for lastUpdate (when user made the refresh)
+                // If lastRefreshTimestamp exists, use it; otherwise fall back to updatedAt
+                let lastUpdate = updatedAt;
+                
+                // Check if we have a manually updated lastUpdate that's more recent (from refresh)
+                const existingSubscriber = this.subscribers.find(s => s.id === doc.id);
+                if (existingSubscriber && existingSubscriber.lastUpdate instanceof Date) {
+                    // If we have a manually set lastUpdate that's very recent (within last 5 seconds),
+                    // keep it instead of overwriting with Firebase data (which might be stale)
+                    const now = Date.now();
+                    const existingTime = existingSubscriber.lastUpdate.getTime();
+                    if (now - existingTime < 5000) { // Within last 5 seconds
+                        lastUpdate = existingSubscriber.lastUpdate;
+                        console.log('🔄 Keeping recent manual lastUpdate for:', doc.id, lastUpdate.toLocaleString());
+                    }
+                }
+                
+                if (data.lastRefreshTimestamp !== undefined && data.lastRefreshTimestamp !== null) {
+                    // lastRefreshTimestamp is a number (milliseconds since epoch)
+                    // Handle both number and string formats from Firebase
+                    let timestamp = typeof data.lastRefreshTimestamp === 'number' 
+                        ? data.lastRefreshTimestamp 
+                        : parseFloat(data.lastRefreshTimestamp);
+                    
+                    // Check if timestamp is in seconds (less than year 2000 in milliseconds)
+                    if (timestamp < 946684800000 && timestamp > 0) {
+                        timestamp = timestamp * 1000; // Convert seconds to milliseconds
+                    }
+                    
+                    if (!isNaN(timestamp) && timestamp > 0) {
+                        const firebaseLastUpdate = new Date(timestamp);
+                        
+                        // Only use Firebase timestamp if it's newer than what we have
+                        if (!lastUpdate || firebaseLastUpdate.getTime() > lastUpdate.getTime()) {
+                            lastUpdate = firebaseLastUpdate;
+                        }
+                    }
+                }
+                
                 // Get Alfa dashboard data if available
                 const alfaData = data.alfaData || {};
                 const hasAlfaData = alfaData && Object.keys(alfaData).length > 0 && !alfaData.error;
@@ -261,7 +300,7 @@ class InsightsManager {
                     adminLimit: adminLimit || 1, // Avoid division by zero
                     balance: balance,
                     expiration: expiration,
-                    lastUpdate: updatedAt,
+                    lastUpdate: lastUpdate,
                     createdAt: createdAt,
                     alfaData: alfaData, // Store full alfaData for View Details modal
                     quota: data.quota // Store quota for admin limit
@@ -1285,6 +1324,10 @@ class InsightsManager {
     }
     
     async refreshSubscriber(id) {
+        // Capture the refresh timestamp when user initiates the refresh (client-side time)
+        const refreshInitiatedAt = Date.now();
+        console.log('🔄 Refresh initiated at:', new Date(refreshInitiatedAt).toLocaleString(), 'timestamp:', refreshInitiatedAt);
+        
         try {
             console.log('Refreshing subscriber:', id);
             
@@ -1476,16 +1519,76 @@ class InsightsManager {
             
             // Fetch Alfa data from backend
             console.log('📡 Calling backend API with phone:', phone, 'adminId:', id);
-            const alfaData = await window.AlfaAPIService.fetchDashboardData(phone, password, id);
+            const response = await window.AlfaAPIService.fetchDashboardData(phone, password, id);
+            const alfaData = response.data;
+            
+            // Use the client-side timestamp when refresh was initiated (when user clicked refresh)
+            // This ensures the time matches exactly when the user made the refresh
+            const refreshTimestamp = refreshInitiatedAt;
+            
+            // Debug: Log the timestamp we're about to store
+            console.log('🕐 Storing refresh timestamp:', {
+                clientTime: refreshInitiatedAt,
+                serverTime: response.timestamp,
+                currentTime: Date.now(),
+                date: new Date(refreshTimestamp).toISOString(),
+                local: new Date(refreshTimestamp).toLocaleString()
+            });
             
             // Update admin document with new Alfa data
             // Use set with merge to handle offline mode better
             try {
+                console.log('💾 Saving to Firebase:', {
+                    adminId: id,
+                    lastRefreshTimestamp: refreshTimestamp,
+                    timestampDate: new Date(refreshTimestamp).toLocaleString()
+                });
+                
                 await db.collection('admins').doc(id).set({
                     alfaData: alfaData,
                     alfaDataFetchedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    lastRefreshTimestamp: refreshTimestamp // Store the client-side refresh timestamp (milliseconds)
                 }, { merge: true });
+                
+                console.log('✅ Successfully saved lastRefreshTimestamp to Firebase');
+                
+                // Immediately update the subscriber in our local data - don't wait for Firebase
+                const subscriberIndex = this.subscribers.findIndex(s => s.id === id);
+                if (subscriberIndex !== -1) {
+                    // Create new Date object from the refresh timestamp
+                    const newLastUpdate = new Date(refreshTimestamp);
+                    
+                    // Store the old value for comparison
+                    const oldLastUpdate = this.subscribers[subscriberIndex].lastUpdate;
+                    
+                    // Update both subscribers arrays
+                    this.subscribers[subscriberIndex].lastUpdate = newLastUpdate;
+                    
+                    const filteredIndex = this.filteredSubscribers.findIndex(s => s.id === id);
+                    if (filteredIndex !== -1) {
+                        this.filteredSubscribers[filteredIndex].lastUpdate = newLastUpdate;
+                    }
+                    
+                    console.log('🔄 UPDATING lastUpdate:', {
+                        subscriberId: id,
+                        refreshTimestamp: refreshTimestamp,
+                        newDate: newLastUpdate.toISOString(),
+                        newLocal: newLastUpdate.toLocaleString(),
+                        oldLocal: oldLastUpdate instanceof Date ? oldLastUpdate.toLocaleString() : 'N/A'
+                    });
+                    
+                    // Re-render immediately
+                    this.renderTable();
+                    
+                    // Verify it was updated
+                    const verifyUpdate = this.subscribers.find(s => s.id === id);
+                    console.log('✅ VERIFIED update:', {
+                        subscriberId: id,
+                        lastUpdate: verifyUpdate?.lastUpdate instanceof Date ? verifyUpdate.lastUpdate.toLocaleString() : verifyUpdate?.lastUpdate,
+                        formatted: this.formatDateTime(verifyUpdate?.lastUpdate)
+                    });
+                }
             } catch (updateError) {
                 // If update fails, log but don't fail the whole operation
                 console.warn('Failed to update Firestore (may be offline):', updateError);
@@ -1599,21 +1702,51 @@ class InsightsManager {
     
     formatDateTime(date) {
         if (!date) return { date: 'N/A', time: '' };
-        const d = new Date(date);
+        
+        // Ensure we have a valid Date object
+        let d;
+        if (date instanceof Date) {
+            d = date;
+        } else if (typeof date === 'number') {
+            // If it's a number, treat as milliseconds since epoch
+            d = new Date(date);
+        } else if (typeof date === 'string') {
+            // If it's a string, try to parse it
+            d = new Date(date);
+        } else {
+            d = new Date(date);
+        }
+        
+        // Validate the date
+        if (isNaN(d.getTime())) {
+            console.warn('Invalid date in formatDateTime:', date);
+            return { date: 'N/A', time: '' };
+        }
+        
+        // Use local timezone methods (getHours, getMinutes, etc. return local time)
+        // These methods automatically use the browser's local timezone
         const day = String(d.getDate()).padStart(2, '0');
         const month = String(d.getMonth() + 1).padStart(2, '0');
         const year = d.getFullYear();
-        let hours = d.getHours();
-        const minutes = String(d.getMinutes()).padStart(2, '0');
-        const seconds = String(d.getSeconds()).padStart(2, '0');
+        
+        // Get local time components (these are already in local timezone)
+        let hours = d.getHours(); // Returns local hours (0-23)
+        const minutes = d.getMinutes(); // Returns local minutes (0-59)
+        const seconds = d.getSeconds(); // Returns local seconds (0-59)
+        
+        // Format with padding
+        const minutesStr = String(minutes).padStart(2, '0');
+        const secondsStr = String(seconds).padStart(2, '0');
+        
+        // Convert to 12-hour format
         const ampm = hours >= 12 ? 'PM' : 'AM';
         hours = hours % 12;
-        hours = hours ? hours : 12;
+        hours = hours ? hours : 12; // Convert 0 to 12 for 12-hour format
         const hoursStr = String(hours).padStart(2, '0');
         
         return {
             date: `${day}/${month}/${year}`,
-            time: `${hoursStr}:${minutes}:${seconds} ${ampm}`
+            time: `${hoursStr}:${minutesStr}:${secondsStr} ${ampm}`
         };
     }
     

@@ -1,34 +1,14 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="home-page">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Linkify - Home</title>
     <link rel="icon" type="image/png" href="/assets/Logo.png">
     <link rel="stylesheet" href="/shared/layout.css">
-    <style>
-        .welcome-section {
-            text-align: center;
-            padding: 4rem 2rem;
-            background: rgba(15, 15, 20, 0.6);
-            border-radius: 16px;
-            border: 1px solid rgba(58, 10, 78, 0.2);
-        }
-        .welcome-section h1 {
-            font-size: 2.5rem;
-            margin-bottom: 1rem;
-            background: linear-gradient(135deg, #3a0a4e, #8b5cf6);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-        .welcome-section p {
-            color: #94a3b8;
-            font-size: 1.125rem;
-        }
-    </style>
+    <link rel="stylesheet" href="/pages/home.css">
 </head>
-<body>
+<body class="home-page">
     <!-- Navigation -->
     <nav class="navbar">
         <div class="nav-container">
@@ -77,9 +57,76 @@
 
     <!-- Main Content -->
     <main class="main-content">
-        <div class="welcome-section">
-            <h1>Welcome to Linkify</h1>
-            <p>Home page content will be added here</p>
+        <div class="home-container">
+            <div class="welcome-section">
+                <h1>Welcome to Linkify</h1>
+                <p>Select a card to get your needed informations</p>
+            </div>
+            
+            <div class="cards-container">
+            <div class="card" data-card-id="1">
+                <div class="card-content">
+                    <h2>Available Services</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+            
+            <div class="card" data-card-id="2">
+                <div class="card-content">
+                    <h2>Expired Numbers</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+            
+            <div class="card" data-card-id="3">
+                <div class="card-content">
+                    <h2>Services to Expire Today</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+            
+            <div class="card" data-card-id="4">
+                <div class="card-content">
+                    <h2>Services Expired Yesterday</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+            
+            <div class="card" data-card-id="5">
+                <div class="card-content">
+                    <h2>Not Synced Numbers</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+            
+            <div class="card" data-card-id="6">
+                <div class="card-content">
+                    <h2>Finished Services</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+            
+            <div class="card" data-card-id="7">
+                <div class="card-content">
+                    <h2>High Admin Consumption</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+            
+            <div class="card" data-card-id="8">
+                <div class="card-content">
+                    <h2>Requested Services</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+            
+            <div class="card" data-card-id="9">
+                <div class="card-content">
+                    <h2>Inactive Numbers</h2>
+                    <button class="card-button">Open</button>
+                </div>
+            </div>
+        </div>
         </div>
     </main>
     
@@ -93,6 +140,9 @@
     
     <!-- Navigation Script -->
     <script src="/shared/nav.js"></script>
+    
+    <!-- Home Page Script -->
+    <script src="/pages/home.js"></script>
 </body>
 </html>
 

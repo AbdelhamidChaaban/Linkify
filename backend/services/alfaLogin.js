@@ -211,6 +211,25 @@ async function loginToAlfa(page, phone, password, adminId) {
             console.log('⏳ Waiting for page to stabilize...');
             await delay(3000);
             
+            // CRITICAL: Check if we're actually on the dashboard (session might still be valid)
+            // Sometimes navigation to login page redirects us back to dashboard if session is valid
+            const finalUrl = page.url();
+            if (finalUrl.includes('/account') && !finalUrl.includes('/login')) {
+                // We're already on dashboard - session is valid, just refresh it
+                console.log('✅ Already on dashboard after navigation - session is valid, refreshing...');
+                const currentCookies = await page.cookies();
+                await saveSession(adminId || phone, currentCookies, {});
+                console.log('✅ Session refreshed successfully!');
+                needsLogin = false;
+                alreadyOnDashboard = true;
+                // CRITICAL: Return early - don't continue with login logic
+                return {
+                    success: true,
+                    alreadyOnDashboard: true,
+                    sessionWasFresh: false
+                };
+            }
+            
             // Verify page is actually loaded (not 503 or error) - EXACTLY like alfa-automation.txt
             let pageCheck;
             try {

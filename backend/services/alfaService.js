@@ -193,7 +193,11 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
 
         // Step 3: If we have a session (fresh or refreshed), try to fetch APIs directly first (faster)
         // OPTIMIZATION: Parallel API fetching with timeouts for faster snapshot check
-        if ((sessionWasFresh || !needsLogin) && apiResponses.length < 2) {
+        // CRITICAL: Only attempt direct fetch if we're actually on the dashboard
+        const currentUrl = page.url();
+        const isActuallyOnDashboard = currentUrl.includes('/account') && !currentUrl.includes('/login');
+        
+        if ((sessionWasFresh || !needsLogin) && apiResponses.length < 2 && isActuallyOnDashboard) {
             console.log('⚡ Attempting direct API fetch for faster snapshot check...');
             try {
                 // Fetch APIs directly without full page navigation (parallel with timeouts)
@@ -255,6 +259,9 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
             } catch (directError) {
                 console.log('⚠️ Direct API fetch failed, will navigate normally:', directError.message);
             }
+        } else if ((sessionWasFresh || !needsLogin) && !isActuallyOnDashboard) {
+            // Not on dashboard yet - skip direct fetch, will navigate first
+            console.log('⏭️ Not on dashboard yet, skipping direct API fetch (will navigate first)');
         }
 
         // Step 4: Quick snapshot check BEFORE navigation (if we have APIs from direct fetch)
@@ -468,6 +475,17 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
                         
                         // Build final data with adminConsumption
                         const lastSnapshot = changeCheck.lastSnapshot;
+                        // Declare consumptions variable outside try-catch to avoid scope issues
+                        let consumptionsForFinalData = null;
+                        try {
+                            if (isOnDashboard && !page.isClosed()) {
+                                consumptionsForFinalData = await extractConsumptionCircles(page);
+                            }
+                        } catch (e) {
+                            // Non-critical - use lastSnapshot consumptions if available
+                            console.warn('⚠️ Could not extract consumptions for finalData:', e.message);
+                        }
+                        
                         const finalData = {
                             balance: quickData.balance || null,
                             totalConsumption: quickData.totalConsumption || null,
@@ -479,7 +497,7 @@ async function fetchAlfaData(phone, password, adminId, identifier = null) {
                             // CRITICAL: Include secondarySubscribers for frontend modal display
                             secondarySubscribers: quickData.secondarySubscribers || lastSnapshot?.secondarySubscribers || null,
                             // Include consumptions array if available (from HTML circles)
-                            consumptions: consumptions && consumptions.length > 0 ? consumptions : (lastSnapshot?.consumptions || null),
+                            consumptions: consumptionsForFinalData && consumptionsForFinalData.length > 0 ? consumptionsForFinalData : (lastSnapshot?.consumptions || null),
                             // Include apiResponses for fallback extraction in frontend
                             apiResponses: apiResponses && apiResponses.length > 0 ? apiResponses : null
                         };

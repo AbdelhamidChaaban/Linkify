@@ -107,7 +107,19 @@ class AlfaAPIService {
                 throw new Error(result.error || 'Failed to fetch data');
             }
 
-            return result.data;
+            // Backend response structure:
+            // - result.data = the entire result from fetchAlfaData (includes data, timestamp, etc.)
+            // - result.timestamp = timestamp from fetchAlfaData or Date.now()
+            // We need to extract the actual dashboard data and timestamp
+            const fetchResult = result.data || result;
+            const dashboardData = fetchResult.data || fetchResult;
+            const refreshTimestamp = result.timestamp || fetchResult.timestamp || Date.now();
+
+            // Return both data and timestamp (timestamp is when the refresh happened)
+            return {
+                data: dashboardData,
+                timestamp: refreshTimestamp
+            };
         } catch (error) {
             console.error('Error fetching Alfa data:', error);
             console.error('Error type:', typeof error);

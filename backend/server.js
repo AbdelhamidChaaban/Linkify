@@ -16,11 +16,28 @@ if (fs.existsSync(backendEnvPath)) {
     console.log('⚠️  No .env file found in backend/ or root/. Using default dotenv behavior.');
 }
 
+// Suppress PM2 pidusage errors on Windows (wmic not available)
+// These errors don't affect functionality but clutter logs
+if (process.platform === 'win32') {
+    const originalEmit = process.emit;
+    process.emit = function(event, error) {
+        if (event === 'uncaughtException' && error && error.message) {
+            if (error.message.includes('wmic') || 
+                error.message.includes('spawn wmic') ||
+                error.message.includes('pidusage')) {
+                // Silently ignore wmic/pidusage errors - monitoring is not critical
+                return false;
+            }
+        }
+        return originalEmit.apply(process, arguments);
+    };
+}
+
 const express = require('express');
 const cors = require('cors');
 
-// Load services
-const { fetchAlfaData } = require('./services/alfaService');
+// Load services - Use API-first approach
+const { fetchAlfaData } = require('./services/alfaServiceApiFirst');
 const browserPool = require('./services/browserPool');
 const cacheLayer = require('./services/cacheLayer');
 const scheduledRefresh = require('./services/scheduledRefresh');

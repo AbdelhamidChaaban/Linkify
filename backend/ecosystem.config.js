@@ -18,6 +18,9 @@ module.exports = {
     apps: [{
         name: 'linkify-backend',
         script: './server.js',
+        // Disable monitoring to prevent wmic errors on Windows
+        // PM2 will still restart on crashes, but won't monitor CPU/memory
+        pmx: false,
         instances: 1, // Single instance to maintain one browser pool
         exec_mode: 'fork', // Use fork mode (not cluster) to maintain single browser instance
         autorestart: true,
@@ -25,11 +28,18 @@ module.exports = {
         max_memory_restart: '1G', // Restart if memory exceeds 1GB
         env: {
             NODE_ENV: 'production',
-            PORT: 3000
+            PORT: 3000,
+            // Disable pidusage monitoring on Windows to avoid wmic errors
+            // PM2 uses pidusage internally which tries to call wmic
+            PM2_SILENT: 'true', // Reduce PM2 logging noise
+            // Add wmic to PATH for PM2's pidusage
+            PATH: process.env.PATH + ';C:\\Windows\\System32\\wbem'
         },
         env_production: {
             NODE_ENV: 'production',
-            PORT: process.env.PORT || 3000
+            PORT: process.env.PORT || 3000,
+            PM2_SILENT: 'true',
+            PATH: process.env.PATH + ';C:\\Windows\\System32\\wbem'
         },
         // Logging
         error_file: './logs/err.log',
