@@ -285,6 +285,16 @@ class InsightsManager {
                     validityDate = alfaData.validityDate;
                 }
                 
+                // Check if validity date is yesterday or earlier (expired)
+                // If expired, set total consumption and admin consumption to 0, and limits to 0
+                const isExpired = this.isValidityDateExpired(validityDate);
+                if (isExpired) {
+                    totalConsumption = 0;
+                    totalLimit = 0;
+                    adminConsumption = 0;
+                    adminLimit = 0;
+                }
+                
                 return {
                     id: doc.id,
                     name: data.name || 'Unknown',
@@ -292,12 +302,12 @@ class InsightsManager {
                     type: type,
                     status: status,
                     totalConsumption: totalConsumption,
-                    totalLimit: totalLimit || 1, // Avoid division by zero
+                    totalLimit: isExpired ? 0 : (totalLimit || 1), // If expired, set to 0; otherwise avoid division by zero
                     subscriptionDate: subscriptionDate,
                     validityDate: validityDate,
                     subscribersCount: subscribersCount,
                     adminConsumption: adminConsumption,
-                    adminLimit: adminLimit || 1, // Avoid division by zero
+                    adminLimit: isExpired ? 0 : (adminLimit || 1), // If expired, set to 0; otherwise avoid division by zero
                     balance: balance,
                     expiration: expiration,
                     lastUpdate: lastUpdate,
@@ -770,16 +780,56 @@ class InsightsManager {
     }
     
     renderRow(subscriber) {
-        const totalPercent = (subscriber.totalConsumption / subscriber.totalLimit) * 100;
-        const adminPercent = (subscriber.adminConsumption / subscriber.adminLimit) * 100;
+        // Check if admin consumption >= admin limit (e.g., 77/22 GB means total bundle is fully used)
+        // When admin consumption exceeds or equals admin limit, it means the total bundle is fully consumed
+        const isAdminFull = subscriber.adminLimit > 0 && subscriber.adminConsumption >= subscriber.adminLimit - 0.01;
+        
+        // Check if total consumption is fully used (>= totalLimit)
+        const isTotalFull = subscriber.totalLimit > 0 && subscriber.totalConsumption >= subscriber.totalLimit - 0.01;
+        
+        // If admin consumption is full (e.g., 77/22), treat total bundle as fully used
+        const bundleIsFullyUsed = isAdminFull || isTotalFull;
+        
+        const totalPercent = subscriber.totalLimit > 0 ? (subscriber.totalConsumption / subscriber.totalLimit) * 100 : 0;
+        
+        // When bundle is fully used (admin consumption >= admin limit, e.g., 77/22):
+        // - adminConsumption (77) represents the total bundle size
+        // - Show total consumption as adminConsumption/adminConsumption (77/77)
+        // - Show admin consumption as 0/adminLimit (0/22)
+        let displayTotalConsumption = subscriber.totalConsumption;
+        let displayTotalLimit = subscriber.totalLimit;
+        
+        if (bundleIsFullyUsed && subscriber.adminConsumption > 0) {
+            // When admin consumption is full, use adminConsumption as the total bundle size
+            displayTotalConsumption = subscriber.adminConsumption;
+            displayTotalLimit = subscriber.adminConsumption;
+        }
+        
+        const displayAdminConsumption = bundleIsFullyUsed ? 0 : subscriber.adminConsumption;
+        const adminPercent = bundleIsFullyUsed ? 0 : (subscriber.adminLimit > 0 ? (subscriber.adminConsumption / subscriber.adminLimit) * 100 : 0);
+        
+        // Calculate total percent for progress bar
+        const displayTotalPercent = displayTotalLimit > 0 ? (displayTotalConsumption / displayTotalLimit) * 100 : 0;
+        const totalProgressWidth = bundleIsFullyUsed ? 100 : Math.min(displayTotalPercent, 100);
         
         let progressClass = 'progress-fill';
-        if (totalPercent >= 90) progressClass += ' error';
-        else if (totalPercent >= 70) progressClass += ' warning';
+        if (bundleIsFullyUsed || totalPercent >= 100) {
+            progressClass += ' error';
+        } else if (totalPercent >= 90) {
+            progressClass += ' error';
+        } else if (totalPercent >= 70) {
+            progressClass += ' warning';
+        }
         
         let adminProgressClass = 'progress-fill';
-        if (adminPercent >= 90) adminProgressClass += ' error';
-        else if (adminPercent >= 70) adminProgressClass += ' warning';
+        if (bundleIsFullyUsed) {
+            // When bundle is fully used, admin consumption should show 0% (no error class needed)
+            adminProgressClass = 'progress-fill';
+        } else {
+            if (adminPercent >= 100) adminProgressClass += ' error';
+            else if (adminPercent >= 90) adminProgressClass += ' error';
+            else if (adminPercent >= 70) adminProgressClass += ' warning';
+        }
         
         const isSelected = this.selectedRows.has(subscriber.id);
         const lastUpdate = this.formatDateTime(subscriber.lastUpdate);
@@ -799,9 +849,9 @@ class InsightsManager {
                 <td>
                     <div class="progress-container">
                         <div class="progress-bar">
-                            <div class="${progressClass}" style="width: ${totalPercent}%"></div>
+                            <div class="${progressClass}" style="width: ${totalProgressWidth}%"></div>
                         </div>
-                        <div class="progress-text">${subscriber.totalConsumption.toFixed(2)} / ${subscriber.totalLimit} GB</div>
+                        <div class="progress-text">${displayTotalConsumption.toFixed(2)} / ${displayTotalLimit.toFixed(2)} GB</div>
                     </div>
                 </td>
                 <td>${subscriber.subscriptionDate}</td>
@@ -812,7 +862,7 @@ class InsightsManager {
                         <div class="progress-bar">
                             <div class="${adminProgressClass}" style="width: ${adminPercent}%"></div>
                         </div>
-                        <div class="progress-text">${subscriber.adminConsumption.toFixed(2)} / ${subscriber.adminLimit} GB</div>
+                        <div class="progress-text">${displayAdminConsumption.toFixed(2)} / ${subscriber.adminLimit.toFixed(2)} GB</div>
                     </div>
                 </td>
                 <td>$${subscriber.balance.toFixed(2)}</td>
@@ -1698,6 +1748,47 @@ class InsightsManager {
         const month = String(d.getMonth() + 1).padStart(2, '0');
         const year = d.getFullYear();
         return `${day}/${month}/${year}`;
+    }
+    
+    /**
+     * Check if validity date is expired (yesterday or earlier)
+     * @param {string} validityDateStr - Date string in DD/MM/YYYY format
+     * @returns {boolean} - True if validity date is yesterday or earlier
+     */
+    isValidityDateExpired(validityDateStr) {
+        if (!validityDateStr || validityDateStr === 'N/A') {
+            return false;
+        }
+        
+        try {
+            // Parse DD/MM/YYYY format
+            const parts = validityDateStr.split('/');
+            if (parts.length !== 3) {
+                return false;
+            }
+            
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed in Date
+            const year = parseInt(parts[2], 10);
+            
+            if (isNaN(day) || isNaN(month) || isNaN(year)) {
+                return false;
+            }
+            
+            const validityDate = new Date(year, month, day);
+            validityDate.setHours(23, 59, 59, 999); // End of day
+            
+            // Get yesterday's date (end of yesterday)
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            yesterday.setHours(23, 59, 59, 999);
+            
+            // Check if validity date is yesterday or earlier
+            return validityDate <= yesterday;
+        } catch (error) {
+            console.warn('Error parsing validity date:', validityDateStr, error);
+            return false;
+        }
     }
     
     formatDateTime(date) {
