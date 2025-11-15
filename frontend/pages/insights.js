@@ -125,8 +125,6 @@ class InsightsManager {
             this.subscribers = snapshot.docs.map(doc => {
                 const data = doc.data();
                 
-                // Quick status check
-                const status = (data.status && data.status.toLowerCase().includes('inactive')) ? 'inactive' : 'active';
                 const type = (data.type || 'open').toLowerCase();
                 
                 // Efficient date handling (do this FIRST so we can use createdAt later)
@@ -182,6 +180,92 @@ class InsightsManager {
                 // Get Alfa dashboard data if available
                 const alfaData = data.alfaData || {};
                 const hasAlfaData = alfaData && Object.keys(alfaData).length > 0 && !alfaData.error;
+                
+                // Determine status based on getconsumption API response
+                // Check if "u-share" (case-insensitive) exists in the getconsumption response
+                // The getconsumption response is stored in primaryData (from backend extraction)
+                let status = 'inactive'; // Default to inactive
+                
+                if (hasAlfaData && alfaData.primaryData) {
+                    try {
+                        const apiData = alfaData.primaryData;
+                        
+                        // First, do a simple string search (most reliable)
+                        const responseStr = JSON.stringify(apiData).toLowerCase();
+                        if (responseStr.includes('u-share')) {
+                            status = 'active';
+                        } else {
+                            // If string search didn't find it, try structure traversal
+                            // Check in ServiceInformationValue structure
+                            if (apiData.ServiceInformationValue && Array.isArray(apiData.ServiceInformationValue)) {
+                                for (const service of apiData.ServiceInformationValue) {
+                                    // Check ServiceNameValue at service level (e.g., "U-share Main")
+                                    if (service.ServiceNameValue) {
+                                        const serviceName = String(service.ServiceNameValue).toLowerCase();
+                                        if (serviceName.includes('u-share')) {
+                                            status = 'active';
+                                            break;
+                                        }
+                                    }
+                                    
+                                    // Check BundleNameValue in SecondaryValue array
+                                    if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                        for (const serviceDetails of service.ServiceDetailsInformationValue) {
+                                            if (serviceDetails.SecondaryValue && Array.isArray(serviceDetails.SecondaryValue)) {
+                                                for (const secondary of serviceDetails.SecondaryValue) {
+                                                    if (secondary.BundleNameValue) {
+                                                        const bundleName = String(secondary.BundleNameValue).toLowerCase();
+                                                        if (bundleName.includes('u-share')) {
+                                                            status = 'active';
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                if (status === 'active') break;
+                                            }
+                                        }
+                                        if (status === 'active') break;
+                                    }
+                                    
+                                    if (status === 'active') break;
+                                }
+                            }
+                        }
+                    } catch (statusError) {
+                        console.warn(`⚠️ Error checking status from primaryData for admin ${doc.id}:`, statusError);
+                        // Fallback to string search if structure parsing fails
+                        try {
+                            const responseStr = JSON.stringify(alfaData.primaryData).toLowerCase();
+                            if (responseStr.includes('u-share')) {
+                                status = 'active';
+                            }
+                        } catch (e) {
+                            console.warn(`⚠️ Error in fallback status check for admin ${doc.id}:`, e);
+                        }
+                    }
+                }
+                
+                // Fallback: Also check apiResponses if primaryData not available
+                if (status === 'inactive' && hasAlfaData && alfaData.apiResponses && Array.isArray(alfaData.apiResponses)) {
+                    const getConsumptionResponse = alfaData.apiResponses.find(resp => 
+                        resp.url && resp.url.includes('getconsumption')
+                    );
+                    if (getConsumptionResponse && getConsumptionResponse.data) {
+                        try {
+                            const responseStr = JSON.stringify(getConsumptionResponse.data).toLowerCase();
+                            if (responseStr.includes('u-share')) {
+                                status = 'active';
+                            }
+                        } catch (e) {
+                            // Ignore errors in fallback
+                        }
+                    }
+                }
+                
+                // Fallback to existing status logic if getconsumption response not found
+                if (status === 'inactive' && data.status && data.status.toLowerCase().includes('active')) {
+                    status = 'active';
+                }
                 
                 // Helper function to parse consumption string like "47.97 / 77 GB" or "13 / 15 GB"
                 function parseConsumption(consumptionStr) {
@@ -265,7 +349,7 @@ class InsightsManager {
                 }
                 
                 // Extract subscribers count
-                const subscribersCount = hasAlfaData && alfaData.subscribersCount !== undefined 
+                let subscribersCount = hasAlfaData && alfaData.subscribersCount !== undefined 
                     ? (typeof alfaData.subscribersCount === 'number' ? alfaData.subscribersCount : parseInt(alfaData.subscribersCount) || 0)
                     : 0;
                 
@@ -295,6 +379,19 @@ class InsightsManager {
                     adminLimit = 0;
                 }
                 
+                // If admin is inactive, set consumption and date fields to empty
+                // IMPORTANT: Only set to empty if status is strictly 'inactive'
+                if (status === 'inactive') {
+                    totalConsumption = 0;
+                    totalLimit = 0;
+                    subscriptionDate = '';
+                    validityDate = '';
+                    subscribersCount = 0;
+                    adminConsumption = 0;
+                    adminLimit = 0;
+                }
+                // For active admins, keep all original values (even if they're 0 or empty from data source)
+                
                 return {
                     id: doc.id,
                     name: data.name || 'Unknown',
@@ -313,7 +410,8 @@ class InsightsManager {
                     lastUpdate: lastUpdate,
                     createdAt: createdAt,
                     alfaData: alfaData, // Store full alfaData for View Details modal
-                    quota: data.quota // Store quota for admin limit
+                    quota: data.quota, // Store quota for admin limit
+                    notUShare: data.notUShare === true // Store notUShare flag
                 };
             });
             
@@ -597,6 +695,11 @@ class InsightsManager {
                 return false;
             } else if (this.activeTab === 'inactive' && sub.status !== 'inactive') {
                 return false;
+            } else if (this.activeTab === 'notUShare') {
+                // Show only admins with notUShare flag set to true
+                if (!sub.notUShare || sub.notUShare !== true) {
+                    return false;
+                }
             }
             
             // Type filter
@@ -624,10 +727,15 @@ class InsightsManager {
         const allCount = this.subscribers.length;
         const activeCount = this.subscribers.filter(s => s.status === 'active').length;
         const inactiveCount = this.subscribers.filter(s => s.status === 'inactive').length;
+        const notUShareCount = this.subscribers.filter(s => s.notUShare === true).length;
         
         document.getElementById('countAll').textContent = allCount;
         document.getElementById('countActive').textContent = activeCount;
         document.getElementById('countInactive').textContent = inactiveCount;
+        const notUShareElement = document.getElementById('countNotUShare');
+        if (notUShareElement) {
+            notUShareElement.textContent = notUShareCount;
+        }
     }
     
     toggleTypeDropdown(display, nativeSelect) {
@@ -847,23 +955,27 @@ class InsightsManager {
                     </div>
                 </td>
                 <td>
+                    ${subscriber.status === 'inactive' ? '' : `
                     <div class="progress-container">
                         <div class="progress-bar">
                             <div class="${progressClass}" style="width: ${totalProgressWidth}%"></div>
                         </div>
                         <div class="progress-text">${displayTotalConsumption.toFixed(2)} / ${displayTotalLimit.toFixed(2)} GB</div>
                     </div>
+                    `}
                 </td>
-                <td>${subscriber.subscriptionDate}</td>
-                <td>${subscriber.validityDate}</td>
-                <td>${subscriber.subscribersCount}</td>
+                <td>${subscriber.status === 'inactive' ? '' : (subscriber.subscriptionDate || '')}</td>
+                <td>${subscriber.status === 'inactive' ? '' : (subscriber.validityDate || '')}</td>
+                <td>${subscriber.status === 'inactive' ? '' : (subscriber.subscribersCount !== undefined ? subscriber.subscribersCount : '')}</td>
                 <td>
+                    ${subscriber.status === 'inactive' ? '' : `
                     <div class="progress-container">
                         <div class="progress-bar">
                             <div class="${adminProgressClass}" style="width: ${adminPercent}%"></div>
                         </div>
                         <div class="progress-text">${displayAdminConsumption.toFixed(2)} / ${subscriber.adminLimit.toFixed(2)} GB</div>
                     </div>
+                    `}
                 </td>
                 <td>$${subscriber.balance.toFixed(2)}</td>
                 <td>${subscriber.expiration}</td>

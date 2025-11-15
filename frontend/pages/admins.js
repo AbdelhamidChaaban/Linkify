@@ -191,6 +191,7 @@ class AdminsManager {
                 document.getElementById('adminType').value = admin.type || '';
                 document.getElementById('adminPassword').value = ''; // Don't populate password for security
                 document.getElementById('adminQuota').value = admin.quota || 0;
+                document.getElementById('adminNotUShare').checked = admin.notUShare === true;
             }
         } else {
             // Create mode
@@ -334,6 +335,7 @@ class AdminsManager {
             const type = document.getElementById('adminType').value;
             const password = document.getElementById('adminPassword').value;
             const quota = parseInt(document.getElementById('adminQuota').value.trim());
+            const notUShare = document.getElementById('adminNotUShare').checked;
             
             // Prepare admin data
             const adminData = {
@@ -342,6 +344,7 @@ class AdminsManager {
                 type: type,
                 status: type === 'Open' ? 'Open (Admin)' : 'Closed (Admin)',
                 quota: quota,
+                notUShare: notUShare,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             };
             

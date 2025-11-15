@@ -36,10 +36,6 @@ class HomeManager {
         else if (cardId === '3') {
             this.openServicesToExpireTodayModal();
         }
-        // Handle "Services Expired Yesterday" card (card-id="4")
-        else if (cardId === '4') {
-            this.openServicesExpiredYesterdayModal();
-        }
         // Handle "Finished Services" card (card-id="6")
         else if (cardId === '6') {
             this.openFinishedServicesModal();
@@ -47,6 +43,10 @@ class HomeManager {
         // Handle "High Admin Consumption" card (card-id="7")
         else if (cardId === '7') {
             this.openHighAdminConsumptionModal();
+        }
+        // Handle "Inactive Numbers" card (card-id="9")
+        else if (cardId === '9') {
+            this.openInactiveNumbersModal();
         }
         // Future cards will be handled here
     }
@@ -106,18 +106,21 @@ class HomeManager {
     filterAvailableServices(snapshot) {
         const availableServices = [];
         
-        // Get today's and yesterday's dates in DD/MM/YYYY format
+        // Get today's date in DD/MM/YYYY format
         const today = new Date();
         const todayFormatted = this.formatDateDDMMYYYY(today);
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayFormatted = this.formatDateDDMMYYYY(yesterday);
         
         // First, get all admins that would appear in other cards to exclude them
         const excludedIds = new Set();
         snapshot.docs.forEach(doc => {
             const data = doc.data();
             const alfaData = data.alfaData || {};
+            
+            // Skip inactive admins (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                excludedIds.add(doc.id);
+                return;
+            }
             
             // Check if admin is in "Finished Services"
             // Parse admin consumption
@@ -159,7 +162,7 @@ class HomeManager {
                 excludedIds.add(doc.id);
             }
             
-            // Check if admin is in "Services To Expire Today" or "Services Expired Yesterday"
+            // Check if admin is in "Services To Expire Today"
             let validityDate = '';
             if (alfaData.validityDate) {
                 validityDate = alfaData.validityDate;
@@ -172,21 +175,26 @@ class HomeManager {
                 validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
             }
             
-            // Check if validity date matches today or yesterday
-            if (validityDate === todayFormatted || validityDate === yesterdayFormatted) {
+            // Check if validity date matches today
+            if (validityDate === todayFormatted) {
                 excludedIds.add(doc.id);
             }
         });
 
         // Now filter for Available Services, excluding those in other cards
         snapshot.docs.forEach(doc => {
-            // Skip if this admin is in Finished Services, Services To Expire Today, or Services Expired Yesterday
+            // Skip if this admin is in Finished Services or Services To Expire Today
             if (excludedIds.has(doc.id)) {
                 return;
             }
             
             const data = doc.data();
             const alfaData = data.alfaData || {};
+            
+            // Skip if admin is inactive (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                return;
+            }
 
             // Parse total consumption
             let totalConsumption = 0;
@@ -252,6 +260,11 @@ class HomeManager {
         snapshot.docs.forEach(doc => {
             const data = doc.data();
             const alfaData = data.alfaData || {};
+            
+            // Skip if admin is inactive (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                return;
+            }
 
             // Get expiration (number of days)
             let expiration = 0;
@@ -286,6 +299,58 @@ class HomeManager {
             };
         }
         return { used: 0, total: 0 };
+    }
+
+    /**
+     * Helper function to determine if an admin is inactive
+     * Uses the same logic as insights.js - checks if "u-share" exists in getconsumption response
+     * @param {Object} data - Admin document data from Firebase
+     * @param {Object} alfaData - Alfa data from admin document
+     * @returns {boolean} - True if admin is inactive, false if active
+     */
+    isAdminInactive(data, alfaData) {
+        const hasAlfaData = alfaData && Object.keys(alfaData).length > 0 && !alfaData.error;
+        
+        // Determine status based on getconsumption API response (same logic as insights.js)
+        let status = 'inactive'; // Default to inactive
+        
+        if (hasAlfaData && alfaData.primaryData) {
+            try {
+                const apiData = alfaData.primaryData;
+                
+                // First, do a simple string search (most reliable)
+                const responseStr = JSON.stringify(apiData).toLowerCase();
+                if (responseStr.includes('u-share')) {
+                    status = 'active';
+                }
+            } catch (statusError) {
+                // If error, keep as inactive
+            }
+        }
+        
+        // Fallback: Also check apiResponses if primaryData not available
+        if (status === 'inactive' && hasAlfaData && alfaData.apiResponses && Array.isArray(alfaData.apiResponses)) {
+            const getConsumptionResponse = alfaData.apiResponses.find(resp => 
+                resp.url && resp.url.includes('getconsumption')
+            );
+            if (getConsumptionResponse && getConsumptionResponse.data) {
+                try {
+                    const responseStr = JSON.stringify(getConsumptionResponse.data).toLowerCase();
+                    if (responseStr.includes('u-share')) {
+                        status = 'active';
+                    }
+                } catch (e) {
+                    // Ignore errors
+                }
+            }
+        }
+        
+        // Fallback to existing status logic if getconsumption response not found
+        if (status === 'inactive' && data.status && data.status.toLowerCase().includes('active')) {
+            status = 'active';
+        }
+        
+        return status === 'inactive';
     }
 
     showLoadingModal() {
@@ -662,7 +727,12 @@ class HomeManager {
         snapshot.docs.forEach(doc => {
             const data = doc.data();
             const alfaData = data.alfaData || {};
-
+            
+            // Skip if admin is inactive (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                return;
+            }
+            
             // Get validity date
             let validityDate = '';
             if (alfaData.validityDate) {
@@ -971,179 +1041,6 @@ class HomeManager {
         });
     }
 
-    // Services Expired Yesterday Modal
-    async openServicesExpiredYesterdayModal() {
-        try {
-            // Check if Firebase is available
-            if (typeof db === 'undefined') {
-                throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
-            }
-
-            // Show loading state
-            this.showLoadingModal();
-
-            // Fetch all admins from Firebase
-            const snapshot = await db.collection('admins').get();
-            
-            // Process and filter admins
-            const expiredYesterday = this.filterServicesExpiredYesterday(snapshot);
-            
-            // Hide loading and show modal with data
-            this.hideLoadingModal();
-            this.showServicesExpiredYesterdayModal(expiredYesterday);
-        } catch (error) {
-            console.error('Error opening Services Expired Yesterday modal:', error);
-            this.hideLoadingModal();
-            alert('Error loading data: ' + error.message);
-        }
-    }
-
-    filterServicesExpiredYesterday(snapshot) {
-        const expiredYesterday = [];
-        
-        // Get yesterday's date in DD/MM/YYYY format
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayFormatted = this.formatDateDDMMYYYY(yesterday);
-
-        snapshot.docs.forEach(doc => {
-            const data = doc.data();
-            const alfaData = data.alfaData || {};
-
-            // Get validity date
-            let validityDate = '';
-            if (alfaData.validityDate) {
-                validityDate = alfaData.validityDate;
-            } else {
-                // Fallback: calculate from createdAt + 30 days
-                let createdAt = new Date();
-                if (data.createdAt) {
-                    createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
-                }
-                validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
-            }
-
-            // Check if validity date matches yesterday
-            if (validityDate === yesterdayFormatted) {
-                // Get bundle size (total limit from total consumption)
-                let bundleSize = 0;
-                if (alfaData.totalConsumption) {
-                    const parsed = this.parseConsumption(alfaData.totalConsumption);
-                    bundleSize = parsed.total || 0;
-                } else if (data.quota) {
-                    const quotaStr = String(data.quota).trim();
-                    const quotaMatch = quotaStr.match(/^([\d.]+)/);
-                    bundleSize = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
-                }
-
-                expiredYesterday.push({
-                    id: doc.id,
-                    name: data.name || 'N/A',
-                    phone: data.phone || 'N/A',
-                    bundleSize: bundleSize,
-                    validityDate: validityDate,
-                    alfaData: alfaData
-                });
-            }
-        });
-
-        return expiredYesterday;
-    }
-
-    showServicesExpiredYesterdayModal(services) {
-        // Remove existing modal if any
-        const existingModal = document.getElementById('servicesExpiredYesterdayModal');
-        if (existingModal) {
-            existingModal.remove();
-        }
-
-        // Build table rows
-        let tableRows = '';
-        if (services.length === 0) {
-            tableRows = `
-                <tr>
-                    <td colspan="3" style="text-align: center; padding: 3rem; color: #94a3b8;">
-                        No services expired yesterday found
-                    </td>
-                </tr>
-            `;
-        } else {
-            services.forEach(service => {
-                tableRows += `
-                    <tr>
-                        <td>
-                            <div>
-                                <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
-                                <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
-                            </div>
-                        </td>
-                        <td>${service.bundleSize} GB</td>
-                        <td>
-                            <div class="action-buttons">
-                                <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                        <circle cx="12" cy="12" r="3"/>
-                                    </svg>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                `;
-            });
-        }
-
-        const modal = document.createElement('div');
-        modal.id = 'servicesExpiredYesterdayModal';
-        modal.className = 'available-services-modal-overlay';
-        modal.innerHTML = `
-            <div class="available-services-modal">
-                <div class="available-services-modal-inner">
-                    <div class="available-services-modal-header">
-                        <h2>Services Expired Yesterday</h2>
-                        <button class="modal-close-btn" onclick="this.closest('.available-services-modal-overlay').remove()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M18 6L6 18M6 6l12 12"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <div class="available-services-modal-body">
-                        <div class="table-container">
-                            <table class="available-services-table">
-                                <thead>
-                                    <tr>
-                                        <th>Name</th>
-                                        <th>Bundle Size</th>
-                                        <th class="actions-col">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${tableRows}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-
-        // Bind view buttons
-        modal.querySelectorAll('.view-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const id = e.currentTarget.dataset.subscriberId;
-                this.viewSubscriberDetails(id, services);
-            });
-        });
-
-        // Close on overlay click
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.remove();
-            }
-        });
-    }
 
     // Finished Services Modal
     async openFinishedServicesModal() {
@@ -1178,6 +1075,11 @@ class HomeManager {
         snapshot.docs.forEach(doc => {
             const data = doc.data();
             const alfaData = data.alfaData || {};
+            
+            // Skip if admin is inactive (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                return;
+            }
 
             // Parse total consumption
             let totalConsumption = 0;
@@ -1359,6 +1261,11 @@ class HomeManager {
             
             const data = doc.data();
             const alfaData = data.alfaData || {};
+            
+            // Skip if admin is inactive (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                return;
+            }
 
             // Parse admin consumption - this is the key metric
             let adminConsumption = 0;
@@ -1654,6 +1561,137 @@ class HomeManager {
                 this.viewSubscriberDetails(id, services);
             });
         });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+    }
+
+    async openInactiveNumbersModal() {
+        try {
+            // Check if Firebase is available
+            if (typeof db === 'undefined') {
+                throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+            }
+
+            // Show loading state
+            this.showLoadingModal();
+
+            // Fetch all admins from Firebase
+            const snapshot = await db.collection('admins').get();
+            
+            // Process and filter admins
+            const inactiveNumbers = this.filterInactiveNumbers(snapshot);
+            
+            // Hide loading and show modal with data
+            this.hideLoadingModal();
+            this.showInactiveNumbersModal(inactiveNumbers);
+        } catch (error) {
+            console.error('Error opening Inactive Numbers modal:', error);
+            this.hideLoadingModal();
+            alert('Error loading data: ' + error.message);
+        }
+    }
+
+    filterInactiveNumbers(snapshot) {
+        const inactiveNumbers = [];
+
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const alfaData = data.alfaData || {};
+
+            // Filter: only show admins with status === 'inactive' (using helper function)
+            if (this.isAdminInactive(data, alfaData)) {
+                // Parse balance
+                let balance = 0;
+                if (alfaData.balance) {
+                    const balanceStr = String(alfaData.balance).trim();
+                    const match = balanceStr.replace(/\$/g, '').trim().match(/-?[\d.]+/);
+                    balance = match ? parseFloat(match[0]) : 0;
+                }
+
+                inactiveNumbers.push({
+                    id: doc.id,
+                    name: data.name || 'N/A',
+                    phone: data.phone || 'N/A',
+                    balance: balance,
+                    alfaData: alfaData
+                });
+            }
+        });
+
+        return inactiveNumbers;
+    }
+
+    showInactiveNumbersModal(numbers) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('inactiveNumbersModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // Build table rows
+        let tableRows = '';
+        if (numbers.length === 0) {
+            tableRows = `
+                <tr>
+                    <td colspan="2" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No inactive numbers found
+                    </td>
+                </tr>
+            `;
+        } else {
+            numbers.forEach(number => {
+                tableRows += `
+                    <tr>
+                        <td>
+                            <div>
+                                <div class="subscriber-name">${this.escapeHtml(number.name)}</div>
+                                <div class="subscriber-phone">${this.escapeHtml(number.phone)}</div>
+                            </div>
+                        </td>
+                        <td>$${number.balance.toFixed(2)}</td>
+                    </tr>
+                `;
+            });
+        }
+
+        const modal = document.createElement('div');
+        modal.id = 'inactiveNumbersModal';
+        modal.className = 'available-services-modal-overlay';
+        modal.innerHTML = `
+            <div class="available-services-modal">
+                <div class="available-services-modal-inner">
+                    <div class="available-services-modal-header">
+                        <h2>Inactive Numbers</h2>
+                        <button class="modal-close-btn" onclick="this.closest('.available-services-modal-overlay').remove()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="available-services-modal-body">
+                        <div class="table-container">
+                            <table class="available-services-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
