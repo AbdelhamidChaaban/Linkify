@@ -41,6 +41,7 @@ const { fetchAlfaData } = require('./services/alfaServiceApiFirst');
 const browserPool = require('./services/browserPool');
 const cacheLayer = require('./services/cacheLayer');
 const scheduledRefresh = require('./services/scheduledRefresh');
+const cookieRefreshWorker = require('./services/cookieRefreshWorker');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -238,6 +239,10 @@ async function startServer() {
         console.log('🔧 Initializing scheduled refresh service...');
         scheduledRefresh.startScheduledRefresh();
         
+        // Start background cookie refresh worker (proactive cookie renewal)
+        console.log('🔧 Starting background cookie refresh worker...');
+        cookieRefreshWorker.startWorker();
+        
         // Start server on available port
         const actualPort = await findAvailablePort(PORT);
         
@@ -259,6 +264,10 @@ async function gracefulShutdown(signal) {
     console.log(`\n${signal} received. Starting graceful shutdown...`);
     
     try {
+        // Stop cookie refresh worker
+        console.log('🛑 Stopping cookie refresh worker...');
+        cookieRefreshWorker.stopWorker();
+        
         // Close browser pool
         await browserPool.shutdown();
         console.log('✅ Graceful shutdown complete');

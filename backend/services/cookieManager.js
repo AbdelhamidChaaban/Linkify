@@ -361,6 +361,8 @@ module.exports = {
     getLastJson,
     saveLastVerified,
     loginAndSaveCookies,
-    getCookiesOrLogin
+    getCookiesOrLogin,
+    areCookiesExpired,
+    calculateMinCookieExpiration
 };
 

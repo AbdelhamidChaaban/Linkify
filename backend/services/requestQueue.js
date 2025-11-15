@@ -13,7 +13,8 @@ class RequestQueue {
         this.pendingQueues = new Map();
         
         // Maximum concurrent requests across all admins
-        this.maxConcurrent = parseInt(process.env.MAX_CONCURRENT_REFRESHES) || 5;
+        // Increased for high concurrency - API calls are fast and parallel
+        this.maxConcurrent = parseInt(process.env.MAX_CONCURRENT_REFRESHES) || 20;
         this.currentConcurrent = 0;
     }
 
@@ -105,13 +106,13 @@ class RequestQueue {
                     clearInterval(checkInterval);
                     resolve();
                 }
-            }, 100); // Check every 100ms
+            }, 50); // Check every 50ms for faster response
             
-            // Timeout after 30 seconds
+            // Timeout after 10 seconds (reduced from 30s since API calls are fast)
             setTimeout(() => {
                 clearInterval(checkInterval);
                 resolve(); // Resolve anyway to prevent infinite wait
-            }, 30000);
+            }, 10000);
         });
     }
 

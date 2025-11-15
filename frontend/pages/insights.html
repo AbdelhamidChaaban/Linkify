@@ -7,6 +7,7 @@
     <link rel="icon" type="image/png" href="/assets/Logo.png">
     <link rel="stylesheet" href="/shared/layout.css">
     <link rel="stylesheet" href="/pages/insights.css">
+    <link rel="stylesheet" href="/pages/add-subscribers-modal.css">
 </head>
 <body class="insights-page">
     <!-- Navigation -->
@@ -223,6 +224,69 @@
         </div>
     </main>
     
+    <!-- Add Subscribers Modal -->
+    <div class="add-subscribers-modal-overlay" id="addSubscribersModal">
+        <div class="add-subscribers-modal-container">
+            <div class="add-subscribers-header">
+                <div class="add-subscribers-header-content">
+                    <h4 class="add-subscribers-title">Add a new subscribers</h4>
+                    <nav class="add-subscribers-breadcrumbs">
+                        <ol class="breadcrumbs-list">
+                            <li class="breadcrumb-item">
+                                <a href="/pages/home.html" class="breadcrumb-link">Dashboard</a>
+                            </li>
+                            <li aria-hidden="true" class="breadcrumb-separator">
+                                <span>/</span>
+                            </li>
+                            <li class="breadcrumb-item">
+                                <a href="/pages/insights.html" class="breadcrumb-link">Service</a>
+                            </li>
+                            <li aria-hidden="true" class="breadcrumb-separator">
+                                <span>/</span>
+                            </li>
+                            <li class="breadcrumb-item">
+                                <div class="breadcrumb-current">New subscribers</div>
+                            </li>
+                        </ol>
+                    </nav>
+                </div>
+            </div>
+            
+            <form id="addSubscribersForm" class="add-subscribers-form">
+                <div class="add-subscribers-grid">
+                    <div class="add-subscribers-main-content">
+                        <div class="add-subscribers-card">
+                            <div class="add-subscribers-card-header">
+                                <h6 class="add-subscribers-card-title">Details:</h6>
+                            </div>
+                            
+                            <div class="add-subscribers-items-container" id="subscribersItemsContainer">
+                                <!-- Subscriber items will be added here dynamically -->
+                            </div>
+                            
+                            <hr class="add-subscribers-divider">
+                            
+                            <div class="add-subscribers-actions">
+                                <button type="button" class="add-subscriber-row-btn" id="addSubscriberRowBtn">
+                                    <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                                        <path d="M11 20a1 1 0 1 0 2 0v-7h7a1 1 0 1 0 0-2h-7V4a1 1 0 1 0-2 0v7H4a1 1 0 1 0 0 2h7z"/>
+                                    </svg>
+                                    Add Subscriber
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="add-subscribers-submit-section">
+                            <button type="submit" class="add-subscribers-submit-btn" id="shareSubscribersBtn">
+                                Share
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Alfa API Service -->
     <script src="/shared/alfa-api.js"></script>
     

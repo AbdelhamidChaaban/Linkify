@@ -102,7 +102,10 @@ class AdminsManager {
         this.showLoading();
         // Wait for Firebase to be ready
         this.waitForFirebase().then(() => {
-            this.loadAdmins();
+            this.loadAdmins().then(() => {
+                // Check if we should open edit modal from URL hash (e.g., #edit-{adminId})
+                this.checkUrlHash();
+            });
         }).catch(error => {
             console.error('Firebase initialization error:', error);
             const tbody = document.getElementById('adminsTableBody');
@@ -116,6 +119,33 @@ class AdminsManager {
                 `;
             }
         });
+    }
+    
+    checkUrlHash() {
+        const hash = window.location.hash;
+        if (hash && hash.startsWith('#edit-')) {
+            const adminId = hash.substring(6); // Remove '#edit-' prefix
+            if (adminId) {
+                // Try to find the admin and open edit modal
+                // Retry a few times in case admins are still loading
+                let attempts = 0;
+                const maxAttempts = 10;
+                const checkAdmin = () => {
+                    const admin = this.admins.find(a => a.id === adminId);
+                    if (admin) {
+                        this.openModal(adminId);
+                        // Remove hash from URL after opening modal
+                        window.history.replaceState(null, '', window.location.pathname);
+                    } else if (attempts < maxAttempts) {
+                        attempts++;
+                        setTimeout(checkAdmin, 100); // Retry after 100ms
+                    } else {
+                        console.warn('Admin not found with id:', adminId);
+                    }
+                };
+                checkAdmin();
+            }
+        }
     }
     
     async waitForFirebase() {

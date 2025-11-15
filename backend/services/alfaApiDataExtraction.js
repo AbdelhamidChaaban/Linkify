@@ -69,6 +69,24 @@ function extractFromGetConsumption(apiResponseData) {
                 // Format: "X / Y GB" (same format as total consumption)
                 extracted.adminConsumption = `${displayConsumption.toFixed(2)} / ${adminPackageValue} ${adminPackageUnit}`;
                 console.log(`✅ Extracted admin consumption: ${extracted.adminConsumption} (from ConsumptionValue: ${adminConsumptionValue} ${adminConsumptionUnit})`);
+            } else {
+                // Fallback: Try to extract from any numeric fields if standard fields are missing
+                console.warn('⚠️ Standard admin consumption fields missing, trying fallback extraction...');
+                const numericFields = Object.keys(firstServiceDetails).filter(key => {
+                    const value = firstServiceDetails[key];
+                    return typeof value === 'number' || (typeof value === 'string' && /^[\d.]+$/.test(value.trim()));
+                });
+                
+                if (numericFields.length >= 2) {
+                    // Try to use first two numeric fields as consumption/limit
+                    const val1 = parseFloat(firstServiceDetails[numericFields[0]]) || 0;
+                    const val2 = parseFloat(firstServiceDetails[numericFields[1]]) || 0;
+                    if (val1 > 0 && val2 > 0) {
+                        // Assume first is consumption, second is limit
+                        extracted.adminConsumption = `${val1.toFixed(2)} / ${val2.toFixed(2)} GB`;
+                        console.log(`✅ Extracted admin consumption (fallback): ${extracted.adminConsumption}`);
+                    }
+                }
             }
             
             // Extract total consumption
@@ -107,6 +125,36 @@ function extractFromGetConsumption(apiResponseData) {
                         // Format: "X / Y" (numbers only, no units - frontend will add "GB")
                         extracted.totalConsumption = `${displayConsumption.toFixed(2)} / ${quotaValue}`;
                         console.log(`✅ Extracted total consumption: ${extracted.totalConsumption} (QuotaValue: ${quotaValue} is after "/")`);
+                    } else {
+                        // Fallback: Try to extract from totalBundle directly
+                        console.warn('⚠️ Standard total consumption fields missing, trying fallback extraction...');
+                        const numericFields = Object.keys(totalBundle).filter(key => {
+                            const value = totalBundle[key];
+                            return typeof value === 'number' || (typeof value === 'string' && /^[\d.]+$/.test(value.trim()));
+                        });
+                        
+                        if (numericFields.length >= 2) {
+                            const val1 = parseFloat(totalBundle[numericFields[0]]) || 0;
+                            const val2 = parseFloat(totalBundle[numericFields[1]]) || 0;
+                            if (val1 > 0 && val2 > 0) {
+                                extracted.totalConsumption = `${val1.toFixed(2)} / ${val2.toFixed(2)}`;
+                                console.log(`✅ Extracted total consumption (fallback): ${extracted.totalConsumption}`);
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback: Try to extract from firstServiceDetails if SecondaryValue structure is missing
+                    console.warn('⚠️ SecondaryValue structure missing, trying direct extraction from firstServiceDetails...');
+                    const directQuota = firstServiceDetails.QuotaValue || '';
+                    const directConsumption = firstServiceDetails.ConsumptionValue || '';
+                    if (directConsumption && directQuota) {
+                        let displayConsumption = parseFloat(directConsumption);
+                        const consumptionUnit = firstServiceDetails.ConsumptionUnitValue || '';
+                        if (consumptionUnit === 'MB') {
+                            displayConsumption = displayConsumption / 1024;
+                        }
+                        extracted.totalConsumption = `${displayConsumption.toFixed(2)} / ${directQuota}`;
+                        console.log(`✅ Extracted total consumption (direct fallback): ${extracted.totalConsumption}`);
                     }
                 }
             }

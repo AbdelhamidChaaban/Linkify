@@ -291,10 +291,188 @@ class InsightsManager {
                 // Extract total consumption (format: "47.97 / 77 GB")
                 let totalConsumption = 0;
                 let totalLimit = data.quota || 0;
-                if (hasAlfaData && alfaData.totalConsumption) {
-                    const parsed = parseConsumption(alfaData.totalConsumption);
-                    totalConsumption = parsed.used;
-                    totalLimit = parsed.total || totalLimit;
+                
+                // Try multiple sources for total consumption
+                if (hasAlfaData) {
+                    // Source 1: Direct alfaData.totalConsumption
+                    // Check if the property exists (even if it's 0, null, or empty string)
+                    if (alfaData.hasOwnProperty('totalConsumption')) {
+                        try {
+                            // Handle null, undefined, or empty string - treat as missing and use fallback
+                            if (alfaData.totalConsumption === null || alfaData.totalConsumption === undefined || alfaData.totalConsumption === '') {
+                                // Field exists but is empty/null - treat as if it doesn't exist, will use fallback extraction
+                                console.log(`⚠️ [${doc.id}] totalConsumption exists but is empty/null, will use fallback extraction`);
+                                // Don't set totalConsumption here, let it fall through to Source 2
+                            } else if (typeof alfaData.totalConsumption === 'string') {
+                                const parsed = parseConsumption(alfaData.totalConsumption);
+                                totalConsumption = parsed.used;
+                                totalLimit = parsed.total || totalLimit;
+                                console.log(`✅ [${doc.id}] Extracted totalConsumption from string: "${alfaData.totalConsumption}" -> ${totalConsumption} / ${totalLimit}`);
+                            } else if (typeof alfaData.totalConsumption === 'number') {
+                                totalConsumption = alfaData.totalConsumption;
+                                if (alfaData.totalLimit && typeof alfaData.totalLimit === 'number') {
+                                    totalLimit = alfaData.totalLimit;
+                                }
+                                console.log(`✅ [${doc.id}] Extracted totalConsumption from number: ${totalConsumption} / ${totalLimit}`);
+                            }
+                        } catch (parseError) {
+                            console.warn(`⚠️ Error parsing totalConsumption for admin ${doc.id}:`, parseError);
+                            const numMatch = String(alfaData.totalConsumption).match(/[\d.]+/);
+                            if (numMatch) {
+                                totalConsumption = parseFloat(numMatch[0]) || 0;
+                            }
+                        }
+                    } else if (alfaData.totalConsumption) {
+                        // Fallback: old check for backwards compatibility
+                        try {
+                            if (typeof alfaData.totalConsumption === 'string') {
+                                const parsed = parseConsumption(alfaData.totalConsumption);
+                                totalConsumption = parsed.used;
+                                totalLimit = parsed.total || totalLimit;
+                                console.log(`✅ [${doc.id}] Extracted totalConsumption (fallback): "${alfaData.totalConsumption}" -> ${totalConsumption} / ${totalLimit}`);
+                            } else if (typeof alfaData.totalConsumption === 'number') {
+                                totalConsumption = alfaData.totalConsumption;
+                                if (alfaData.totalLimit && typeof alfaData.totalLimit === 'number') {
+                                    totalLimit = alfaData.totalLimit;
+                                }
+                                console.log(`✅ [${doc.id}] Extracted totalConsumption (fallback number): ${totalConsumption} / ${totalLimit}`);
+                            }
+                        } catch (parseError) {
+                            console.warn(`⚠️ Error parsing totalConsumption for admin ${doc.id}:`, parseError);
+                            const numMatch = String(alfaData.totalConsumption).match(/[\d.]+/);
+                            if (numMatch) {
+                                totalConsumption = parseFloat(numMatch[0]) || 0;
+                            }
+                        }
+                    } else {
+                        console.log(`⚠️ [${doc.id}] totalConsumption field does not exist in alfaData`);
+                    }
+                    
+                    // Source 2: Extract from primaryData (raw API response) if not found
+                    if (totalConsumption === 0 && alfaData.primaryData) {
+                        try {
+                            const primaryData = alfaData.primaryData;
+                            
+                            // First, try direct extraction from primaryData root level (for cases where structure is different)
+                            if (!totalConsumption && primaryData.ConsumptionValue) {
+                                let consumption = parseFloat(primaryData.ConsumptionValue) || 0;
+                                const consumptionUnit = primaryData.ConsumptionUnitValue || '';
+                                if (consumptionUnit === 'MB' && consumption > 0) {
+                                    consumption = consumption / 1024;
+                                }
+                                totalConsumption = consumption;
+                                
+                                if (primaryData.QuotaValue) {
+                                    const quotaStr = String(primaryData.QuotaValue).trim();
+                                    const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                                    if (quotaMatch) {
+                                        totalLimit = parseFloat(quotaMatch[1]) || totalLimit;
+                                    }
+                                }
+                            }
+                            
+                            // Look for QuotaValue in ServiceInformationValue structure
+                            if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue) && primaryData.ServiceInformationValue.length > 0) {
+                                for (const service of primaryData.ServiceInformationValue) {
+                                    if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                        for (const details of service.ServiceDetailsInformationValue) {
+                                            // First, try to get total consumption from SecondaryValue (U-Share Total Bundle)
+                                            if (details.SecondaryValue && Array.isArray(details.SecondaryValue)) {
+                                                // Find U-Share Total Bundle
+                                                const totalBundle = details.SecondaryValue.find(secondary => {
+                                                    const bundleName = (secondary.BundleNameValue || '').toLowerCase();
+                                                    return bundleName.includes('u-share total') || 
+                                                           bundleName.includes('total bundle');
+                                                }) || details.SecondaryValue[0]; // Fallback to first
+                                                
+                                                if (totalBundle) {
+                                                    const quotaValue = totalBundle.QuotaValue || '';
+                                                    const consumptionValue = totalBundle.ConsumptionValue || details.ConsumptionValue || '';
+                                                    const consumptionUnit = totalBundle.ConsumptionUnitValue || details.ConsumptionUnitValue || '';
+                                                    
+                                                    if (quotaValue) {
+                                                        const quotaStr = String(quotaValue).trim();
+                                                        const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                                                        if (quotaMatch) {
+                                                            totalLimit = parseFloat(quotaMatch[1]) || totalLimit;
+                                                        }
+                                                    }
+                                                    
+                                                    if (consumptionValue && !totalConsumption) {
+                                                        let consumption = parseFloat(consumptionValue) || 0;
+                                                        if (consumptionUnit === 'MB' && consumption > 0) {
+                                                            consumption = consumption / 1024;
+                                                        }
+                                                        totalConsumption = consumption;
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Fallback: Try to get from QuotaValue directly
+                                            if (details.QuotaValue && !totalLimit) {
+                                                const quotaStr = String(details.QuotaValue).trim();
+                                                const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                                                if (quotaMatch) {
+                                                    totalLimit = parseFloat(quotaMatch[1]) || totalLimit;
+                                                }
+                                            }
+                                            
+                                            // Fallback: Try to get consumption from ConsumptionValue directly
+                                            if (details.ConsumptionValue && !totalConsumption) {
+                                                const consumptionValue = parseFloat(details.ConsumptionValue) || 0;
+                                                const consumptionUnit = details.ConsumptionUnitValue || '';
+                                                // Convert MB to GB if needed
+                                                if (consumptionUnit === 'MB' && consumptionValue > 0) {
+                                                    totalConsumption = consumptionValue / 1024;
+                                                } else if (consumptionUnit === 'GB' || !consumptionUnit) {
+                                                    totalConsumption = consumptionValue;
+                                                }
+                                            }
+                                            
+                                            // If we found both, break
+                                            if (totalConsumption > 0 && totalLimit > 0) break;
+                                        }
+                                        if (totalConsumption > 0 && totalLimit > 0) break;
+                                    }
+                                }
+                            }
+                        } catch (primaryError) {
+                            console.warn(`⚠️ Error extracting from primaryData for admin ${doc.id}:`, primaryError);
+                        }
+                    }
+                    
+                    // Source 3: Calculate from consumptions array if available
+                    if (totalConsumption === 0 && alfaData.consumptions && Array.isArray(alfaData.consumptions) && alfaData.consumptions.length > 0) {
+                        try {
+                            // Sum all consumption circles
+                            let sumConsumption = 0;
+                            let sumLimit = 0;
+                            for (const circle of alfaData.consumptions) {
+                                if (circle.used) {
+                                    const usedStr = String(circle.used).trim();
+                                    const usedMatch = usedStr.match(/^([\d.]+)/);
+                                    if (usedMatch) {
+                                        sumConsumption += parseFloat(usedMatch[1]) || 0;
+                                    }
+                                }
+                                if (circle.total) {
+                                    const totalStr = String(circle.total).trim();
+                                    const totalMatch = totalStr.match(/^([\d.]+)/);
+                                    if (totalMatch) {
+                                        sumLimit += parseFloat(totalMatch[1]) || 0;
+                                    }
+                                }
+                            }
+                            if (sumConsumption > 0) {
+                                totalConsumption = sumConsumption;
+                                if (sumLimit > 0) {
+                                    totalLimit = sumLimit;
+                                }
+                            }
+                        } catch (sumError) {
+                            console.warn(`⚠️ Error summing consumptions for admin ${doc.id}:`, sumError);
+                        }
+                    }
                 }
                 
                 // Extract admin consumption from U-Share Main circle
@@ -311,16 +489,41 @@ class InsightsManager {
                 }
                 
                 // Try to get admin consumption from alfaData.adminConsumption first (backend-built string like "17.11 / 15 GB")
-                if (hasAlfaData && alfaData.adminConsumption) {
-                    const adminConsumptionStr = String(alfaData.adminConsumption).trim();
-                    // Parse "17.11 / 15 GB" format to extract the used value
-                    const match = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
-                    if (match) {
-                        adminConsumption = parseFloat(match[1]) || 0;
+                // Check if the property exists (even if it's 0, null, or empty string)
+                if (hasAlfaData && alfaData.hasOwnProperty('adminConsumption')) {
+                    try {
+                        // Handle null, undefined, or empty string - treat as missing and use fallback
+                        if (alfaData.adminConsumption === null || alfaData.adminConsumption === undefined || alfaData.adminConsumption === '') {
+                            // Field exists but is empty/null - treat as if it doesn't exist, will use fallback extraction
+                            console.log(`⚠️ [${doc.id}] adminConsumption exists but is empty/null, will use fallback extraction`);
+                            // Don't set adminConsumption here, let it fall through to fallback extraction
+                        } else if (typeof alfaData.adminConsumption === 'number') {
+                            adminConsumption = alfaData.adminConsumption;
+                            console.log(`✅ [${doc.id}] Extracted adminConsumption from number: ${adminConsumption}`);
+                        } else if (typeof alfaData.adminConsumption === 'string') {
+                            const adminConsumptionStr = alfaData.adminConsumption.trim();
+                            // Parse "17.11 / 15 GB" format to extract the used value
+                            const match = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
+                            if (match) {
+                                adminConsumption = parseFloat(match[1]) || 0;
+                                console.log(`✅ [${doc.id}] Extracted adminConsumption from string: "${adminConsumptionStr}" -> ${adminConsumption}`);
+                            } else {
+                                // Try to extract just the number if format doesn't match
+                                const numMatch = adminConsumptionStr.match(/^([\d.]+)/);
+                                if (numMatch) {
+                                    adminConsumption = parseFloat(numMatch[1]) || 0;
+                                    console.log(`✅ [${doc.id}] Extracted adminConsumption (simple number): "${adminConsumptionStr}" -> ${adminConsumption}`);
+                                }
+                            }
+                        }
+                    } catch (parseError) {
+                        console.warn(`⚠️ Error parsing adminConsumption for admin ${doc.id}:`, parseError);
                     }
+                } else {
+                    console.log(`⚠️ [${doc.id}] adminConsumption field does not exist in alfaData`);
                 }
                 
-                // Fallback: Get the "used" value from the first consumption circle (U-Share Main)
+                // Fallback 1: Get the "used" value from the first consumption circle (U-Share Main)
                 if (adminConsumption === 0 && hasAlfaData && alfaData.consumptions && Array.isArray(alfaData.consumptions) && alfaData.consumptions.length > 0) {
                     // Find U-Share Main circle (first circle or one with "U-share Main" in planName)
                     const uShareMain = alfaData.consumptions.find(c => 
@@ -338,6 +541,125 @@ class InsightsManager {
                             const usageStr = String(uShareMain.usage).trim();
                             const usageMatch = usageStr.match(/^([\d.]+)/);
                             adminConsumption = usageMatch ? parseFloat(usageMatch[1]) : 0;
+                        }
+                    }
+                }
+                
+                // Fallback 2: Extract from primaryData (raw API response) if still not found
+                if (adminConsumption === 0 && hasAlfaData && alfaData.primaryData) {
+                    try {
+                        const primaryData = alfaData.primaryData;
+                        
+                        // First, try direct extraction from primaryData root level (for cases where structure is different)
+                        if (!adminConsumption && primaryData.ConsumptionValue) {
+                            let consumption = parseFloat(primaryData.ConsumptionValue) || 0;
+                            const consumptionUnit = primaryData.ConsumptionUnitValue || '';
+                            if (consumptionUnit === 'MB' && consumption > 0) {
+                                consumption = consumption / 1024;
+                            }
+                            adminConsumption = consumption;
+                            
+                            if (primaryData.PackageValue) {
+                                const packageStr = String(primaryData.PackageValue).trim();
+                                const packageMatch = packageStr.match(/^([\d.]+)/);
+                                if (packageMatch) {
+                                    adminLimit = parseFloat(packageMatch[1]) || adminLimit;
+                                }
+                            }
+                        }
+                        
+                        // Look for ConsumptionValue and PackageValue in ServiceInformationValue structure
+                        if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue) && primaryData.ServiceInformationValue.length > 0) {
+                            for (const service of primaryData.ServiceInformationValue) {
+                                if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                    for (const details of service.ServiceDetailsInformationValue) {
+                                        // Admin consumption is ConsumptionValue (consumption) / PackageValue (limit)
+                                        const consumptionValue = details.ConsumptionValue || '';
+                                        const consumptionUnit = details.ConsumptionUnitValue || '';
+                                        const packageValue = details.PackageValue || '';
+                                        const packageUnit = details.PackageUnitValue || '';
+                                        
+                                        if (consumptionValue) {
+                                            let consumption = parseFloat(consumptionValue) || 0;
+                                            // Convert MB to GB if needed
+                                            if (consumptionUnit === 'MB' && consumption > 0) {
+                                                consumption = consumption / 1024;
+                                            }
+                                            adminConsumption = consumption;
+                                            
+                                            // Also update adminLimit if PackageValue is available
+                                            if (packageValue) {
+                                                const packageStr = String(packageValue).trim();
+                                                const packageMatch = packageStr.match(/^([\d.]+)/);
+                                                if (packageMatch) {
+                                                    adminLimit = parseFloat(packageMatch[1]) || adminLimit;
+                                                }
+                                            }
+                                            
+                                            // Found it, break out
+                                            if (adminConsumption > 0) break;
+                                        }
+                                    }
+                                    if (adminConsumption > 0) break;
+                                }
+                            }
+                        }
+                    } catch (primaryError) {
+                        console.warn(`⚠️ Error extracting adminConsumption from primaryData for admin ${doc.id}:`, primaryError);
+                    }
+                }
+                
+                // Fallback 3: Use totalConsumption if adminConsumption is still 0 and we have totalConsumption
+                // This handles cases where admin consumption equals total consumption
+                if (adminConsumption === 0 && totalConsumption > 0) {
+                    adminConsumption = totalConsumption;
+                }
+                
+                // Debug logging for ALL admins (not just missing data) to see what's happening
+                if (hasAlfaData) {
+                    const hasMissingData = (totalConsumption === 0 || adminConsumption === 0);
+                    const logPrefix = hasMissingData ? '🔍' : '✅';
+                    console.log(`${logPrefix} [${doc.id}] Consumption extraction summary:`, {
+                        totalConsumption,
+                        adminConsumption,
+                        totalLimit,
+                        adminLimit,
+                        hasTotalConsumption: !!alfaData.totalConsumption,
+                        hasAdminConsumption: !!alfaData.adminConsumption,
+                        hasConsumptions: !!(alfaData.consumptions && alfaData.consumptions.length > 0),
+                        hasPrimaryData: !!alfaData.primaryData,
+                        consumptionsCount: alfaData.consumptions ? alfaData.consumptions.length : 0,
+                        alfaDataKeys: Object.keys(alfaData || {}),
+                        totalConsumptionValue: alfaData.totalConsumption,
+                        adminConsumptionValue: alfaData.adminConsumption,
+                        totalConsumptionType: typeof alfaData.totalConsumption,
+                        adminConsumptionType: typeof alfaData.adminConsumption,
+                        totalConsumptionExists: alfaData.hasOwnProperty('totalConsumption'),
+                        adminConsumptionExists: alfaData.hasOwnProperty('adminConsumption'),
+                        primaryDataKeys: alfaData.primaryData ? Object.keys(alfaData.primaryData) : null
+                    });
+                    
+                    // Log the full alfaData structure for debugging (truncated)
+                    if (alfaData.primaryData) {
+                        console.log(`🔍 [${doc.id}] primaryData structure:`, {
+                            hasServiceInformationValue: !!(alfaData.primaryData.ServiceInformationValue),
+                            serviceInfoLength: alfaData.primaryData.ServiceInformationValue ? alfaData.primaryData.ServiceInformationValue.length : 0,
+                            firstServiceKeys: alfaData.primaryData.ServiceInformationValue && alfaData.primaryData.ServiceInformationValue[0] 
+                                ? Object.keys(alfaData.primaryData.ServiceInformationValue[0]) 
+                                : null,
+                            // Check for direct fields at root level
+                            hasConsumptionValue: !!(alfaData.primaryData.ConsumptionValue),
+                            hasQuotaValue: !!(alfaData.primaryData.QuotaValue),
+                            hasPackageValue: !!(alfaData.primaryData.PackageValue),
+                            primaryDataKeys: Object.keys(alfaData.primaryData || {}).slice(0, 10) // First 10 keys
+                        });
+                        
+                        // If ServiceInformationValue is empty, log the full primaryData structure (truncated)
+                        if (alfaData.primaryData.ServiceInformationValue && alfaData.primaryData.ServiceInformationValue.length === 0) {
+                            console.warn(`⚠️ [${doc.id}] ServiceInformationValue is empty! Full primaryData keys:`, Object.keys(alfaData.primaryData));
+                            // Try to find consumption data in any field
+                            const allValues = JSON.stringify(alfaData.primaryData).substring(0, 500);
+                            console.log(`⚠️ [${doc.id}] primaryData sample (first 500 chars):`, allValues);
                         }
                     }
                 }
@@ -661,7 +983,7 @@ class InsightsManager {
         if (addSubscribersBtn) {
             addSubscribersBtn.addEventListener('click', (e) => {
                 e.preventDefault();
-                console.log('Add Subscribers clicked');
+                this.openAddSubscribersModal();
             });
         }
     }
@@ -888,33 +1210,123 @@ class InsightsManager {
     }
     
     renderRow(subscriber) {
+        // Fallback: If consumption values are 0 or missing, try to extract from alfaData.primaryData
+        // This handles cases where extraction in processSubscribers didn't work but View Details can extract it
+        let totalConsumption = subscriber.totalConsumption || 0;
+        let totalLimit = subscriber.totalLimit || 0;
+        let adminConsumption = subscriber.adminConsumption || 0;
+        // Admin limit should always be the quota set when creating the admin (not from API)
+        // Use subscriber.quota as the source of truth for admin limit
+        // Parse quota if it's a string (e.g., "15 GB" or "15")
+        let adminLimit = 0;
+        if (subscriber.quota) {
+            const quotaStr = String(subscriber.quota).trim();
+            const quotaMatch = quotaStr.match(/^([\d.]+)/);
+            adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+        } else if (subscriber.adminLimit) {
+            adminLimit = subscriber.adminLimit;
+        }
+        
+        // If values are missing, try to extract from primaryData (same logic as View Details)
+        if ((totalConsumption === 0 || adminConsumption === 0) && subscriber.alfaData && subscriber.alfaData.primaryData) {
+            try {
+                const primaryData = subscriber.alfaData.primaryData;
+                
+                // Extract total consumption from primaryData if missing
+                if (totalConsumption === 0 && primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue) && primaryData.ServiceInformationValue.length > 0) {
+                    for (const service of primaryData.ServiceInformationValue) {
+                        if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                            for (const details of service.ServiceDetailsInformationValue) {
+                                if (details.SecondaryValue && Array.isArray(details.SecondaryValue)) {
+                                    const totalBundle = details.SecondaryValue.find(secondary => {
+                                        const bundleName = (secondary.BundleNameValue || '').toLowerCase();
+                                        return bundleName.includes('u-share total') || bundleName.includes('total bundle');
+                                    }) || details.SecondaryValue[0];
+                                    
+                                    if (totalBundle) {
+                                        const quotaValue = totalBundle.QuotaValue || '';
+                                        const consumptionValue = totalBundle.ConsumptionValue || details.ConsumptionValue || '';
+                                        const consumptionUnit = totalBundle.ConsumptionUnitValue || details.ConsumptionUnitValue || '';
+                                        
+                                        if (quotaValue) {
+                                            const quotaStr = String(quotaValue).trim();
+                                            const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                                            if (quotaMatch) {
+                                                totalLimit = parseFloat(quotaMatch[1]) || totalLimit;
+                                            }
+                                        }
+                                        
+                                        if (consumptionValue && totalConsumption === 0) {
+                                            let consumption = parseFloat(consumptionValue) || 0;
+                                            if (consumptionUnit === 'MB' && consumption > 0) {
+                                                consumption = consumption / 1024;
+                                            }
+                                            totalConsumption = consumption;
+                                        }
+                                    }
+                                }
+                                
+                                // Extract admin consumption if missing
+                                if (adminConsumption === 0) {
+                                    const consumptionValue = details.ConsumptionValue || '';
+                                    const consumptionUnit = details.ConsumptionUnitValue || '';
+                                    
+                                    if (consumptionValue) {
+                                        let consumption = parseFloat(consumptionValue) || 0;
+                                        if (consumptionUnit === 'MB' && consumption > 0) {
+                                            consumption = consumption / 1024;
+                                        }
+                                        adminConsumption = consumption;
+                                        
+                                        // Don't update adminLimit from PackageValue - use subscriber.quota instead
+                                        // adminLimit should always be the quota set when creating the admin
+                                    }
+                                }
+                                
+                                if (totalConsumption > 0 && adminConsumption > 0) break;
+                            }
+                            if (totalConsumption > 0 && adminConsumption > 0) break;
+                        }
+                    }
+                }
+            } catch (extractError) {
+                console.warn(`⚠️ Error extracting consumption in renderRow for ${subscriber.id}:`, extractError);
+            }
+        }
+        
         // Check if admin consumption >= admin limit (e.g., 77/22 GB means total bundle is fully used)
         // When admin consumption exceeds or equals admin limit, it means the total bundle is fully consumed
-        const isAdminFull = subscriber.adminLimit > 0 && subscriber.adminConsumption >= subscriber.adminLimit - 0.01;
+        // Ensure values are numbers before comparison (handle null/undefined)
+        const safeTotalConsumption = (totalConsumption != null && !isNaN(totalConsumption)) ? totalConsumption : 0;
+        const safeTotalLimit = (totalLimit != null && !isNaN(totalLimit)) ? totalLimit : 0;
+        const safeAdminConsumption = (adminConsumption != null && !isNaN(adminConsumption)) ? adminConsumption : 0;
+        const safeAdminLimit = (adminLimit != null && !isNaN(adminLimit)) ? adminLimit : 0;
+        
+        const isAdminFull = safeAdminLimit > 0 && safeAdminConsumption >= safeAdminLimit - 0.01;
         
         // Check if total consumption is fully used (>= totalLimit)
-        const isTotalFull = subscriber.totalLimit > 0 && subscriber.totalConsumption >= subscriber.totalLimit - 0.01;
+        const isTotalFull = safeTotalLimit > 0 && safeTotalConsumption >= safeTotalLimit - 0.01;
         
         // If admin consumption is full (e.g., 77/22), treat total bundle as fully used
         const bundleIsFullyUsed = isAdminFull || isTotalFull;
         
-        const totalPercent = subscriber.totalLimit > 0 ? (subscriber.totalConsumption / subscriber.totalLimit) * 100 : 0;
+        const totalPercent = safeTotalLimit > 0 ? (safeTotalConsumption / safeTotalLimit) * 100 : 0;
         
         // When bundle is fully used (admin consumption >= admin limit, e.g., 77/22):
         // - adminConsumption (77) represents the total bundle size
         // - Show total consumption as adminConsumption/adminConsumption (77/77)
         // - Show admin consumption as 0/adminLimit (0/22)
-        let displayTotalConsumption = subscriber.totalConsumption;
-        let displayTotalLimit = subscriber.totalLimit;
+        let displayTotalConsumption = safeTotalConsumption;
+        let displayTotalLimit = safeTotalLimit;
         
-        if (bundleIsFullyUsed && subscriber.adminConsumption > 0) {
+        if (bundleIsFullyUsed && safeAdminConsumption > 0) {
             // When admin consumption is full, use adminConsumption as the total bundle size
-            displayTotalConsumption = subscriber.adminConsumption;
-            displayTotalLimit = subscriber.adminConsumption;
+            displayTotalConsumption = safeAdminConsumption;
+            displayTotalLimit = safeAdminConsumption;
         }
         
-        const displayAdminConsumption = bundleIsFullyUsed ? 0 : subscriber.adminConsumption;
-        const adminPercent = bundleIsFullyUsed ? 0 : (subscriber.adminLimit > 0 ? (subscriber.adminConsumption / subscriber.adminLimit) * 100 : 0);
+        const displayAdminConsumption = bundleIsFullyUsed ? 0 : safeAdminConsumption;
+        const adminPercent = bundleIsFullyUsed ? 0 : (safeAdminLimit > 0 ? (safeAdminConsumption / safeAdminLimit) * 100 : 0);
         
         // Calculate total percent for progress bar
         const displayTotalPercent = displayTotalLimit > 0 ? (displayTotalConsumption / displayTotalLimit) * 100 : 0;
@@ -973,11 +1385,11 @@ class InsightsManager {
                         <div class="progress-bar">
                             <div class="${adminProgressClass}" style="width: ${adminPercent}%"></div>
                         </div>
-                        <div class="progress-text">${displayAdminConsumption.toFixed(2)} / ${subscriber.adminLimit.toFixed(2)} GB</div>
+                        <div class="progress-text">${displayAdminConsumption.toFixed(2)} / ${safeAdminLimit.toFixed(2)} GB</div>
                     </div>
                     `}
                 </td>
-                <td>$${subscriber.balance.toFixed(2)}</td>
+                <td>$${((subscriber.balance != null && !isNaN(subscriber.balance)) ? subscriber.balance : 0).toFixed(2)}</td>
                 <td>${subscriber.expiration}</td>
                 <td>
                     <div>
@@ -1079,10 +1491,21 @@ class InsightsManager {
     }
     
     extractViewDetailsData(subscriber) {
+        // Admin limit should always be the quota set when creating the admin (not from API)
+        // Parse quota if it's a string (e.g., "15 GB" or "15")
+        let adminLimit = 0;
+        if (subscriber.quota) {
+            const quotaStr = String(subscriber.quota).trim();
+            const quotaMatch = quotaStr.match(/^([\d.]+)/);
+            adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+        } else if (subscriber.adminLimit) {
+            adminLimit = subscriber.adminLimit;
+        }
+        
         const data = {
             adminPhone: subscriber.phone,
             adminConsumption: subscriber.adminConsumption || 0,
-            adminLimit: subscriber.adminLimit || 0,
+            adminLimit: adminLimit, // Use quota, not API limit
             subscribers: [],
             totalConsumption: 0,
             totalLimit: 0
@@ -1107,6 +1530,54 @@ class InsightsManager {
             const parsed = parseConsumption(subscriber.alfaData.totalConsumption);
             data.totalConsumption = parsed.used;
             data.totalLimit = parsed.total || data.totalLimit;
+        }
+        
+        // Fallback: Extract admin consumption from primaryData if subscriber.adminConsumption is 0
+        if (data.adminConsumption === 0 && subscriber.alfaData && subscriber.alfaData.primaryData) {
+            try {
+                const primaryData = subscriber.alfaData.primaryData;
+                
+                // Try direct extraction from root level
+                if (primaryData.ConsumptionValue) {
+                    let consumption = parseFloat(primaryData.ConsumptionValue) || 0;
+                    const consumptionUnit = primaryData.ConsumptionUnitValue || '';
+                    if (consumptionUnit === 'MB' && consumption > 0) {
+                        consumption = consumption / 1024;
+                    }
+                    data.adminConsumption = consumption;
+                    
+                    // Don't update adminLimit from PackageValue - use subscriber.quota instead
+                    // adminLimit should always be the quota set when creating the admin
+                }
+                
+                // Try extraction from ServiceInformationValue structure (even if empty array, check structure)
+                if (data.adminConsumption === 0 && primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue)) {
+                    for (const service of primaryData.ServiceInformationValue) {
+                        if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                            for (const details of service.ServiceDetailsInformationValue) {
+                                const consumptionValue = details.ConsumptionValue || '';
+                                const consumptionUnit = details.ConsumptionUnitValue || '';
+                                
+                                if (consumptionValue) {
+                                    let consumption = parseFloat(consumptionValue) || 0;
+                                    if (consumptionUnit === 'MB' && consumption > 0) {
+                                        consumption = consumption / 1024;
+                                    }
+                                    data.adminConsumption = consumption;
+                                    
+                                    // Don't update adminLimit from PackageValue - use subscriber.quota instead
+                                    // adminLimit should always be the quota set when creating the admin
+                                    
+                                    if (data.adminConsumption > 0) break;
+                                }
+                            }
+                            if (data.adminConsumption > 0) break;
+                        }
+                    }
+                }
+            } catch (extractError) {
+                console.warn('⚠️ Error extracting admin consumption in View Details:', extractError);
+            }
         }
         
         // PRIORITY 1: Get subscriber data from secondarySubscribers array (from getconsumption API - most reliable)
@@ -1682,7 +2153,44 @@ class InsightsManager {
             // Fetch Alfa data from backend
             console.log('📡 Calling backend API with phone:', phone, 'adminId:', id);
             const response = await window.AlfaAPIService.fetchDashboardData(phone, password, id);
-            const alfaData = response.data;
+            
+            // Debug: Log the response structure
+            console.log('📦 API Response structure:', {
+                hasData: !!response.data,
+                responseKeys: response ? Object.keys(response) : null,
+                dataKeys: response.data ? Object.keys(response.data) : null,
+                hasNestedData: !!(response.data && response.data.data),
+                nestedDataKeys: (response.data && response.data.data) ? Object.keys(response.data.data) : null,
+                hasTotalConsumption: !!(response.data && (response.data.totalConsumption || (response.data.data && response.data.data.totalConsumption))),
+                hasAdminConsumption: !!(response.data && (response.data.adminConsumption || (response.data.data && response.data.data.adminConsumption))),
+                hasPrimaryData: !!(response.data && (response.data.primaryData || (response.data.data && response.data.data.primaryData)))
+            });
+            
+            // Extract alfaData - handle both nested and flat structures
+            // Backend returns: { success: true, data: { data: dashboardData, ... } }
+            // So we need to check if response.data.data exists (nested) or use response.data directly (flat)
+            const alfaData = (response.data && response.data.data) ? response.data.data : response.data;
+            
+            // Additional debug after extraction
+            console.log('📦 Extracted alfaData structure:', {
+                hasTotalConsumption: !!alfaData.totalConsumption,
+                hasAdminConsumption: !!alfaData.adminConsumption,
+                hasPrimaryData: !!alfaData.primaryData,
+                hasConsumptions: !!(alfaData.consumptions && alfaData.consumptions.length > 0),
+                alfaDataKeys: Object.keys(alfaData || {}),
+                totalConsumptionValue: alfaData.totalConsumption,
+                adminConsumptionValue: alfaData.adminConsumption
+            });
+            
+            // Validate that we have consumption data before saving
+            if (!alfaData.totalConsumption && !alfaData.adminConsumption && !alfaData.primaryData) {
+                console.error(`❌ [${id}] No consumption data found in API response!`, {
+                    alfaDataKeys: Object.keys(alfaData || {}),
+                    fullResponse: response
+                });
+                // Don't throw - allow the save to proceed, but log the issue
+                // The frontend extraction logic will try to extract from primaryData if available
+            }
             
             // Use the client-side timestamp when refresh was initiated (when user clicked refresh)
             // This ensures the time matches exactly when the user made the refresh
@@ -1703,7 +2211,11 @@ class InsightsManager {
                 console.log('💾 Saving to Firebase:', {
                     adminId: id,
                     lastRefreshTimestamp: refreshTimestamp,
-                    timestampDate: new Date(refreshTimestamp).toLocaleString()
+                    timestampDate: new Date(refreshTimestamp).toLocaleString(),
+                    hasTotalConsumption: !!alfaData.totalConsumption,
+                    hasAdminConsumption: !!alfaData.adminConsumption,
+                    hasPrimaryData: !!alfaData.primaryData,
+                    alfaDataKeys: Object.keys(alfaData || {})
                 });
                 
                 await db.collection('admins').doc(id).set({
@@ -1832,8 +2344,185 @@ class InsightsManager {
     }
     
     editSubscriber(id) {
-        console.log('Edit subscriber:', id);
-        // Implement edit functionality
+        // Navigate to admins page and open edit modal
+        // The admin ID is the same as subscriber ID
+        window.location.href = `/pages/admins.html#edit-${id}`;
+    }
+    
+    openAddSubscribersModal() {
+        const modal = document.getElementById('addSubscribersModal');
+        if (modal) {
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+            this.initAddSubscribersModal();
+        }
+    }
+    
+    closeAddSubscribersModal() {
+        const modal = document.getElementById('addSubscribersModal');
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+    }
+    
+    initAddSubscribersModal() {
+        const container = document.getElementById('subscribersItemsContainer');
+        if (!container) return;
+        
+        // Clear existing items
+        container.innerHTML = '';
+        
+        // Add first subscriber row
+        this.addSubscriberRow();
+        
+        // Bind add button
+        const addBtn = document.getElementById('addSubscriberRowBtn');
+        if (addBtn) {
+            addBtn.onclick = () => this.addSubscriberRow();
+        }
+        
+        // Bind form submit
+        const form = document.getElementById('addSubscribersForm');
+        if (form) {
+            form.onsubmit = (e) => {
+                e.preventDefault();
+                this.handleAddSubscribersSubmit();
+            };
+        }
+        
+        // Close modal on overlay click
+        const modal = document.getElementById('addSubscribersModal');
+        if (modal) {
+            modal.onclick = (e) => {
+                if (e.target === modal) {
+                    this.closeAddSubscribersModal();
+                }
+            };
+        }
+    }
+    
+    addSubscriberRow() {
+        const container = document.getElementById('subscribersItemsContainer');
+        if (!container) return;
+        
+        const itemIndex = container.children.length;
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'add-subscribers-item';
+        itemDiv.dataset.index = itemIndex;
+        
+        itemDiv.innerHTML = `
+            <div class="add-subscribers-item-fields">
+                <div class="add-subscribers-field">
+                    <label for="subscriber_${itemIndex}">Subscriber</label>
+                    <input type="tel" id="subscriber_${itemIndex}" name="items[${itemIndex}].subscriber" placeholder="Enter phone number" required>
+                </div>
+                <div class="add-subscribers-field">
+                    <label for="quota_${itemIndex}">Quota</label>
+                    <input type="number" id="quota_${itemIndex}" name="items[${itemIndex}].quota" step="any" placeholder="Enter quota" required>
+                </div>
+                <div class="add-subscribers-field">
+                    <label for="service_${itemIndex}">Service</label>
+                    <input type="text" id="service_${itemIndex}" name="items[${itemIndex}].service" placeholder="Enter service" required>
+                </div>
+            </div>
+            <button type="button" class="add-subscribers-remove-btn" onclick="insightsManager.removeSubscriberRow(this)">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M3 6.386c0-.484.345-.877.771-.877h2.665c.529-.016.996-.399 1.176-.965l.03-.1l.115-.391c.07-.24.131-.45.217-.637c.338-.739.964-1.252 1.687-1.383c.184-.033.378-.033.6-.033h3.478c.223 0 .417 0 .6.033c.723.131 1.35.644 1.687 1.383c.086.187.147.396.218.637l.114.391l.03.1c.18.566.74.95 1.27.965h2.57c.427 0 .772.393.772.877s-.345.877-.771.877H3.77c-.425 0-.77-.393-.77-.877"/>
+                    <path fill-rule="evenodd" d="M11.596 22h.808c2.783 0 4.174 0 5.08-.886c.904-.886.996-2.339 1.181-5.245l.267-4.188c.1-1.577.15-2.366-.303-2.865c-.454-.5-1.22-.5-2.753-.5H8.124c-1.533 0-2.3 0-2.753.5s-.404 1.288-.303 2.865l.267 4.188c.185 2.906.277 4.36 1.182 5.245c.905.886 2.296.886 5.079.886m-1.35-9.811c-.04-.434-.408-.75-.82-.707c-.413.043-.713.43-.672.864l.5 5.263c.04.434.408.75.82.707c.413-.043.713-.43.672-.864zm4.329-.707c.412.043.713.43.671.864l-.5 5.263c-.04.434-.409.75-.82.707c-.413-.043-.713-.43-.672-.864l.5-5.263c.04-.434.409-.75.82-.707" clip-rule="evenodd"/>
+                </svg>
+                Remove
+            </button>
+        `;
+        
+        container.appendChild(itemDiv);
+    }
+    
+    removeSubscriberRow(button) {
+        const item = button.closest('.add-subscribers-item');
+        if (item) {
+            item.remove();
+            // Re-index remaining items
+            const container = document.getElementById('subscribersItemsContainer');
+            if (container) {
+                Array.from(container.children).forEach((child, index) => {
+                    child.dataset.index = index;
+                    const inputs = child.querySelectorAll('input');
+                    inputs.forEach(input => {
+                        const name = input.name;
+                        if (name) {
+                            input.name = name.replace(/\[\d+\]/, `[${index}]`);
+                            input.id = input.id.replace(/\d+$/, index);
+                        }
+                        const label = child.querySelector(`label[for="${input.id}"]`);
+                        if (label) {
+                            label.setAttribute('for', input.id);
+                        }
+                    });
+                });
+            }
+        }
+    }
+    
+    async handleAddSubscribersSubmit() {
+        const form = document.getElementById('addSubscribersForm');
+        if (!form) return;
+        
+        const formData = new FormData(form);
+        const items = [];
+        
+        // Collect all subscriber items
+        const container = document.getElementById('subscribersItemsContainer');
+        if (container) {
+            const itemDivs = container.querySelectorAll('.add-subscribers-item');
+            itemDivs.forEach((itemDiv, index) => {
+                const subscriber = itemDiv.querySelector(`input[name="items[${index}].subscriber"]`)?.value.trim();
+                const quota = itemDiv.querySelector(`input[name="items[${index}].quota"]`)?.value.trim();
+                const service = itemDiv.querySelector(`input[name="items[${index}].service"]`)?.value.trim();
+                
+                if (subscriber && quota && service) {
+                    items.push({
+                        subscriber: subscriber,
+                        quota: parseFloat(quota) || 0,
+                        service: service
+                    });
+                }
+            });
+        }
+        
+        if (items.length === 0) {
+            alert('Please add at least one subscriber with all fields filled.');
+            return;
+        }
+        
+        // Disable submit button
+        const submitBtn = document.getElementById('shareSubscribersBtn');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Sharing...';
+        }
+        
+        try {
+            // TODO: Implement the actual API call to add subscribers
+            console.log('Submitting subscribers:', items);
+            
+            // Simulate API call
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            alert(`Successfully added ${items.length} subscriber(s)!`);
+            this.closeAddSubscribersModal();
+            
+            // Reset form
+            this.initAddSubscribersModal();
+        } catch (error) {
+            console.error('Error adding subscribers:', error);
+            alert('Failed to add subscribers. Please try again.');
+        } finally {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Share';
+            }
+        }
     }
     
     updatePagination() {
