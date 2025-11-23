@@ -158,10 +158,36 @@ async function updateDashboardData(adminId, dashboardData) {
       // Continue with empty currentData
     }
     
+    // Preserve critical fields that should not be overwritten
+    const preservedFields = {
+      name: currentData.name,
+      phone: currentData.phone,
+      password: currentData.password,
+      quota: currentData.quota,
+      type: currentData.type,
+      pendingSubscribers: Array.isArray(currentData.pendingSubscribers) ? currentData.pendingSubscribers : [], // CRITICAL: Preserve pending subscribers (always array)
+      removedSubscribers: Array.isArray(currentData.removedSubscribers) ? currentData.removedSubscribers : [], // Preserve removed subscribers (always array)
+      createdAt: currentData.createdAt,
+      updatedAt: currentData.updatedAt
+    };
+    
+    // Remove undefined values from preservedFields and currentData before merging
+    const cleanPreservedFields = removeUndefined(preservedFields);
+    const cleanCurrentData = removeUndefined(currentData || {});
+    
+    // Ensure arrays are never undefined
+    if (!cleanPreservedFields.pendingSubscribers) {
+      cleanPreservedFields.pendingSubscribers = [];
+    }
+    if (!cleanPreservedFields.removedSubscribers) {
+      cleanPreservedFields.removedSubscribers = [];
+    }
+    
     // Update document
     try {
       await setDoc(userDocRef, {
-        ...currentData,
+        ...cleanPreservedFields,
+        ...cleanCurrentData, // Include all other current data
         alfaData: cleanDashboardData,
         alfaDataFetchedAt: new Date().toISOString(),
         lastDataFetch: new Date().toISOString()
@@ -183,7 +209,237 @@ async function updateDashboardData(adminId, dashboardData) {
   }
 }
 
+/**
+ * Get admin data by adminId
+ * @param {string} adminId - Admin document ID
+ * @returns {Promise<{phone: string, password: string, name: string} | null>} Admin data
+ */
+async function getAdminData(adminId) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    console.log('ℹ️ Firebase is disabled via DISABLE_FIREBASE env var');
+    return null;
+  }
+  
+  // Check if Firebase is initialized
+  if (!db || !app) {
+    console.warn('⚠️ Firebase not initialized, cannot get admin data');
+    return null;
+  }
+  
+  try {
+    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
+    const adminDoc = await getDoc(adminDocRef);
+    
+    if (!adminDoc.exists()) {
+      console.warn(`⚠️ Admin document ${adminId} does not exist`);
+      return null;
+    }
+    
+    const data = adminDoc.data();
+    return {
+      phone: data.phone || '',
+      password: data.password || '',
+      name: data.name || ''
+    };
+  } catch (error) {
+    console.error(`❌ Error getting admin data for ${adminId}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Add a pending subscriber to an admin
+ * @param {string} adminId - Admin document ID
+ * @param {string} subscriberPhone - Subscriber phone number
+ * @param {number} quota - Quota in GB
+ * @returns {Promise<boolean>} Success status
+ */
+async function addPendingSubscriber(adminId, subscriberPhone, quota) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    console.log('ℹ️ Firebase is disabled via DISABLE_FIREBASE env var');
+    return false;
+  }
+  
+  // Check if Firebase is initialized
+  if (!db || !app) {
+    console.warn('⚠️ Firebase not initialized, cannot add pending subscriber');
+    return false;
+  }
+  
+  try {
+    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
+    const adminDoc = await getDoc(adminDocRef);
+    
+    if (!adminDoc.exists()) {
+      console.warn(`⚠️ Admin document ${adminId} does not exist`);
+      return false;
+    }
+    
+    const data = adminDoc.data();
+    const pendingSubscribers = data.pendingSubscribers || [];
+    
+    // Check if subscriber already exists (avoid duplicates)
+    const exists = pendingSubscribers.some(p => p.phone === subscriberPhone);
+    if (exists) {
+      console.log(`ℹ️ Pending subscriber ${subscriberPhone} already exists for admin ${adminId}`);
+      return true; // Consider it success since it already exists
+    }
+    
+    // Add new pending subscriber
+    pendingSubscribers.push({
+      phone: subscriberPhone,
+      quota: quota,
+      addedAt: new Date().toISOString()
+    });
+    
+    // Update document
+    await setDoc(adminDocRef, {
+      ...data,
+      pendingSubscribers: pendingSubscribers
+    }, { merge: true });
+    
+    console.log(`✅ Added pending subscriber ${subscriberPhone} (quota: ${quota} GB) to admin ${adminId}. Total pending: ${pendingSubscribers.length}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Error adding pending subscriber for ${adminId}:`, error.message);
+    return false;
+  }
+}
+
+/**
+ * Get pending subscribers for an admin
+ * @param {string} adminId - Admin document ID
+ * @returns {Promise<Array<{phone: string, quota: number, addedAt: string}>>} Pending subscribers
+ */
+async function getPendingSubscribers(adminId) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    return [];
+  }
+  
+  // Check if Firebase is initialized
+  if (!db || !app) {
+    return [];
+  }
+  
+  try {
+    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
+    const adminDoc = await getDoc(adminDocRef);
+    
+    if (!adminDoc.exists()) {
+      return [];
+    }
+    
+    const data = adminDoc.data();
+    return data.pendingSubscribers || [];
+  } catch (error) {
+    console.error(`❌ Error getting pending subscribers for ${adminId}:`, error.message);
+    return [];
+  }
+}
+
+/**
+ * Remove a pending subscriber from an admin (when they accept the invitation)
+ * @param {string} adminId - Admin document ID
+ * @param {string} subscriberPhone - Subscriber phone number
+ * @returns {Promise<boolean>} Success status
+ */
+async function removePendingSubscriber(adminId, subscriberPhone) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    return false;
+  }
+  
+  // Check if Firebase is initialized
+  if (!db || !app) {
+    return false;
+  }
+  
+  try {
+    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
+    const adminDoc = await getDoc(adminDocRef);
+    
+    if (!adminDoc.exists()) {
+      return false;
+    }
+    
+    const data = adminDoc.data();
+    const pendingSubscribers = (data.pendingSubscribers || []).filter(
+      p => p.phone !== subscriberPhone
+    );
+    
+    // Update document
+    await setDoc(adminDocRef, {
+      ...data,
+      pendingSubscribers: pendingSubscribers
+    }, { merge: true });
+    
+    console.log(`✅ Removed pending subscriber ${subscriberPhone} from admin ${adminId}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Error removing pending subscriber for ${adminId}:`, error.message);
+    return false;
+  }
+}
+
+/**
+ * Add a removed subscriber to track (for confirmed subscribers that were removed)
+ * @param {string} adminId - Admin document ID
+ * @param {string} subscriberPhone - Subscriber phone number
+ * @returns {Promise<boolean>} Success status
+ */
+async function addRemovedSubscriber(adminId, subscriberPhone) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    return false;
+  }
+  
+  // Check if Firebase is initialized
+  if (!db || !app) {
+    return false;
+  }
+  
+  try {
+    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
+    const adminDoc = await getDoc(adminDocRef);
+    
+    if (!adminDoc.exists()) {
+      return false;
+    }
+    
+    const data = adminDoc.data();
+    const removedSubscribers = data.removedSubscribers || [];
+    
+    // Check if subscriber already in removed list
+    if (removedSubscribers.includes(subscriberPhone)) {
+      return true; // Already tracked
+    }
+    
+    // Add to removed list
+    removedSubscribers.push(subscriberPhone);
+    
+    // Update document
+    await setDoc(adminDocRef, {
+      ...data,
+      removedSubscribers: removedSubscribers
+    }, { merge: true });
+    
+    console.log(`✅ Added removed subscriber ${subscriberPhone} to admin ${adminId}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Error adding removed subscriber for ${adminId}:`, error.message);
+    return false;
+  }
+}
+
 module.exports = {
-  updateDashboardData
+  updateDashboardData,
+  getAdminData,
+  addPendingSubscriber,
+  getPendingSubscribers,
+  removePendingSubscriber,
+  addRemovedSubscriber
 };
 

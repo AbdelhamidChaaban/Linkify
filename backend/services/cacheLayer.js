@@ -226,6 +226,38 @@ class CacheLayer {
     }
 
     /**
+     * Set key only if it doesn't exist (NX = Not eXists)
+     * @param {string} key - Redis key
+     * @param {string} value - Value to set
+     * @param {number} ttl - TTL in seconds
+     * @returns {Promise<boolean>} True if key was set (didn't exist), false if key already exists
+     */
+    async setNX(key, value, ttl) {
+        if (!this.enabled || !this.redis) {
+            return false;
+        }
+
+        try {
+            // Check if key exists first
+            const exists = await this.redis.exists(key);
+            if (exists === 1) {
+                return false; // Key already exists
+            }
+
+            // Set the key with TTL
+            if (ttl && ttl > 0) {
+                await this.redis.setex(key, ttl, value);
+            } else {
+                await this.redis.set(key, value);
+            }
+            return true; // Key was set successfully
+        } catch (error) {
+            console.warn(`⚠️ Redis setNX error for ${key}:`, error.message);
+            return false;
+        }
+    }
+
+    /**
      * Get last refresh timestamp
      * @param {string} identifier - User identifier
      * @returns {Promise<number|null>} Timestamp or null
@@ -310,6 +342,196 @@ class CacheLayer {
      */
     isAvailable() {
         return this.enabled && this.redis !== null;
+    }
+
+    /**
+     * Add member to sorted set (or update score if exists)
+     * @param {string} key - Sorted set key
+     * @param {string} member - Member to add
+     * @param {number} score - Score (timestamp)
+     * @returns {Promise<boolean>} Success status
+     */
+    async zadd(key, member, score) {
+        if (!this.enabled || !this.redis) {
+            return false;
+        }
+
+        try {
+            // Upstash Redis zadd format: zadd(key, { score, member })
+            // The @upstash/redis client uses object format
+            await this.redis.zadd(key, { score, member });
+            return true;
+        } catch (error) {
+            console.warn(`⚠️ Redis zadd error for ${key}:`, error.message);
+            return false;
+        }
+    }
+
+    /**
+     * Remove member from sorted set
+     * @param {string} key - Sorted set key
+     * @param {string} member - Member to remove
+     * @returns {Promise<boolean>} Success status
+     */
+    async zrem(key, member) {
+        if (!this.enabled || !this.redis) {
+            return false;
+        }
+
+        try {
+            // Upstash Redis zrem format: zrem(key, member)
+            await this.redis.zrem(key, member);
+            return true;
+        } catch (error) {
+            console.warn(`⚠️ Redis zrem error for ${key}:`, error.message);
+            return false;
+        }
+    }
+
+    /**
+     * Get range from sorted set with scores
+     * @param {string} key - Sorted set key
+     * @param {number} start - Start index
+     * @param {number} stop - Stop index
+     * @param {boolean} withScores - Include scores in result
+     * @returns {Promise<Array>} Array of members (and scores if withScores=true)
+     */
+    async zrange(key, start, stop, withScores = false) {
+        if (!this.enabled || !this.redis) {
+            return [];
+        }
+
+        try {
+            if (withScores) {
+                // Upstash Redis zrange with scores: zrange(key, start, stop, { withScores: true })
+                const result = await this.redis.zrange(key, start, stop, { withScores: true });
+                // Upstash returns object with member as key and score as value
+                if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+                    // Convert object to array of [member, score] pairs
+                    return Object.entries(result).map(([member, score]) => [member, parseFloat(score)]);
+                } else if (Array.isArray(result)) {
+                    // Handle array format (alternating member/score)
+                    const pairs = [];
+                    for (let i = 0; i < result.length; i += 2) {
+                        if (i + 1 < result.length) {
+                            pairs.push([result[i], parseFloat(result[i + 1])]);
+                        }
+                    }
+                    return pairs;
+                }
+                return [];
+            } else {
+                return await this.redis.zrange(key, start, stop);
+            }
+        } catch (error) {
+            console.warn(`⚠️ Redis zrange error for ${key}:`, error.message);
+            return [];
+        }
+    }
+
+    /**
+     * Get range from sorted set by score
+     * @param {string} key - Sorted set key
+     * @param {number|string} min - Minimum score (-inf for negative infinity)
+     * @param {number|string} max - Maximum score (+inf for positive infinity)
+     * @param {boolean} withScores - Include scores in result
+     * @returns {Promise<Array>} Array of members (and scores if withScores=true)
+     */
+    async zrangebyscore(key, min, max, withScores = false) {
+        if (!this.enabled || !this.redis) {
+            return [];
+        }
+
+        try {
+            // Try ZRANGE with BYSCORE option first
+            try {
+                if (withScores) {
+                    const result = await this.redis.zrange(key, min, max, { 
+                        byScore: true, 
+                        withScores: true 
+                    });
+                    
+                    if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+                        return Object.entries(result).map(([member, score]) => [member, parseFloat(score)]);
+                    } else if (Array.isArray(result)) {
+                        const pairs = [];
+                        for (let i = 0; i < result.length; i += 2) {
+                            if (i + 1 < result.length) {
+                                pairs.push([result[i], parseFloat(result[i + 1])]);
+                            }
+                        }
+                        return pairs;
+                    }
+                    return [];
+                } else {
+                    return await this.redis.zrange(key, min, max, { byScore: true });
+                }
+            } catch (e1) {
+                // Fallback: Get all members and filter by score
+                // This is less efficient but works if sorted set operations aren't fully supported
+                const allMembers = await this.redis.zrange(key, 0, -1, { withScores: true });
+                const filtered = [];
+                
+                if (Array.isArray(allMembers)) {
+                    for (let i = 0; i < allMembers.length; i += 2) {
+                        if (i + 1 < allMembers.length) {
+                            const member = allMembers[i];
+                            const score = parseFloat(allMembers[i + 1]);
+                            const minNum = min === '-inf' ? -Infinity : parseFloat(min);
+                            const maxNum = max === '+inf' ? Infinity : parseFloat(max);
+                            
+                            if (score >= minNum && score <= maxNum) {
+                                if (withScores) {
+                                    filtered.push([member, score]);
+                                } else {
+                                    filtered.push(member);
+                                }
+                            }
+                        }
+                    }
+                } else if (typeof allMembers === 'object' && allMembers !== null) {
+                    for (const [member, scoreStr] of Object.entries(allMembers)) {
+                        const score = parseFloat(scoreStr);
+                        const minNum = min === '-inf' ? -Infinity : parseFloat(min);
+                        const maxNum = max === '+inf' ? Infinity : parseFloat(max);
+                        
+                        if (score >= minNum && score <= maxNum) {
+                            if (withScores) {
+                                filtered.push([member, score]);
+                            } else {
+                                filtered.push(member);
+                            }
+                        }
+                    }
+                }
+                
+                return filtered;
+            }
+        } catch (error) {
+            console.warn(`⚠️ Redis zrangebyscore error for ${key}:`, error.message);
+            return [];
+        }
+    }
+
+    /**
+     * Get score of member in sorted set
+     * @param {string} key - Sorted set key
+     * @param {string} member - Member
+     * @returns {Promise<number|null>} Score or null
+     */
+    async zscore(key, member) {
+        if (!this.enabled || !this.redis) {
+            return null;
+        }
+
+        try {
+            // Upstash Redis zscore format: zscore(key, member)
+            const score = await this.redis.zscore(key, member);
+            return score !== null ? parseFloat(score) : null;
+        } catch (error) {
+            console.warn(`⚠️ Redis zscore error for ${key}:`, error.message);
+            return null;
+        }
     }
 
     /**

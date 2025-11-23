@@ -1,0 +1,342 @@
+/* Edit Subscribers Modal Styles */
+
+.edit-subscribers-modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    z-index: 10000;
+    overflow-y: auto;
+    padding: 2rem;
+}
+
+.edit-subscribers-modal-overlay.show {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+}
+
+.edit-subscribers-modal-container {
+    background: linear-gradient(135deg, rgba(13, 17, 32, 0.98) 0%, rgba(90, 33, 182, 0.35) 43%, rgba(13, 17, 32, 0.98) 100%);
+    border: 1px solid rgba(58, 10, 78, 0.5);
+    border-radius: 1.2rem;
+    width: 100%;
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 2rem;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+}
+
+body.light-mode .edit-subscribers-modal-container {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(240, 245, 255, 0.6) 43%, rgba(255, 255, 255, 0.98) 100%);
+    border-color: rgba(90, 33, 182, 0.2);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.edit-subscribers-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+}
+
+.edit-subscribers-header-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.edit-subscribers-title {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #f8fafc;
+    line-height: 1.2;
+}
+
+body.light-mode .edit-subscribers-title {
+    color: #1e293b;
+}
+
+.edit-subscribers-breadcrumbs {
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.edit-subscribers-breadcrumbs a {
+    color: #94a3b8;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.edit-subscribers-breadcrumbs a:hover {
+    color: #8b5cf6;
+    text-decoration: underline;
+}
+
+.breadcrumb-separator {
+    color: #64748b;
+}
+
+.edit-subscribers-close {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    transition: all 0.2s;
+}
+
+.edit-subscribers-close:hover {
+    background: rgba(139, 92, 246, 0.1);
+    color: #8b5cf6;
+}
+
+.edit-subscribers-close svg {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.edit-subscribers-content {
+    margin-bottom: 2rem;
+}
+
+.edit-subscribers-admin-info {
+    margin-bottom: 1.5rem;
+}
+
+.edit-subscribers-admin-name {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #f8fafc;
+}
+
+body.light-mode .edit-subscribers-admin-name {
+    color: #1e293b;
+}
+
+.edit-subscribers-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.edit-subscriber-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 0;
+    position: relative;
+}
+
+.edit-subscriber-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1rem;
+    flex: 1;
+}
+
+.edit-subscriber-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.edit-subscriber-field label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #94a3b8;
+}
+
+body.light-mode .edit-subscriber-field label {
+    color: #64748b;
+}
+
+.edit-subscriber-input {
+    padding: 0.625rem 0.875rem;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(100, 116, 139, 0.3);
+    border-radius: 0.5rem;
+    color: #f8fafc;
+    font-size: 0.875rem;
+    transition: all 0.2s;
+}
+
+body.light-mode .edit-subscriber-input {
+    background: rgba(241, 245, 249, 0.8);
+    border-color: rgba(148, 163, 184, 0.3);
+    color: #1e293b;
+}
+
+.edit-subscriber-input:focus {
+    outline: none;
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+}
+
+.edit-subscriber-input.readonly {
+    background: rgba(30, 41, 59, 0.3);
+    color: #64748b;
+    cursor: not-allowed;
+}
+
+body.light-mode .edit-subscriber-input.readonly {
+    background: rgba(241, 245, 249, 0.5);
+    color: #94a3b8;
+}
+
+.edit-subscriber-pending-badge {
+    padding: 0.25rem 0.75rem;
+    background: rgba(139, 92, 246, 0.2);
+    color: #a78bfa;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.edit-subscriber-remove-btn {
+    background: transparent;
+    border: none;
+    color: #ef4444;
+    cursor: pointer;
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    border-radius: 0.5rem;
+    transition: all 0.2s;
+}
+
+.edit-subscriber-remove-btn:hover {
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.edit-subscriber-remove-btn svg {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.edit-subscriber-divider {
+    border: none;
+    border-top: 1px solid rgba(100, 116, 139, 0.2);
+    margin: 0;
+}
+
+body.light-mode .edit-subscriber-divider {
+    border-top-color: rgba(148, 163, 184, 0.3);
+}
+
+.edit-subscribers-divider {
+    border: none;
+    border-top: 1px solid rgba(100, 116, 139, 0.2);
+    margin: 1.5rem 0;
+}
+
+body.light-mode .edit-subscribers-divider {
+    border-top-color: rgba(148, 163, 184, 0.3);
+}
+
+.edit-subscribers-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.edit-subscribers-add-btn {
+    background: transparent;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    color: #8b5cf6;
+    cursor: pointer;
+    padding: 0.625rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    border-radius: 0.5rem;
+    transition: all 0.2s;
+}
+
+.edit-subscribers-add-btn:hover {
+    background: rgba(139, 92, 246, 0.1);
+    border-color: #8b5cf6;
+}
+
+.edit-subscribers-add-btn svg {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.edit-subscribers-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 1.5rem;
+    border-top: 1px solid rgba(100, 116, 139, 0.2);
+}
+
+body.light-mode .edit-subscribers-footer {
+    border-top-color: rgba(148, 163, 184, 0.3);
+}
+
+.edit-subscribers-submit-btn {
+    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+    border: none;
+    color: #ffffff;
+    cursor: pointer;
+    padding: 0.75rem 2rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border-radius: 0.5rem;
+    transition: all 0.2s;
+    box-shadow: 0 4px 6px -1px rgba(139, 92, 246, 0.3);
+}
+
+.edit-subscribers-submit-btn:hover {
+    background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+    box-shadow: 0 6px 8px -1px rgba(139, 92, 246, 0.4);
+    transform: translateY(-1px);
+}
+
+.edit-subscribers-submit-btn:active {
+    transform: translateY(0);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .edit-subscribers-modal-overlay {
+        padding: 1rem;
+    }
+    
+    .edit-subscribers-modal-container {
+        padding: 1.5rem;
+        margin: 1rem auto;
+    }
+    
+    .edit-subscriber-fields {
+        grid-template-columns: 1fr;
+    }
+    
+    .edit-subscriber-item {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .edit-subscriber-remove-btn {
+        align-self: flex-end;
+    }
+}
+

@@ -342,10 +342,11 @@ function extractFromGetMyServices(apiResponseData) {
  */
 function extractExpiration(apiResponseData) {
     if (apiResponseData !== null && apiResponseData !== undefined && apiResponseData !== '') {
-                const expiryDays = typeof apiResponseData === 'number' ? apiResponseData : parseInt(apiResponseData);
-                if (!isNaN(expiryDays)) {
-                    return expiryDays;
-                }
+        const expiryDays = typeof apiResponseData === 'number' ? apiResponseData : parseInt(apiResponseData);
+        // Return null if NaN, 0, or negative (invalid expiration)
+        if (!isNaN(expiryDays) && expiryDays > 0) {
+            return expiryDays;
+        }
     }
     return null;
 }

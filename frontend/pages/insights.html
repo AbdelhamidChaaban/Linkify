@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/shared/layout.css">
     <link rel="stylesheet" href="/pages/insights.css">
     <link rel="stylesheet" href="/pages/add-subscribers-modal.css">
+    <link rel="stylesheet" href="/pages/edit-subscribers-modal.css">
 </head>
 <body class="insights-page">
     <!-- Navigation -->
@@ -62,18 +63,12 @@
             <!-- Page Header with Breadcrumbs -->
             <div class="page-header-section">
                 <div class="header-left">
-                    <h4 class="page-title">Services</h4>
+                    <h4 class="page-title">Insights</h4>
                     <nav class="breadcrumbs">
                         <ol class="breadcrumbs-list">
                             <li class="breadcrumb-item">
-                                <a href="/pages/home.html" class="breadcrumb-link">Dashboard</a>
+                                <a href="/pages/home.html" class="breadcrumb-link">Home</a>
                                 </li>
-                                <li aria-hidden="true" class="breadcrumb-separator">
-                                    <span>/</span>
-                                </li>
-                                <li class="breadcrumb-item">
-                                    <a href="/pages/insights.html" class="breadcrumb-link active">Services</a>
-                            </li>
                         </ol>
                     </nav>
                 </div>
@@ -233,13 +228,13 @@
                     <nav class="add-subscribers-breadcrumbs">
                         <ol class="breadcrumbs-list">
                             <li class="breadcrumb-item">
-                                <a href="/pages/home.html" class="breadcrumb-link">Dashboard</a>
+                                <a href="/pages/home.html" class="breadcrumb-link">Home</a>
                             </li>
                             <li aria-hidden="true" class="breadcrumb-separator">
                                 <span>/</span>
                             </li>
                             <li class="breadcrumb-item">
-                                <a href="/pages/insights.html" class="breadcrumb-link">Service</a>
+                                <a href="/pages/insights.html" class="breadcrumb-link">Insights</a>
                             </li>
                             <li aria-hidden="true" class="breadcrumb-separator">
                                 <span>/</span>
@@ -282,6 +277,73 @@
                             </button>
                         </div>
                     </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Admin Selection Modal -->
+    <div class="admin-selector-modal-overlay" id="adminSelectorModal">
+        <div class="admin-selector-modal-container">
+            <div class="admin-selector-header">
+                <h5 class="admin-selector-title">Select Admin</h5>
+                <button class="admin-selector-close" onclick="insightsManager.closeAdminSelector()" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="admin-selector-content">
+                <div class="admin-selector-search">
+                    <input type="text" id="adminSelectorSearch" placeholder="Search admins..." class="admin-selector-search-input">
+                </div>
+                <div class="admin-selector-list" id="adminSelectorList">
+                    <!-- Active admins will be populated here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Subscribers Modal -->
+    <div class="edit-subscribers-modal-overlay" id="editSubscribersModal">
+        <div class="edit-subscribers-modal-container">
+            <div class="edit-subscribers-header">
+                <div class="edit-subscribers-header-content">
+                    <h4 class="edit-subscribers-title">Edit</h4>
+                    <nav class="edit-subscribers-breadcrumbs">
+                        <a href="/pages/home.html">Home</a>
+                        <span class="breadcrumb-separator">/</span>
+                        <a href="/pages/insights.html">Insights</a>
+                    </nav>
+                </div>
+                <button class="edit-subscribers-close" onclick="insightsManager.closeEditSubscribersModal()" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <form id="editSubscribersForm">
+                <div class="edit-subscribers-content">
+                    <div class="edit-subscribers-admin-info" id="editSubscribersAdminInfo">
+                        <!-- Admin name and phone will be populated here -->
+                    </div>
+                    <div class="edit-subscribers-items" id="editSubscribersItems">
+                        <!-- Subscriber items will be populated here -->
+                    </div>
+                    <hr class="edit-subscribers-divider">
+                    <div class="edit-subscribers-actions">
+                        <button type="button" class="edit-subscribers-add-btn" id="editSubscribersAddBtn">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 5v14M5 12h14"/>
+                            </svg>
+                            Add Subscriber
+                        </button>
+                    </div>
+                </div>
+                <div class="edit-subscribers-footer">
+                    <button type="submit" class="edit-subscribers-submit-btn" id="editSubscribersSubmitBtn">
+                        Apply
+                    </button>
                 </div>
             </form>
         </div>

@@ -213,22 +213,25 @@ function makeRequest(options, timeout) {
 /**
  * Fetch all three API endpoints in parallel
  * @param {Array} cookies - Array of cookie objects
+ * @param {Object} options - Options for API calls
+ * @param {number} options.maxRetries - Maximum retries (default: 2, use 0-1 for manual refresh)
  * @returns {Promise<Object>} Object with expiry, services, and consumption data
  */
-async function fetchAllApis(cookies) {
+async function fetchAllApis(cookies, options = {}) {
+    const { maxRetries = 2 } = options;
     const endpoints = [
         { key: 'expiry', path: '/en/account/getexpirydate', timeout: 3000 },
         { key: 'services', path: '/en/account/manage-services/getmyservices', timeout: 8000 }, // Longer timeout for getmyservices
         { key: 'consumption', path: '/en/account/getconsumption', timeout: 3000 }
     ];
 
-    console.log('🚀 Fetching all APIs in parallel...');
+    console.log(`🚀 Fetching all APIs in parallel... (maxRetries: ${maxRetries})`);
     const startTime = Date.now();
 
     try {
         const results = await Promise.all(
             endpoints.map(endpoint => 
-                apiRequest(endpoint.path, cookies, { timeout: endpoint.timeout })
+                apiRequest(endpoint.path, cookies, { timeout: endpoint.timeout, maxRetries })
                     .then(data => ({ key: endpoint.key, data, success: true }))
                     .catch(error => ({ key: endpoint.key, error, success: false }))
             )
