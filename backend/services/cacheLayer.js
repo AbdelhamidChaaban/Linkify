@@ -226,6 +226,25 @@ class CacheLayer {
     }
 
     /**
+     * Generic delete method for Redis keys
+     * @param {string} key - Redis key to delete
+     * @returns {Promise<boolean>} Success status
+     */
+    async del(key) {
+        if (!this.enabled || !this.redis) {
+            return false;
+        }
+
+        try {
+            await this.redis.del(key);
+            return true;
+        } catch (error) {
+            console.warn(`⚠️ Redis del error for ${key}:`, error.message);
+            return false;
+        }
+    }
+
+    /**
      * Set key only if it doesn't exist (NX = Not eXists)
      * @param {string} key - Redis key
      * @param {string} value - Value to set

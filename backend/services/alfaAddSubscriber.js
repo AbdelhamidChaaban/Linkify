@@ -1,8 +1,15 @@
+const axios = require('axios');
+const { URLSearchParams } = require('url');
 const browserPool = require('./browserPool');
 const { getSession } = require('./sessionManager');
-const { getCookies, areCookiesExpired, acquireRefreshLock, releaseRefreshLock } = require('./cookieManager');
+const { getCookies, areCookiesExpired, acquireRefreshLock, releaseRefreshLock, loginAndSaveCookies, getCookieExpiry } = require('./cookieManager');
 const { loginToAlfa } = require('./alfaLogin');
+const { formatCookiesForHeader } = require('./apiClient');
+const { getAdminData } = require('./firebaseDbService');
+const { addPendingSubscriber } = require('./firebaseDbService');
+const { pseudoKeepAlive } = require('./pseudoKeepAlive');
 
+const ALFA_BASE_URL = 'https://www.alfa.com.lb';
 const ALFA_DASHBOARD_URL = 'https://www.alfa.com.lb/en/account';
 const ALFA_MANAGE_SERVICES_URL = 'https://www.alfa.com.lb/en/account/manage-services';
 const ALFA_USHARE_BASE_URL = 'https://www.alfa.com.lb/en/account/manage-services/ushare';
@@ -12,7 +19,166 @@ function delay(ms) {
 }
 
 /**
- * Add a subscriber to an admin's u-share service
+ * API-first subscriber addition: Direct POST to Alfa's hidden endpoint
+ * @param {string} adminId - Admin ID
+ * @param {string} adminPhone - Admin phone number (8 digits)
+ * @param {Array} cookies - Array of cookie objects
+ * @param {string} subscriberPhone - Subscriber phone number (8 digits)
+ * @param {number} quota - Quota in GB
+ * @param {number} maxQuota - Maximum quota allowed
+ * @param {string} csrfToken - CSRF token from page
+ * @returns {Promise<{success: boolean, needsLogin: boolean, needsPuppeteer: boolean, error?: string}>}
+ */
+async function addSubscriberApiFirst(adminId, adminPhone, cookies, subscriberPhone, quota, maxQuota, csrfToken) {
+    try {
+        const cleanSubscriberPhone = subscriberPhone.replace(/\D/g, '').substring(0, 8);
+        if (cleanSubscriberPhone.length !== 8) {
+            return { success: false, needsPuppeteer: true, error: 'Invalid subscriber phone' };
+        }
+
+        // Format cookies as header string
+        const cookieHeader = formatCookiesForHeader(cookies);
+        
+        // Build URL with mobileNumber query parameter
+        const url = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+        
+        // Build form data
+        const formData = new URLSearchParams();
+        formData.append('mobileNumber', adminPhone);
+        formData.append('Number', cleanSubscriberPhone);
+        formData.append('Quota', quota.toString());
+        formData.append('MaxQuota', maxQuota.toString());
+        formData.append('__RequestVerificationToken', csrfToken);
+        
+        console.log(`🚀 [API-First] POST ${url}`);
+        console.log(`   Payload: Number=${cleanSubscriberPhone}, Quota=${quota}, MaxQuota=${maxQuota}`);
+        
+        // Make POST request with maxRedirects: 0 to detect 302 manually
+        const response = await axios.post(url, formData.toString(), {
+            headers: {
+                'Cookie': cookieHeader,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`
+            },
+            maxRedirects: 0, // Don't auto-follow redirects
+            validateStatus: (status) => status >= 200 && status < 400, // Accept 2xx and 3xx
+            timeout: 10000 // 10 second timeout
+        });
+        
+        // Check response status
+        if (response.status === 302 || response.status === 301) {
+            // 302 redirect = success (Alfa redirects after successful submission)
+            const location = response.headers.location || '';
+            if (location.includes('/login')) {
+                // Redirected to login = cookies expired
+                console.log(`⚠️ [API-First] Redirected to login (${response.status}), cookies expired`);
+                return { success: false, needsLogin: true };
+            }
+            // Other redirect = success
+            console.log(`✅ [API-First] Success (${response.status} redirect to ${location})`);
+            return { success: true };
+        } else if (response.status === 200) {
+            // 200 OK might also indicate success
+            console.log(`✅ [API-First] Success (200 OK)`);
+            return { success: true };
+        } else {
+            console.log(`⚠️ [API-First] Unexpected status: ${response.status}`);
+            return { success: false, needsPuppeteer: true, error: `Unexpected status: ${response.status}` };
+        }
+    } catch (error) {
+        if (error.response) {
+            const status = error.response.status;
+            if (status === 401 || status === 403) {
+                console.log(`⚠️ [API-First] Unauthorized (${status}), cookies expired`);
+                return { success: false, needsLogin: true };
+            } else if (status === 302 || status === 301) {
+                const location = error.response.headers.location || '';
+                if (location.includes('/login')) {
+                    console.log(`⚠️ [API-First] Redirected to login (${status}), cookies expired`);
+                    return { success: false, needsLogin: true };
+                }
+                // Other redirect = success
+                console.log(`✅ [API-First] Success (${status} redirect)`);
+                return { success: true };
+            } else {
+                console.log(`⚠️ [API-First] HTTP error (${status}): ${error.message}`);
+                return { success: false, needsPuppeteer: true, error: `HTTP ${status}` };
+            }
+        } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+            console.log(`⚠️ [API-First] Timeout: ${error.message}`);
+            return { success: false, needsPuppeteer: true, error: 'Request timeout' };
+        } else {
+            console.log(`⚠️ [API-First] Network error: ${error.message}`);
+            return { success: false, needsPuppeteer: true, error: error.message };
+        }
+    }
+}
+
+/**
+ * Extract CSRF token and MaxQuota from ushare page
+ * @param {string} adminPhone - Admin phone number (8 digits)
+ * @param {Array} cookies - Array of cookie objects
+ * @returns {Promise<{token: string, maxQuota: number} | null>}
+ */
+async function extractCsrfTokenAndMaxQuota(adminPhone, cookies) {
+    try {
+        const cookieHeader = formatCookiesForHeader(cookies);
+        const url = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+        
+        const response = await axios.get(url, {
+            headers: {
+                'Cookie': cookieHeader,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': ALFA_DASHBOARD_URL
+            },
+            maxRedirects: 0,
+            validateStatus: (status) => status >= 200 && status < 400,
+            timeout: 10000
+        });
+        
+        // Check if redirected to login
+        if (response.status === 302 || response.status === 301) {
+            const location = response.headers.location || '';
+            if (location.includes('/login')) {
+                console.log(`⚠️ [CSRF Extract] Redirected to login, cookies expired`);
+                return null;
+            }
+        }
+        
+        // Extract CSRF token and MaxQuota from HTML
+        const html = response.data;
+        const tokenMatch = html.match(/name="__RequestVerificationToken"\s+value="([^"]+)"/);
+        const maxQuotaMatch = html.match(/id="MaxQuota"\s+value="([^"]+)"/);
+        
+        if (!tokenMatch) {
+            console.log(`⚠️ [CSRF Extract] Could not find CSRF token`);
+            return null;
+        }
+        
+        const token = tokenMatch[1];
+        const maxQuota = maxQuotaMatch ? parseFloat(maxQuotaMatch[1]) : 70; // Default to 70 if not found
+        
+        console.log(`✅ [CSRF Extract] Found token and MaxQuota: ${maxQuota}`);
+        return { token, maxQuota };
+    } catch (error) {
+        if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+            console.log(`⚠️ [CSRF Extract] Unauthorized, cookies expired`);
+            return null;
+        } else if (error.response && (error.response.status === 302 || error.response.status === 301)) {
+            const location = error.response.headers.location || '';
+            if (location.includes('/login')) {
+                console.log(`⚠️ [CSRF Extract] Redirected to login, cookies expired`);
+                return null;
+            }
+        }
+        console.log(`⚠️ [CSRF Extract] Error: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * Add a subscriber to an admin's u-share service (API-first with Puppeteer fallback)
  * @param {string} adminId - Admin ID
  * @param {string} adminPhone - Admin phone number (8 digits)
  * @param {string} adminPassword - Admin password (for login if cookies expired)
@@ -29,14 +195,6 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
         console.log(`🔵 Starting add subscriber operation for admin: ${adminId}`);
         console.log(`   Subscriber: ${subscriberPhone}, Quota: ${quota} GB`);
 
-        // Acquire refresh lock to prevent cookie worker from interfering
-        refreshLockAcquired = await acquireRefreshLock(adminId, 300); // 5 minute lock
-        if (!refreshLockAcquired) {
-            // Lock already exists (worker or another operation is active)
-            // This is unlikely for add subscriber, but handle gracefully
-            console.log(`⏸️ [${adminId}] Refresh lock exists, but proceeding with add subscriber...`);
-        }
-
         // Validate inputs
         const cleanSubscriberPhone = subscriberPhone.replace(/\D/g, '').substring(0, 8);
         if (cleanSubscriberPhone.length !== 8) {
@@ -47,50 +205,221 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
             throw new Error(`Quota must be between 0.1 and 70 GB. Got: ${quota}`);
         }
 
+        // Acquire refresh lock to prevent cookie worker from interfering
+        refreshLockAcquired = await acquireRefreshLock(adminId, 300); // 5 minute lock
+        if (!refreshLockAcquired) {
+            console.log(`⏸️ [${adminId}] Refresh lock exists, but proceeding with add subscriber...`);
+        }
+
+        // Get admin's cookies from Redis (prefer cookieManager over sessionManager)
+        console.log(`🔑 Getting cookies for admin: ${adminId}`);
+        let cookies = await getCookies(adminId || adminPhone);
+        
+        // Fallback to sessionManager if cookieManager has no cookies
+        if (!cookies || cookies.length === 0) {
+            const savedSession = await getSession(adminId || adminPhone);
+            if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
+                cookies = savedSession.cookies;
+                console.log(`✅ Found ${cookies.length} cookies from sessionManager`);
+            }
+        } else {
+            console.log(`✅ Found ${cookies.length} cookies from cookieManager`);
+        }
+
+        // Check if cookies are valid using Redis expiry timestamp (more reliable than cookie expires field)
+        let cookiesValid = false;
+        if (cookies && cookies.length > 0) {
+            // First check Redis cookie expiry timestamp (most reliable)
+            const cookieExpiry = await getCookieExpiry(adminId || adminPhone);
+            const now = Date.now();
+            
+            console.log(`🔍 [Cookie Validation] Checking cookie validity for ${adminId}`);
+            console.log(`   Cookies found: ${cookies.length}`);
+            console.log(`   Redis expiry: ${cookieExpiry ? new Date(cookieExpiry).toISOString() : 'null'}`);
+            console.log(`   Current time: ${new Date(now).toISOString()}`);
+            
+            if (cookieExpiry && typeof cookieExpiry === 'number' && !isNaN(cookieExpiry)) {
+                // Ensure cookieExpiry is in milliseconds (not seconds)
+                const expiryMs = cookieExpiry > 10000000000 ? cookieExpiry : cookieExpiry * 1000;
+                
+                if (expiryMs > now) {
+                    // Redis expiry timestamp says cookies are still valid
+                    cookiesValid = true;
+                    const timeRemaining = Math.floor((expiryMs - now) / 1000 / 60);
+                    console.log(`✅ Cookies are valid (Redis expiry: ${new Date(expiryMs).toISOString()}, ${timeRemaining} minutes remaining)`);
+                } else {
+                    // Redis expiry timestamp says cookies are expired
+                    const timeExpired = Math.floor((now - expiryMs) / 1000 / 60);
+                    console.log(`⚠️ Cookies are expired (Redis expiry: ${new Date(expiryMs).toISOString()}, expired ${timeExpired} minutes ago)`);
+                    cookiesValid = false;
+                }
+            } else {
+                // No Redis expiry timestamp - fall back to checking cookie expires field
+                console.log(`⚠️ No Redis expiry timestamp found, falling back to cookie expires field check`);
+                const areExpired = areCookiesExpired(cookies);
+                cookiesValid = !areExpired;
+                if (cookiesValid) {
+                    console.log(`✅ Cookies are valid (no Redis expiry, checked cookie expires field - not expired)`);
+                } else {
+                    console.log(`⚠️ Cookies appear expired (checked cookie expires field - found expired cookie)`);
+                }
+            }
+        } else {
+            console.log(`⚠️ [Cookie Validation] No cookies found`);
+        }
+
+        // STEP 1: Try API-first approach if we have valid cookies
+        if (cookiesValid) {
+            console.log(`🚀 [API-First] Attempting direct POST to Alfa endpoint...`);
+            
+            // First, verify cookies are actually valid with a keep-alive check
+            console.log(`🔍 [API-First] Verifying cookies with keep-alive check...`);
+            const keepAliveResult = await pseudoKeepAlive(adminId, cookies);
+            
+            if (!keepAliveResult.success) {
+                // Check if it's a timeout/network error vs actual cookie expiration
+                const isTimeout = keepAliveResult.error && (
+                    keepAliveResult.error.includes('timeout') || 
+                    keepAliveResult.error.includes('Request timeout') ||
+                    keepAliveResult.error.includes('socket hang up') ||
+                    keepAliveResult.error.includes('Network error')
+                );
+                
+                if (isTimeout) {
+                    // Timeout = network issue, not necessarily expired cookies
+                    // Proceed with CSRF extraction anyway - if cookies are expired, CSRF extraction will fail
+                    console.log(`⚠️ [API-First] Keep-alive timeout (network issue), but cookies may still be valid. Proceeding with CSRF extraction...`);
+                    // Don't mark cookies as invalid - let CSRF extraction determine if they're expired
+                } else {
+                    // 302/401 = cookies actually expired
+                    console.log(`⚠️ [API-First] Keep-alive check failed (${keepAliveResult.error || 'unknown'}), cookies expired. Will perform login...`);
+                    cookiesValid = false;
+                }
+            } else {
+                console.log(`✅ [API-First] Keep-alive check passed, cookies are actually valid. Proceeding with CSRF extraction...`);
+                // Update cookies if keep-alive returned new ones
+                if (keepAliveResult.cookies && keepAliveResult.cookies.length > 0) {
+                    cookies = keepAliveResult.cookies;
+                    console.log(`✅ [API-First] Updated cookies from keep-alive response`);
+                }
+            }
+        }
+        
+        // STEP 1b: Extract CSRF token if cookies are still valid after keep-alive check
+        if (cookiesValid) {
+            // Extract CSRF token and MaxQuota from ushare page
+            const csrfData = await extractCsrfTokenAndMaxQuota(adminPhone, cookies);
+            
+            if (csrfData && csrfData.token) {
+                // Try API-first POST
+                const apiResult = await addSubscriberApiFirst(
+                    adminId,
+                    adminPhone,
+                    cookies,
+                    cleanSubscriberPhone,
+                    quota,
+                    csrfData.maxQuota,
+                    csrfData.token
+                );
+                
+                if (apiResult.success) {
+                    // API-first succeeded - update Firebase immediately
+                    console.log(`✅ [API-First] Subscriber addition successful via API`);
+                    await addPendingSubscriber(adminId, cleanSubscriberPhone, quota);
+                    
+                    if (refreshLockAcquired) {
+                        await releaseRefreshLock(adminId).catch(() => {});
+                    }
+                    
+                    return {
+                        success: true,
+                        message: `Subscriber invitation sent successfully. SMS sent to ${cleanSubscriberPhone}. The subscriber will appear after accepting the invitation.`
+                    };
+                } else if (apiResult.needsLogin) {
+                    // Cookies expired - perform login and retry
+                    console.log(`⚠️ [API-First] Cookies expired, performing login and retrying...`);
+                    
+                    // Get admin credentials from Firebase if not provided
+                    let phone = adminPhone;
+                    let password = adminPassword;
+                    if (!password) {
+                        const adminData = await getAdminData(adminId);
+                        if (!adminData || !adminData.phone || !adminData.password) {
+                            throw new Error('Cookies expired and password not provided for login');
+                        }
+                        phone = adminData.phone;
+                        password = adminData.password;
+                    }
+                    
+                    // Perform full login
+                    await loginAndSaveCookies(phone, password, adminId);
+                    cookies = await getCookies(adminId);
+                    
+                    // Retry API-first with fresh cookies
+                    const csrfDataRetry = await extractCsrfTokenAndMaxQuota(adminPhone, cookies);
+                    if (csrfDataRetry && csrfDataRetry.token) {
+                        const apiResultRetry = await addSubscriberApiFirst(
+                            adminId,
+                            adminPhone,
+                            cookies,
+                            cleanSubscriberPhone,
+                            quota,
+                            csrfDataRetry.maxQuota,
+                            csrfDataRetry.token
+                        );
+                        
+                        if (apiResultRetry.success) {
+                            // API-first succeeded after login retry
+                            console.log(`✅ [API-First] Subscriber addition successful after login retry`);
+                            await addPendingSubscriber(adminId, cleanSubscriberPhone, quota);
+                            
+                            if (refreshLockAcquired) {
+                                await releaseRefreshLock(adminId).catch(() => {});
+                            }
+                            
+                            return {
+                                success: true,
+                                message: `Subscriber invitation sent successfully. SMS sent to ${cleanSubscriberPhone}. The subscriber will appear after accepting the invitation.`
+                            };
+                        }
+                    }
+                    
+                    // API-first failed after login retry - fall back to Puppeteer
+                    console.log(`⚠️ [API-First] Failed after login retry, falling back to Puppeteer...`);
+                } else {
+                    // API-first failed for other reasons - fall back to Puppeteer
+                    console.log(`⚠️ [API-First] Failed (${apiResult.error}), falling back to Puppeteer...`);
+                }
+            } else {
+                // Could not extract CSRF token - cookies might be expired
+                console.log(`⚠️ [API-First] Could not extract CSRF token, cookies may be expired`);
+            }
+        } else {
+            console.log(`⚠️ [API-First] No valid cookies found, will use Puppeteer...`);
+        }
+
+        // STEP 2: Fallback to Puppeteer form automation
+        console.log(`🔄 [Puppeteer] Falling back to Puppeteer form automation...`);
+        
         // Get a new isolated browser context from the pool
         const contextData = await browserPool.createContext();
         context = contextData.context;
         page = contextData.page;
 
-        // Get admin's cookies from Redis
-        console.log(`🔑 Getting cookies for admin: ${adminId}`);
-        const savedSession = await getSession(adminId || adminPhone);
-        let cookies = null;
-        let cookiesExpired = false;
-
-        if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
-            cookies = savedSession.cookies;
-            // Check if cookies are expired
-            cookiesExpired = areCookiesExpired(cookies) || savedSession.needsRefresh;
-            if (cookiesExpired) {
-                console.log(`⚠️ Found ${cookies.length} cookies but they are expired`);
-            } else {
-                console.log(`✅ Found ${cookies.length} cookies in session (valid)`);
-            }
-        } else {
-            // Try cookieManager as fallback
-            const cookieManagerCookies = await getCookies(adminId || adminPhone);
-            if (cookieManagerCookies && cookieManagerCookies.length > 0) {
-                cookies = cookieManagerCookies;
-                cookiesExpired = areCookiesExpired(cookies);
-                if (cookiesExpired) {
-                    console.log(`⚠️ Found ${cookies.length} cookies from cookieManager but they are expired`);
-                } else {
-                    console.log(`✅ Found ${cookies.length} cookies from cookieManager (valid)`);
-                }
-            }
-        }
-
-        // If no cookies found OR cookies are expired, perform login
-        if (!cookies || cookies.length === 0 || cookiesExpired) {
-            if (cookiesExpired) {
-                console.log(`⚠️ Cookies expired, performing login for admin: ${adminId}`);
-            } else {
-                console.log(`⚠️ No cookies found, performing login for admin: ${adminId}`);
-            }
+        // If no cookies or cookies expired, perform login
+        if (!cookies || cookies.length === 0 || areCookiesExpired(cookies)) {
+            console.log(`⚠️ Cookies expired or missing, performing login for admin: ${adminId}`);
             
-            if (!adminPassword) {
-                throw new Error('No valid cookies found and password not provided for login');
+            // Get admin credentials from Firebase if not provided
+            let phone = adminPhone;
+            let password = adminPassword;
+            if (!password) {
+                const adminData = await getAdminData(adminId);
+                if (!adminData || !adminData.phone || !adminData.password) {
+                    throw new Error('No valid cookies found and password not provided for login');
+                }
+                phone = adminData.phone;
+                password = adminData.password;
             }
             
             const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
@@ -98,22 +427,130 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
                 throw new Error('Login failed - cannot proceed with adding subscriber');
             }
             
-            // After login, we should already be on dashboard or close to it
-            // Wait a bit for page to stabilize
+            // After login, navigate DIRECTLY to ushare page (skip dashboard completely)
             await delay(2000);
+            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+            console.log(`🌐 [DIRECT NAVIGATION] Navigating directly to ushare page after login: ${ushareUrl}`);
             
-            // Verify we're on dashboard (loginToAlfa should handle this, but double-check)
+            // Navigate directly - don't go through dashboard
+            // Use retry logic for navigation timeout
+            let navigationSuccess = false;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    console.log(`🔄 [DIRECT NAVIGATION] Navigation attempt ${attempt}/3...`);
+                    await page.goto(ushareUrl, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 30000 // Increased to 30s
+                    });
+                    await delay(2000);
+                    
+                    // Check if we're on the right page
+                    const currentUrl = page.url();
+                    if (currentUrl.includes('/ushare')) {
+                        navigationSuccess = true;
+                        console.log(`✅ [DIRECT NAVIGATION] Successfully navigated to ushare page: ${currentUrl}`);
+                        break;
+                    } else if (currentUrl.includes('/login')) {
+                        console.log(`⚠️ [DIRECT NAVIGATION] Redirected to login, cookies may have expired`);
+                        // Don't retry if redirected to login
+                        break;
+                    } else {
+                        console.log(`⚠️ [DIRECT NAVIGATION] Unexpected page: ${currentUrl}, retrying...`);
+                        await delay(2000);
+                    }
+                } catch (navError) {
+                    if (navError.message.includes('timeout')) {
+                        console.log(`⚠️ [DIRECT NAVIGATION] Navigation timeout on attempt ${attempt}, retrying...`);
+                        if (attempt < 3) {
+                            await delay(2000);
+                            continue;
+                        } else {
+                            // Last attempt failed - check current URL
+                            const currentUrl = page.url();
+                            if (currentUrl.includes('/ushare')) {
+                                console.log(`✅ [DIRECT NAVIGATION] Already on ushare page despite timeout: ${currentUrl}`);
+                                navigationSuccess = true;
+                            } else {
+                                throw new Error(`Navigation to ushare page failed after 3 attempts. Current URL: ${currentUrl}`);
+                            }
+                        }
+                    } else {
+                        throw navError;
+                    }
+                }
+            }
+            
+            if (!navigationSuccess) {
+                // Final check - maybe we're already on the page
+                const finalUrl = page.url();
+                if (finalUrl.includes('/ushare')) {
+                    console.log(`✅ [DIRECT NAVIGATION] Already on ushare page: ${finalUrl}`);
+                } else {
+                    throw new Error(`Failed to navigate to ushare page. Current URL: ${finalUrl}`);
+                }
+            }
+            
+            // Verify we're on ushare page (not login or dashboard)
             const currentUrl = page.url();
+            console.log(`📍 Current URL after direct navigation: ${currentUrl}`);
+            
             if (currentUrl.includes('/login')) {
-                // Still on login page, navigate to dashboard
-                console.log(`🌐 Navigating to dashboard after login...`);
-                await page.goto(ALFA_DASHBOARD_URL, {
+                console.log(`⚠️ Redirected to login page, retrying login...`);
+                if (!adminPassword) {
+                    throw new Error('Cookies expired and password not provided for login');
+                }
+                
+                const retryLoginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
+                if (!retryLoginResult.success) {
+                    throw new Error('Login failed after cookie expiration');
+                }
+                
+                // After retry login, navigate directly to ushare again with retry logic
+                await delay(2000);
+                console.log(`🌐 [DIRECT NAVIGATION] Navigating to ushare page after retry login: ${ushareUrl}`);
+                
+                let retryNavSuccess = false;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        await page.goto(ushareUrl, {
+                            waitUntil: 'domcontentloaded',
+                            timeout: 30000
+                        });
+                        await delay(2000);
+                        const retryUrl = page.url();
+                        if (retryUrl.includes('/ushare')) {
+                            retryNavSuccess = true;
+                            console.log(`✅ [DIRECT NAVIGATION] Successfully navigated after retry login: ${retryUrl}`);
+                            break;
+                        }
+                    } catch (retryNavError) {
+                        if (retryNavError.message.includes('timeout') && attempt < 3) {
+                            console.log(`⚠️ [DIRECT NAVIGATION] Retry navigation timeout on attempt ${attempt}, retrying...`);
+                            await delay(2000);
+                        } else {
+                            throw retryNavError;
+                        }
+                    }
+                }
+                
+                if (!retryNavSuccess) {
+                    const finalRetryUrl = page.url();
+                    if (!finalRetryUrl.includes('/ushare')) {
+                        throw new Error(`Failed to navigate to ushare after retry login. Current URL: ${finalRetryUrl}`);
+                    }
+                }
+            } else if (currentUrl.includes('/ushare')) {
+                console.log(`✅ [DIRECT NAVIGATION] Successfully navigated to ushare page: ${currentUrl}`);
+            } else if (currentUrl.includes('/account') && !currentUrl.includes('/ushare')) {
+                // If we're on dashboard, navigate directly to ushare (shouldn't happen, but handle it)
+                console.log(`⚠️ [DIRECT NAVIGATION] Still on dashboard, navigating directly to ushare: ${ushareUrl}`);
+                await page.goto(ushareUrl, {
                     waitUntil: 'domcontentloaded',
                     timeout: 20000
                 });
-                await delay(2000);
+                await delay(3000);
             } else {
-                console.log(`✅ Already on dashboard after login: ${currentUrl}`);
+                console.log(`⚠️ [DIRECT NAVIGATION] Unexpected page after navigation: ${currentUrl}, continuing...`);
             }
         } else {
             // Inject cookies before navigation
@@ -121,13 +558,48 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
             await page.setCookie(...cookies);
             console.log(`✅ Cookies injected`);
             
-            // Navigate to dashboard
-            console.log(`🌐 Navigating to dashboard...`);
-            await page.goto(ALFA_DASHBOARD_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 20000
-            });
-            await delay(2000);
+            // Navigate directly to ushare page (skip dashboard) with retry logic
+            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+            console.log(`🌐 Navigating directly to ushare page: ${ushareUrl}`);
+            
+            let cookieNavSuccess = false;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    await page.goto(ushareUrl, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 30000 // Increased to 30s
+                    });
+                    await delay(2000);
+                    
+                    const checkUrl = page.url();
+                    if (checkUrl.includes('/ushare')) {
+                        cookieNavSuccess = true;
+                        console.log(`✅ Successfully navigated to ushare page: ${checkUrl}`);
+                        break;
+                    } else if (checkUrl.includes('/login')) {
+                        console.log(`⚠️ Redirected to login page during navigation`);
+                        break; // Don't retry if redirected to login
+                    } else {
+                        console.log(`⚠️ Unexpected page: ${checkUrl}, retrying...`);
+                        if (attempt < 3) await delay(2000);
+                    }
+                } catch (navError) {
+                    if (navError.message.includes('timeout') && attempt < 3) {
+                        console.log(`⚠️ Navigation timeout on attempt ${attempt}, retrying...`);
+                        await delay(2000);
+                    } else {
+                        // Check if we're already on the page despite error
+                        const errorUrl = page.url();
+                        if (errorUrl.includes('/ushare')) {
+                            console.log(`✅ Already on ushare page despite error: ${errorUrl}`);
+                            cookieNavSuccess = true;
+                            break;
+                        } else if (attempt === 3) {
+                            throw navError;
+                        }
+                    }
+                }
+            }
 
             // Check if we're on login page (cookies might have expired between check and navigation)
             const currentUrl = page.url();
@@ -142,509 +614,19 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
                     throw new Error('Login failed after cookie expiration');
                 }
                 
-                // After login, wait for page to stabilize
+                // After login, navigate directly to ushare page again
                 await delay(2000);
-            }
-        }
-
-        // Click "Manage Services" button
-        console.log(`🔘 Looking for "Manage Services" button...`);
-        
-        // Wait for page to be fully loaded and stabilized
-        await delay(3000);
-        
-        // Debug: Check current page content
-        const currentUrlBefore = page.url();
-        console.log(`📍 Current URL: ${currentUrlBefore}`);
-        
-        const pageText = await page.evaluate(() => document.body.innerText);
-        const hasManageServices = pageText.includes('Manage Services') || pageText.includes('manage-services');
-        console.log(`📄 Page check: Has "Manage Services" text: ${hasManageServices}`);
-        
-        // Get all links for debugging
-        const allLinks = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'));
-            return links.map(link => ({
-                text: link.textContent.trim().substring(0, 50),
-                href: link.href || link.getAttribute('href'),
-                classes: link.className,
-                visible: link.offsetParent !== null
-            }));
-        });
-        
-        const manageLinks = allLinks.filter(link => 
-            (link.text && link.text.toLowerCase().includes('manage')) || 
-            (link.href && link.href.includes('manage-services'))
-        );
-        console.log(`🔍 Found ${manageLinks.length} links containing "manage":`, JSON.stringify(manageLinks.slice(0, 5), null, 2));
-        
-        // Find the "Manage Services" link with the button classes
-        const manageServicesLink = manageLinks.find(link => 
-            link.text && link.text.includes('Manage Services') && 
-            link.classes && link.classes.includes('redBtn')
-        );
-        
-        let clicked = false;
-        let manageServicesHref = null;
-        
-        if (manageServicesLink && manageServicesLink.href) {
-            manageServicesHref = manageServicesLink.href;
-            console.log(`📍 Found "Manage Services" link href: ${manageServicesHref}`);
-        }
-        
-        // Try multiple selectors and strategies
-        const selectors = [
-            'a.alfabtn.redBtn[href="/en/account/manage-services"]',
-            'a.alfabtn[href="/en/account/manage-services"]',
-            'a.redBtn[href="/en/account/manage-services"]',
-            'a[href="/en/account/manage-services"]',
-            'a[href*="manage-services"]'
-        ];
-        
-        for (const selector of selectors) {
-            try {
-                console.log(`🔍 Trying selector: ${selector}`);
-                
-                // Wait for selector (don't require visible, might be off-screen)
-                await page.waitForSelector(selector, {
-                    timeout: 5000
-                });
-                
-                // Check if element is visible and scroll into view
-                const isVisible = await page.evaluate((sel) => {
-                    const element = document.querySelector(sel);
-                    if (!element) return false;
-                    
-                    // Scroll into view
-                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    
-                    // Check visibility
-                    const rect = element.getBoundingClientRect();
-                    return rect.width > 0 && rect.height > 0;
-                }, selector);
-                
-                if (!isVisible) {
-                    console.log(`⚠️ Element found but not visible, trying to scroll...`);
-                    await delay(1000);
-                }
-                
-                // Try clicking
-                await page.click(selector, { timeout: 5000 });
-                console.log(`✅ Clicked "Manage Services" using selector: ${selector}`);
-                
-                // Wait a bit to see if navigation happens
-                await delay(2000);
-                const urlAfterClick = page.url();
-                if (urlAfterClick.includes('manage-services')) {
-                    console.log(`✅ Navigation successful after click: ${urlAfterClick}`);
-                    clicked = true;
-                    break;
-                } else {
-                    console.log(`⚠️ Click didn't navigate, still on: ${urlAfterClick}`);
-                    // Try navigating directly using the href we found
-                    if (manageServicesHref) {
-                        console.log(`🔍 Navigating directly to: ${manageServicesHref}`);
-                        try {
-                            await page.goto(manageServicesHref, {
-                                waitUntil: 'domcontentloaded',
-                                timeout: 20000
-                            });
-                            await delay(2000);
-                            const directNavUrl = page.url();
-                            if (directNavUrl.includes('manage-services')) {
-                                console.log(`✅ Direct navigation successful: ${directNavUrl}`);
-                                clicked = true;
-                                break;
-                            }
-                        } catch (directNavError) {
-                            console.log(`⚠️ Direct navigation failed: ${directNavError.message}`);
-                        }
-                    }
-                    // Continue to try other methods
-                }
-            } catch (err) {
-                console.log(`⚠️ Selector ${selector} failed: ${err.message}`);
-                continue;
-            }
-        }
-        
-        // If CSS selectors failed, try XPath
-        if (!clicked) {
-            console.log(`🔍 Trying XPath search...`);
-            try {
-                // Try XPath - case insensitive
-                const xpathSelectors = [
-                    "//a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'manage services')]",
-                    "//a[contains(@href, 'manage-services')]",
-                    "//a[contains(text(), 'Manage Services')]"
-                ];
-                
-                for (const xpath of xpathSelectors) {
-                    try {
-                        const [button] = await page.$x(xpath);
-                        if (button) {
-                            await page.evaluate((el) => {
-                                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }, button);
-                            await delay(1000);
-                            await button.click();
-                            console.log(`✅ Clicked "Manage Services" using XPath: ${xpath}`);
-                            clicked = true;
-                            break;
-                        }
-                    } catch (xpathErr) {
-                        continue;
-                    }
-                }
-            } catch (xpathError) {
-                console.log(`⚠️ XPath failed: ${xpathError.message}`);
-            }
-        }
-        
-        // If still not clicked, try finding by text content and clicking via evaluate
-        if (!clicked) {
-            console.log(`🔍 Trying JavaScript-based click...`);
-            try {
-                const clickResult = await page.evaluate(() => {
-                    const links = Array.from(document.querySelectorAll('a'));
-                    const manageLink = links.find(link => {
-                        const text = link.textContent.trim().toLowerCase();
-                        const href = (link.href || link.getAttribute('href') || '').toLowerCase();
-                        return text.includes('manage services') || href.includes('manage-services');
-                    });
-                    
-                    if (manageLink) {
-                        manageLink.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        // Return the href so we can navigate manually if click doesn't work
-                        return {
-                            found: true,
-                            href: manageLink.href || manageLink.getAttribute('href')
-                        };
-                    }
-                    return { found: false };
-                });
-                
-                if (clickResult.found) {
-                    // Try clicking the element
-                    await page.evaluate(() => {
-                        const links = Array.from(document.querySelectorAll('a'));
-                        const manageLink = links.find(link => {
-                            const text = link.textContent.trim().toLowerCase();
-                            const href = (link.href || link.getAttribute('href') || '').toLowerCase();
-                            return text.includes('manage services') || href.includes('manage-services');
-                        });
-                        if (manageLink) {
-                            manageLink.click();
-                        }
-                    });
-                    
-                    await delay(1000);
-                    console.log(`✅ Clicked "Manage Services" using JavaScript`);
-                    clicked = true;
-                    
-                    // If click didn't navigate, try navigating directly
-                    const newUrl = page.url();
-                    if (!newUrl.includes('manage-services') && clickResult.href) {
-                        console.log(`⚠️ Click didn't navigate, trying direct navigation to: ${clickResult.href}`);
-                        await page.goto(clickResult.href, {
-                            waitUntil: 'domcontentloaded',
-                            timeout: 20000
-                        });
-                        await delay(2000);
-                    }
-                }
-            } catch (jsError) {
-                console.log(`⚠️ JavaScript-based click failed: ${jsError.message}`);
-            }
-        }
-        
-        if (!clicked) {
-            // Last resort: try navigating directly to the URL
-            console.log(`🔍 Last resort: Trying direct navigation to manage-services URL...`);
-            try {
-                await page.goto(ALFA_MANAGE_SERVICES_URL, {
+                console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
+                await page.goto(ushareUrl, {
                     waitUntil: 'domcontentloaded',
                     timeout: 20000
                 });
-                await delay(2000);
-                console.log(`✅ Navigated directly to manage-services page`);
-                clicked = true;
-            } catch (navError) {
-                console.log(`⚠️ Direct navigation failed: ${navError.message}`);
-                
-                // Final debug: Save screenshot and HTML for analysis
-                try {
-                    const screenshot = await page.screenshot({ encoding: 'base64' });
-                    console.log(`📸 Screenshot captured (base64 length: ${screenshot.length})`);
-                    
-                    const html = await page.content();
-                    console.log(`📄 Page HTML length: ${html.length} characters`);
-                    console.log(`📄 Page HTML preview (first 500 chars): ${html.substring(0, 500)}`);
-                } catch (debugError) {
-                    console.log(`⚠️ Could not capture debug info: ${debugError.message}`);
-                }
-            }
-        }
-        
-        if (!clicked) {
-            // Show all relevant information in error
-            const errorDetails = {
-                currentUrl: currentUrlBefore,
-                foundLinks: manageLinks.length,
-                sampleLinks: manageLinks.slice(0, 3),
-                pageHasText: hasManageServices
-            };
-            console.log(`❌ Error details:`, JSON.stringify(errorDetails, null, 2));
-            throw new Error(`Could not find or click "Manage Services" button. Found ${manageLinks.length} relevant links. Current URL: ${currentUrlBefore}. Check logs for details.`);
-        }
-        
-        // Wait for navigation after click (if not already navigated)
-        const currentUrlAfter = page.url();
-        console.log(`📍 URL after click attempt: ${currentUrlAfter}`);
-        
-        if (!currentUrlAfter.includes('manage-services')) {
-            console.log(`⏳ Waiting for navigation to manage-services page...`);
-            try {
-                // Use Promise.race to handle both navigation and timeout
-                await Promise.race([
-                    page.waitForNavigation({
-                        waitUntil: 'domcontentloaded',
-                        timeout: 20000
-                    }),
-                    new Promise((resolve) => {
-                        // Check URL periodically
-                        const checkInterval = setInterval(async () => {
-                            const url = page.url();
-                            if (url.includes('manage-services')) {
-                                clearInterval(checkInterval);
-                                resolve();
-                            }
-                        }, 500);
-                        
-                        // Clear after timeout
-                        setTimeout(() => {
-                            clearInterval(checkInterval);
-                            resolve();
-                        }, 20000);
-                    })
-                ]);
-                await delay(2000);
-                
-                const finalUrl = page.url();
-                console.log(`📍 Final URL after navigation wait: ${finalUrl}`);
-            } catch (navError) {
-                const finalUrl = page.url();
-                console.log(`⚠️ Navigation wait completed. Final URL: ${finalUrl}`);
-                if (finalUrl.includes('manage-services')) {
-                    console.log(`✅ Successfully on manage-services page`);
-                } else {
-                    console.log(`⚠️ Not on manage-services page, but continuing...`);
-                    // Don't throw, continue and see if we can find the MANAGE button anyway
-                }
-            }
-        } else {
-            console.log(`✅ Already on manage-services page: ${currentUrlAfter}`);
-        }
-
-        // Verify we're on manage-services page (if not, navigate directly)
-        let manageServicesUrl = page.url();
-        if (!manageServicesUrl.includes('/manage-services')) {
-            console.log(`⚠️ Not on manage-services page after click (${manageServicesUrl}), navigating directly...`);
-            // Navigate directly to manage-services URL
-            await page.goto(ALFA_MANAGE_SERVICES_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 20000
-            });
-            await delay(2000);
-            manageServicesUrl = page.url();
-            
-            if (!manageServicesUrl.includes('/manage-services')) {
-                throw new Error(`Could not navigate to manage-services page. Current URL: ${manageServicesUrl}`);
-            }
-            console.log(`✅ Navigated directly to manage-services page: ${manageServicesUrl}`);
-        } else {
-            console.log(`✅ On manage-services page: ${manageServicesUrl}`);
-        }
-
-        // Find and click "MANAGE" button
-        // The button has href like: /en/account/manage-services/ushare?mobileNumber=81106131
-        console.log(`🔘 Looking for "MANAGE" button...`);
-        
-        // Wait a bit for page to fully load
-        await delay(2000);
-        
-        let manageClicked = false;
-        const manageSelectors = [
-            'a.redBtn.alfabtn[href*="/ushare"]',
-            'a.alfabtn[href*="/ushare"]',
-            'a.redBtn[href*="/ushare"]',
-            'a[href*="/ushare"]'
-        ];
-        
-        for (const selector of manageSelectors) {
-            try {
-                console.log(`🔍 Trying MANAGE selector: ${selector}`);
-                await page.waitForSelector(selector, {
-                    timeout: 5000,
-                    visible: true
-                });
-                
-                // Get the href before clicking
-                const href = await page.evaluate((sel) => {
-                    const element = document.querySelector(sel);
-                    return element ? (element.href || element.getAttribute('href')) : null;
-                }, selector);
-                
-                console.log(`📍 MANAGE button href: ${href}`);
-                
-                // Scroll into view
-                await page.evaluate((sel) => {
-                    const element = document.querySelector(sel);
-                    if (element) {
-                        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }
-                }, selector);
-                await delay(500);
-                
-                // Click the button
-                await page.click(selector);
-                console.log(`✅ Clicked "MANAGE" button`);
-                manageClicked = true;
-                break;
-            } catch (err) {
-                console.log(`⚠️ MANAGE selector ${selector} failed: ${err.message}`);
-                continue;
-            }
-        }
-        
-        // If CSS selectors failed, try XPath or direct navigation
-        if (!manageClicked) {
-            console.log(`🔍 Trying XPath for MANAGE button...`);
-            try {
-                const [button] = await page.$x("//a[contains(@href, '/ushare')]");
-                if (button) {
-                    const href = await page.evaluate((el) => {
-                        return el.href || el.getAttribute('href');
-                    }, button);
-                    console.log(`📍 Found MANAGE button via XPath, href: ${href}`);
-                    
-                    await page.evaluate((el) => {
-                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }, button);
-                    await delay(500);
-                    await button.click();
-                    console.log(`✅ Clicked "MANAGE" using XPath`);
-                    manageClicked = true;
-                }
-            } catch (xpathErr) {
-                console.log(`⚠️ XPath failed: ${xpathErr.message}`);
-            }
-        }
-        
-        if (!manageClicked) {
-            // Last resort: try to find and click via JavaScript
-            console.log(`🔍 Trying JavaScript-based click for MANAGE...`);
-            const manageHref = await page.evaluate(() => {
-                const links = Array.from(document.querySelectorAll('a'));
-                const manageLink = links.find(link => {
-                    const href = (link.href || link.getAttribute('href') || '').toLowerCase();
-                    return href.includes('/ushare');
-                });
-                if (manageLink) {
-                    manageLink.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    manageLink.click();
-                    return manageLink.href || manageLink.getAttribute('href');
-                }
-                return null;
-            });
-            
-            if (manageHref) {
-                console.log(`✅ Clicked "MANAGE" using JavaScript, href: ${manageHref}`);
-                manageClicked = true;
-                await delay(1000);
-            }
-        }
-        
-        if (!manageClicked) {
-            throw new Error(`Could not find or click "MANAGE" button on manage-services page`);
-        }
-        
-        // Wait for navigation to ushare page (with better handling)
-        console.log(`⏳ Waiting for navigation to ushare page...`);
-        try {
-            // Wait for URL to change to ushare
-            await page.waitForFunction(
-                () => window.location.href.includes('/ushare'),
-                { timeout: 20000 }
-            );
-            await delay(2000);
-            console.log(`✅ Navigated to ushare page`);
-        } catch (navError) {
-            // Check current URL - might already be on ushare page
-            const currentUrl = page.url();
-            console.log(`📍 Current URL after MANAGE click: ${currentUrl}`);
-            
-            if (currentUrl.includes('/ushare')) {
-                console.log(`✅ Already on ushare page: ${currentUrl}`);
-            } else {
-                console.log(`⚠️ Navigation timeout, but continuing. Current URL: ${currentUrl}`);
-                // Try waiting a bit more and check again
                 await delay(3000);
-                const finalUrl = page.url();
-                if (finalUrl.includes('/ushare')) {
-                    console.log(`✅ Eventually reached ushare page: ${finalUrl}`);
-                } else {
-                    console.log(`⚠️ Still not on ushare page: ${finalUrl}`);
-                    // Don't throw - continue and see if form is available
-                }
+            } else if (currentUrl.includes('/ushare')) {
+                console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
+            } else {
+                console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
             }
-        }
-
-        // Verify we're on ushare page (with retry)
-        let ushareUrl = page.url();
-        let onUsharePage = ushareUrl.includes('/ushare');
-        
-        if (!onUsharePage) {
-            console.log(`⚠️ Not on ushare page yet, waiting a bit more...`);
-            await delay(3000);
-            ushareUrl = page.url();
-            onUsharePage = ushareUrl.includes('/ushare');
-        }
-        
-        if (!onUsharePage) {
-            // Try navigating directly if we have the href
-            console.log(`⚠️ Still not on ushare page (${ushareUrl}), trying to find ushare link and navigate directly...`);
-            try {
-                const ushareLink = await page.evaluate(() => {
-                    const links = Array.from(document.querySelectorAll('a'));
-                    const manageLink = links.find(link => {
-                        const href = (link.href || link.getAttribute('href') || '').toLowerCase();
-                        return href.includes('/ushare');
-                    });
-                    return manageLink ? (manageLink.href || manageLink.getAttribute('href')) : null;
-                });
-                
-                if (ushareLink) {
-                    console.log(`🔗 Found ushare link: ${ushareLink}, navigating directly...`);
-                    await page.goto(ushareLink, {
-                        waitUntil: 'domcontentloaded',
-                        timeout: 20000
-                    });
-                    await delay(2000);
-                    ushareUrl = page.url();
-                    onUsharePage = ushareUrl.includes('/ushare');
-                }
-            } catch (directNavError) {
-                console.log(`⚠️ Direct navigation failed: ${directNavError.message}`);
-            }
-        }
-        
-        if (!onUsharePage) {
-            console.log(`⚠️ Could not reach ushare page. Current URL: ${ushareUrl}`);
-            console.log(`⚠️ Continuing anyway to see if form is available...`);
-            // Don't throw - continue and see if form is available
-        } else {
-            console.log(`✅ On ushare page: ${ushareUrl}`);
         }
 
         // Wait for form to be available (with multiple attempts)
@@ -818,6 +800,9 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
             // Navigation error means the form was submitted and page navigated - this is success!
             console.log(`✅ Form submitted successfully (navigation detected via error)`);
             
+            // Update Firebase with pending subscriber
+            await addPendingSubscriber(adminId, cleanSubscriberPhone, quota);
+            
             // Release refresh lock before returning
             if (refreshLockAcquired) {
                 await releaseRefreshLock(adminId).catch(() => {});
@@ -852,6 +837,8 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
 }
 
 module.exports = {
-    addSubscriber
+    addSubscriber,
+    addSubscriberApiFirst,
+    extractCsrfTokenAndMaxQuota
 };
 

@@ -1,6 +1,6 @@
 const browserPool = require('./browserPool');
 const { getSession } = require('./sessionManager');
-const { getCookies, areCookiesExpired, acquireRefreshLock, releaseRefreshLock } = require('./cookieManager');
+const { getCookies, areCookiesExpired, acquireRefreshLock, releaseRefreshLock, getCookieExpiry } = require('./cookieManager');
 const { loginToAlfa } = require('./alfaLogin');
 
 const ALFA_DASHBOARD_URL = 'https://www.alfa.com.lb/en/account';
@@ -50,29 +50,58 @@ async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPh
 
         // Get admin's cookies from Redis
         console.log(`🔑 Getting cookies for admin: ${adminId}`);
-        const savedSession = await getSession(adminId || adminPhone);
-        let cookies = null;
-        let cookiesExpired = false;
-
-        if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
-            cookies = savedSession.cookies;
-            cookiesExpired = areCookiesExpired(cookies) || savedSession.needsRefresh;
-            if (cookiesExpired) {
-                console.log(`⚠️ Found ${cookies.length} cookies but they are expired`);
-            } else {
-                console.log(`✅ Found ${cookies.length} cookies in session (valid)`);
+        let cookies = await getCookies(adminId || adminPhone);
+        
+        // Fallback to sessionManager if cookieManager has no cookies
+        if (!cookies || cookies.length === 0) {
+            const savedSession = await getSession(adminId || adminPhone);
+            if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
+                cookies = savedSession.cookies;
+                console.log(`✅ Found ${cookies.length} cookies from sessionManager`);
             }
         } else {
-            const cookieManagerCookies = await getCookies(adminId || adminPhone);
-            if (cookieManagerCookies && cookieManagerCookies.length > 0) {
-                cookies = cookieManagerCookies;
-                cookiesExpired = areCookiesExpired(cookies);
-                if (cookiesExpired) {
-                    console.log(`⚠️ Found ${cookies.length} cookies from cookieManager but they are expired`);
+            console.log(`✅ Found ${cookies.length} cookies from cookieManager`);
+        }
+
+        // Check if cookies are valid using Redis expiry timestamp (more reliable than cookie expires field)
+        let cookiesExpired = true;
+        if (cookies && cookies.length > 0) {
+            // First check Redis cookie expiry timestamp (most reliable)
+            const cookieExpiry = await getCookieExpiry(adminId || adminPhone);
+            const now = Date.now();
+            
+            console.log(`🔍 [Cookie Validation] Checking cookie validity for ${adminId}`);
+            console.log(`   Cookies found: ${cookies.length}`);
+            console.log(`   Redis expiry: ${cookieExpiry ? new Date(cookieExpiry).toISOString() : 'null'}`);
+            console.log(`   Current time: ${new Date(now).toISOString()}`);
+            
+            if (cookieExpiry && typeof cookieExpiry === 'number' && !isNaN(cookieExpiry)) {
+                // Ensure cookieExpiry is in milliseconds (not seconds)
+                const expiryMs = cookieExpiry > 10000000000 ? cookieExpiry : cookieExpiry * 1000;
+                
+                if (expiryMs > now) {
+                    // Redis expiry timestamp says cookies are still valid
+                    cookiesExpired = false;
+                    const timeRemaining = Math.floor((expiryMs - now) / 1000 / 60);
+                    console.log(`✅ Cookies are valid (Redis expiry: ${new Date(expiryMs).toISOString()}, ${timeRemaining} minutes remaining)`);
                 } else {
-                    console.log(`✅ Found ${cookies.length} cookies from cookieManager (valid)`);
+                    // Redis expiry timestamp says cookies are expired
+                    const timeExpired = Math.floor((now - expiryMs) / 1000 / 60);
+                    console.log(`⚠️ Cookies are expired (Redis expiry: ${new Date(expiryMs).toISOString()}, expired ${timeExpired} minutes ago)`);
+                    cookiesExpired = true;
+                }
+            } else {
+                // No Redis expiry timestamp - fall back to checking cookie expires field
+                console.log(`⚠️ No Redis expiry timestamp found, falling back to cookie expires field check`);
+                cookiesExpired = areCookiesExpired(cookies);
+                if (!cookiesExpired) {
+                    console.log(`✅ Cookies are valid (no Redis expiry, checked cookie expires field - not expired)`);
+                } else {
+                    console.log(`⚠️ Cookies appear expired (checked cookie expires field - found expired cookie)`);
                 }
             }
+        } else {
+            console.log(`⚠️ [Cookie Validation] No cookies found`);
         }
 
         // If no cookies found OR cookies are expired, perform login
@@ -92,22 +121,58 @@ async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPh
                 throw new Error('Login failed - cannot proceed with removing subscriber');
             }
             
+            // After login, navigate directly to ushare page
             await delay(2000);
+            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+            console.log(`🌐 Navigating directly to ushare page after login: ${ushareUrl}`);
+            await page.goto(ushareUrl, {
+                waitUntil: 'domcontentloaded',
+                timeout: 20000
+            });
+            await delay(3000);
+            
+            // Check if we're on login page (cookies might have expired)
+            const currentUrl = page.url();
+            if (currentUrl.includes('/login')) {
+                console.log(`⚠️ Redirected to login page, cookies expired. Performing login...`);
+                if (!adminPassword) {
+                    throw new Error('Cookies expired and password not provided for login');
+                }
+                
+                const retryLoginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
+                if (!retryLoginResult.success) {
+                    throw new Error('Login failed after cookie expiration');
+                }
+                
+                // After login, navigate directly to ushare page again
+                await delay(2000);
+                console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
+                await page.goto(ushareUrl, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 20000
+                });
+                await delay(3000);
+            } else if (currentUrl.includes('/ushare')) {
+                console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
+            } else {
+                console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
+            }
         } else {
             // Inject cookies before navigation
             console.log(`🔑 Injecting ${cookies.length} valid cookies...`);
             await page.setCookie(...cookies);
             console.log(`✅ Cookies injected`);
             
-            // Navigate to dashboard
-            console.log(`🌐 Navigating to dashboard...`);
-            await page.goto(ALFA_DASHBOARD_URL, {
+            // Navigate directly to ushare page (skip dashboard)
+            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+            console.log(`🌐 Navigating directly to ushare page: ${ushareUrl}`);
+            await page.goto(ushareUrl, {
                 waitUntil: 'domcontentloaded',
                 timeout: 20000
             });
-            await delay(2000);
+            await delay(3000);
 
-            // Check if we're on login page
+            // Check if we're on login page (cookies might have expired between check and navigation)
             const currentUrl = page.url();
             if (currentUrl.includes('/login')) {
                 console.log(`⚠️ Redirected to login page, cookies expired during navigation. Performing login...`);
@@ -120,18 +185,20 @@ async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPh
                     throw new Error('Login failed after cookie expiration');
                 }
                 
+                // After login, navigate directly to ushare page again
                 await delay(2000);
+                console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
+                await page.goto(ushareUrl, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 20000
+                });
+                await delay(3000);
+            } else if (currentUrl.includes('/ushare')) {
+                console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
+            } else {
+                console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
             }
         }
-
-        // Navigate directly to u-share page
-        const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
-        console.log(`🌐 Navigating to u-share page: ${ushareUrl}`);
-        await page.goto(ushareUrl, {
-            waitUntil: 'domcontentloaded',
-            timeout: 20000
-        });
-        await delay(3000);
 
         // Scroll down to find subscriber cards
         console.log(`📜 Scrolling down to find subscriber cards...`);

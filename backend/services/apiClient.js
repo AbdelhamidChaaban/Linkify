@@ -4,8 +4,21 @@ const { URL } = require('url');
 
 const BASE_URL = 'https://www.alfa.com.lb';
 const DEFAULT_TIMEOUT = 3000;
-const MAX_RETRIES = 2;
-const RETRY_DELAYS = [300, 900]; // Exponential backoff: 300ms, 900ms
+const MAX_RETRIES = 2; // Retry up to 2 times (maxRetries=2 means 3 total attempts)
+const RETRY_DELAYS = [300, 600, 1200]; // Exponential backoff: 300ms → 600ms → 1200ms
+const TIMEOUT_RETRY_DELAY = 150; // Shorter delay for timeout retries (150ms)
+
+// Connection pooling: Reuse HTTP agents for better performance
+const httpsAgent = new https.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 1000,
+    maxSockets: 50,
+    maxFreeSockets: 10,
+    timeout: 60000
+});
+
+// Track API performance for dynamic timeout adjustment
+const apiPerformance = new Map(); // endpoint -> { successCount, totalCount, avgDuration }
 
 /**
  * Custom error types for API client
@@ -82,6 +95,15 @@ async function apiRequest(endpoint, cookies = [], options = {}) {
             const response = await makeRequest(requestOptions, timeout);
             const duration = Date.now() - startTime;
 
+            // Track API performance for dynamic timeout adjustment
+            if (!apiPerformance.has(endpoint)) {
+                apiPerformance.set(endpoint, { successCount: 0, totalCount: 0, avgDuration: 0 });
+            }
+            const perf = apiPerformance.get(endpoint);
+            perf.successCount++;
+            perf.totalCount++;
+            perf.avgDuration = (perf.avgDuration * (perf.totalCount - 1) + duration) / perf.totalCount;
+
             // Log successful request
             if (attempt > 0) {
                 console.log(`✅ API ${endpoint} succeeded on retry ${attempt} (${duration}ms)`);
@@ -107,12 +129,16 @@ async function apiRequest(endpoint, cookies = [], options = {}) {
             }
 
             // Retry on timeout, network errors, or 5xx errors
+            // Use shorter delay for timeout retries (150ms), exponential backoff for others
             if (attempt <= maxRetries) {
-                const delay = RETRY_DELAYS[attempt - 1] || 900;
-                console.warn(`⚠️ API ${endpoint} failed (attempt ${attempt}/${maxRetries + 1}): ${error.message}, retrying in ${delay}ms...`);
+                const isTimeout = error.type === 'Timeout';
+                const delay = isTimeout ? TIMEOUT_RETRY_DELAY : (RETRY_DELAYS[attempt - 1] || 1200);
+                const errorType = error.type || 'Unknown';
+                console.warn(`⚠️ API ${endpoint} failed (attempt ${attempt}/${maxRetries + 1}, type: ${errorType}): ${error.message}, retrying in ${delay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             } else {
-                console.error(`❌ API ${endpoint} failed after ${maxRetries + 1} attempts: ${error.message}`);
+                const errorType = error.type || 'Unknown';
+                console.error(`❌ API ${endpoint} failed after ${maxRetries + 1} attempts (type: ${errorType}): ${error.message}`);
                 throw error;
             }
         }
@@ -130,6 +156,11 @@ async function apiRequest(endpoint, cookies = [], options = {}) {
 function makeRequest(options, timeout) {
     return new Promise((resolve, reject) => {
         const protocol = options.port === 443 || !options.port ? https : http;
+        
+        // Use connection pooling for HTTPS requests
+        if (protocol === https) {
+            options.agent = httpsAgent;
+        }
         
         const req = protocol.request(options, (res) => {
             let data = '';
@@ -218,18 +249,33 @@ function makeRequest(options, timeout) {
  * @returns {Promise<Object>} Object with expiry, services, and consumption data
  */
 async function fetchAllApis(cookies, options = {}) {
-    const { maxRetries = 2 } = options;
+    const { maxRetries = 3 } = options;
+    // Optimized timeouts per endpoint with dynamic adjustment capability
+    // getconsumption increased to 6.5s to reduce retries (was timing out at 5s)
     const endpoints = [
-        { key: 'expiry', path: '/en/account/getexpirydate', timeout: 3000 },
-        { key: 'services', path: '/en/account/manage-services/getmyservices', timeout: 8000 }, // Longer timeout for getmyservices
-        { key: 'consumption', path: '/en/account/getconsumption', timeout: 3000 }
+        { key: 'expiry', path: '/en/account/getexpirydate', timeout: 6000 }, // 6s
+        { key: 'services', path: '/en/account/manage-services/getmyservices', timeout: 10000 }, // 10s
+        { key: 'consumption', path: '/en/account/getconsumption', timeout: 6500 } // 6.5s (increased from 5s to reduce retries)
     ];
+    
+    // Apply dynamic timeout adjustment based on historical performance
+    endpoints.forEach(endpoint => {
+        const perf = apiPerformance.get(endpoint.path);
+        if (perf && perf.totalCount >= 5) {
+            // If average duration is consistently high, increase timeout by 20%
+            const adjustedTimeout = Math.ceil(perf.avgDuration * 1.2);
+            if (adjustedTimeout > endpoint.timeout) {
+                endpoint.timeout = Math.min(adjustedTimeout, endpoint.timeout * 1.5); // Cap at 50% increase
+            }
+        }
+    });
 
     console.log(`🚀 Fetching all APIs in parallel... (maxRetries: ${maxRetries})`);
     const startTime = Date.now();
 
     try {
-        const results = await Promise.all(
+        // Use Promise.allSettled to fetch all APIs in parallel and handle failures gracefully
+        const results = await Promise.allSettled(
             endpoints.map(endpoint => 
                 apiRequest(endpoint.path, cookies, { timeout: endpoint.timeout, maxRetries })
                     .then(data => ({ key: endpoint.key, data, success: true }))
@@ -243,34 +289,52 @@ async function fetchAllApis(cookies, options = {}) {
         const response = {};
         const errors = [];
         let allUnauthorized = true;
+        const apiSuccess = {}; // Track which APIs succeeded for status classification
+        const apiErrors = {}; // Track error types for each API (to detect 401 on specific endpoints)
 
-        results.forEach(result => {
-            if (result.success) {
-                response[result.key] = result.data;
+        results.forEach((result, index) => {
+            const endpoint = endpoints[index];
+            
+            if (result.status === 'fulfilled' && result.value.success) {
+                response[endpoint.key] = result.value.data;
+                apiSuccess[endpoint.key] = true;
+                apiErrors[endpoint.key] = null; // No error
                 allUnauthorized = false; // At least one succeeded
             } else {
-                response[result.key] = null;
-                errors.push({ endpoint: result.key, error: result.error });
+                response[endpoint.key] = null;
+                apiSuccess[endpoint.key] = false;
+                
+                const error = result.status === 'fulfilled' ? result.value.error : result.reason;
+                errors.push({ endpoint: endpoint.key, error });
+                
+                // Track error type for this endpoint (to detect 401 on getconsumption)
+                apiErrors[endpoint.key] = error ? error.type : 'Unknown';
+                
                 // Check if this error is NOT unauthorized
-                if (result.error.type !== 'Unauthorized') {
+                if (error && error.type !== 'Unauthorized' && error.type !== 'Redirect') {
                     allUnauthorized = false;
                 }
             }
         });
 
         if (errors.length > 0) {
-            console.warn(`⚠️ ${errors.length} API call(s) failed:`, errors.map(e => e.endpoint).join(', '));
+            const errorTypes = errors.map(e => `${e.endpoint}(${e.error?.type || 'Unknown'})`).join(', ');
+            console.warn(`⚠️ ${errors.length} API call(s) failed: ${errorTypes}`);
             
-            // If all errors are Unauthorized (401), throw Unauthorized error
+            // Fail-fast on 401/302: If all errors are Unauthorized or Redirect, throw immediately
             if (allUnauthorized && errors.length === results.length) {
+                const firstError = errors[0].error;
                 throw new ApiError(
-                    'All API calls returned 401 Unauthorized - cookies expired',
-                    'Unauthorized',
-                    401
+                    `All API calls returned ${firstError.type} - cookies expired`,
+                    firstError.type === 'Redirect' ? 'Redirect' : 'Unauthorized',
+                    firstError.statusCode || 401
                 );
             }
         }
 
+        // Attach API success tracking for status classification
+        response._apiSuccess = apiSuccess;
+        response._apiErrors = apiErrors; // Track error types (to detect 401 on specific endpoints)
         return response;
     } catch (error) {
         const duration = Date.now() - startTime;

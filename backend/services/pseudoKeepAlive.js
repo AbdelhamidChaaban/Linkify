@@ -6,7 +6,16 @@ const cacheLayer = require('./cacheLayer');
 const { apiRequest } = require('./apiClient');
 
 const BASE_URL = 'https://www.alfa.com.lb';
-const KEEP_ALIVE_TIMEOUT = 5000; // 5 seconds timeout for keep-alive requests (fail fast)
+const KEEP_ALIVE_TIMEOUT = 7500; // 7.5 seconds timeout (increased from 5s to reduce false failures)
+
+// Connection pooling for keep-alive requests
+const httpsAgent = new https.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 1000,
+    maxSockets: 50,
+    maxFreeSockets: 10,
+    timeout: 60000
+});
 
 /**
  * Convert cookie array to cookie header string
@@ -166,6 +175,7 @@ async function pseudoKeepAlive(userId, currentCookies) {
             port: 443,
             path: url.pathname,
             method: 'GET',
+            agent: httpsAgent, // Use connection pooling
             headers: {
                 'Cookie': cookieHeader,
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -237,14 +247,14 @@ async function pseudoKeepAlive(userId, currentCookies) {
                     });
                 } else if (statusCode === 302 || statusCode === 301) {
                     // Redirect - likely redirecting to login page, cookies expired
-                    // Mark for refresh but don't immediately login - serve cached data if available
-                    console.log(`⚠️ [Keep-Alive] ${userId}: Redirect (${statusCode}), cookies expired - marked for refresh (${duration}ms)`);
+                    // CRITICAL: Never attempt keep-alive after expiry; go straight to login
+                    console.log(`⚠️ [Keep-Alive] ${userId}: Redirect (${statusCode}), cookies expired - needs full login (${duration}ms)`);
                     resolve({
                         success: false,
                         cookies: null,
                         statusCode: statusCode,
                         error: `Redirect ${statusCode} - cookies expired`,
-                        needsRefresh: true // Flag to indicate refresh needed but don't login immediately
+                        needsRefresh: true // Flag to indicate cookies expired, perform full login immediately
                     });
                 } else {
                     // Other status code - might be error
@@ -316,16 +326,9 @@ async function refreshCookiesKeepAlive(userId) {
             console.log(`✅ [Keep-Alive] ${userId}: Cookies refreshed successfully (refreshSchedule updated)`);
             return { success: true, needsRefresh: false };
         } else if (result.needsRefresh) {
-            // 302 redirect - cookies expired, mark for refresh but don't immediately login
-            // Schedule refresh in Redis but return success=false so caller can use cached data
-            console.log(`⚠️ [Keep-Alive] ${userId}: Cookies expired (${result.statusCode}), marked for refresh (no immediate login)`);
-            
-            // Update nextRefresh to now (so worker will refresh soon)
-            // storeNextRefresh updates both individual key and sorted set
-            const { storeNextRefresh } = require('./cookieManager');
-            await storeNextRefresh(userId, Date.now());
-            
-            console.log(`📅 [Keep-Alive] ${userId}: Scheduled immediate refresh in refreshSchedule`);
+            // 302 redirect or 401 - cookies expired
+            // The caller (worker or manual refresh) will perform full login immediately
+            console.log(`⚠️ [Keep-Alive] ${userId}: Cookies expired (${result.statusCode}), triggering full login immediately`);
             return { success: false, needsRefresh: true };
         } else {
             // Keep-alive failed (timeout, network error, etc.) - may need full login

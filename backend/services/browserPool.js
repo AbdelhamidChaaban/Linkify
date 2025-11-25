@@ -16,6 +16,11 @@ class BrowserPool {
         this.isShuttingDown = false;
         this.activeContexts = new Set();
         this.initPromise = null;
+        this.MAX_CONTEXTS = 15; // Increased to 15 for concurrent refreshes (was 5)
+        this.preWarmedContexts = []; // Pre-warmed contexts for faster login
+        this.preWarmPromise = null;
+        this.contextQueue = []; // Queue for waiting requests when limit reached
+        this.MAX_QUEUE_WAIT = 30000; // Max 30 seconds to wait for a context
     }
 
     /**
@@ -41,6 +46,10 @@ class BrowserPool {
             this.browser = await this.initPromise;
             this.isInitializing = false;
             console.log('✅ Browser pool initialized successfully');
+            
+            // IMPROVEMENT: Pre-warm browser contexts for faster login
+            this.preWarmContexts();
+            
             return this.browser;
         } catch (error) {
             this.isInitializing = false;
@@ -89,14 +98,96 @@ class BrowserPool {
     }
 
     /**
-     * Create a new browser context for session isolation
+     * Pre-warm browser contexts for faster login (non-blocking)
+     * Creates 2 pre-warmed contexts that can be reused
+     */
+    async preWarmContexts() {
+        if (this.preWarmPromise) {
+            return this.preWarmPromise;
+        }
+        
+        this.preWarmPromise = (async () => {
+            try {
+                if (!this.browser || this.preWarmedContexts.length >= 2) {
+                    return; // Already pre-warmed or browser not ready
+                }
+                
+                // Pre-warm 2 contexts (non-blocking, fire-and-forget)
+                for (let i = 0; i < 2 && this.preWarmedContexts.length < 2; i++) {
+                    try {
+                        const context = await this.browser.createBrowserContext();
+                        const page = await context.newPage();
+                        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+                        await page.setViewport({ width: 1920, height: 1080 });
+                        page.setDefaultNavigationTimeout(60000);
+                        page.setDefaultTimeout(40000);
+                        
+                        this.preWarmedContexts.push({ context, page });
+                        console.log(`🔥 Pre-warmed browser context ${i + 1}/2`);
+                    } catch (error) {
+                        console.warn(`⚠️ Failed to pre-warm context ${i + 1}:`, error.message);
+                    }
+                }
+            } catch (error) {
+                console.warn(`⚠️ Pre-warming failed:`, error.message);
+            }
+        })();
+        
+        return this.preWarmPromise;
+    }
+
+    /**
+     * Get a pre-warmed context if available, otherwise create a new one
      * @returns {Promise<Object>} Object containing context and page
      */
-    async createContext() {
-        if (this.isShuttingDown) {
-            throw new Error('Browser pool is shutting down');
+    async getOrCreateContext() {
+        // Try to use a pre-warmed context first
+        if (this.preWarmedContexts.length > 0) {
+            const preWarmed = this.preWarmedContexts.pop();
+            this.activeContexts.add(preWarmed.context);
+            console.log(`⚡ Reusing pre-warmed browser context (${this.activeContexts.size}/${this.MAX_CONTEXTS} active)`);
+            
+            // Replenish pre-warmed pool in background
+            this.preWarmContexts();
+            
+            return {
+                context: preWarmed.context,
+                page: preWarmed.page,
+                contextId: preWarmed.context.id || Date.now()
+            };
         }
+        
+        // No pre-warmed context available, create new one
+        return await this.createContext();
+    }
 
+    /**
+     * Process the context queue when a context becomes available
+     * @private
+     */
+    _processContextQueue() {
+        // Process queue if we have capacity and waiting requests
+        while (this.contextQueue.length > 0 && this.activeContexts.size < this.MAX_CONTEXTS) {
+            const queueEntry = this.contextQueue.shift();
+            clearTimeout(queueEntry.timeout);
+            
+            // Try to create context for this queued request
+            this._createContextInternal()
+                .then(contextData => {
+                    queueEntry.resolve(contextData);
+                })
+                .catch(error => {
+                    queueEntry.reject(error);
+                });
+        }
+    }
+
+    /**
+     * Internal method to create a context (without queue check)
+     * @private
+     * @returns {Promise<Object>} Object containing context and page
+     */
+    async _createContextInternal() {
         // Ensure browser is initialized
         if (!this.browser) {
             await this.initialize();
@@ -111,8 +202,6 @@ class BrowserPool {
 
         try {
             // Create a new context for this request (session isolation)
-            // This reuses the existing browser instance - no new browser launch!
-            // The browser was launched once on server startup and is reused here
             const context = await this.browser.createBrowserContext();
             const page = await context.newPage();
 
@@ -125,7 +214,7 @@ class BrowserPool {
             // Track active context
             this.activeContexts.add(context);
 
-            console.log(`📄 Created new browser context from pool (reusing browser, ${this.activeContexts.size} active contexts)`);
+            console.log(`📄 Created new browser context from pool (reusing browser, ${this.activeContexts.size}/${this.MAX_CONTEXTS} active contexts)`);
 
             return {
                 context,
@@ -136,6 +225,51 @@ class BrowserPool {
             console.error('❌ Failed to create browser context:', error);
             throw error;
         }
+    }
+
+    /**
+     * Create a new browser context for session isolation
+     * Max 15 concurrent contexts (increased from 5 for concurrent refreshes)
+     * @returns {Promise<Object>} Object containing context and page
+     */
+    async createContext() {
+        if (this.isShuttingDown) {
+            throw new Error('Browser pool is shutting down');
+        }
+
+        // IMPROVEMENT: Queue mechanism instead of throwing error immediately
+        // Wait for a context to become available if limit is reached
+        if (this.activeContexts.size >= this.MAX_CONTEXTS) {
+            console.log(`⏳ Max browser contexts (${this.MAX_CONTEXTS}) reached, waiting for available context...`);
+            
+            return new Promise((resolve, reject) => {
+                const queueEntry = {
+                    resolve,
+                    reject,
+                    startTime: Date.now()
+                };
+                
+                this.contextQueue.push(queueEntry);
+                
+                // Set timeout to prevent indefinite waiting
+                const timeout = setTimeout(() => {
+                    const index = this.contextQueue.indexOf(queueEntry);
+                    if (index !== -1) {
+                        this.contextQueue.splice(index, 1);
+                        reject(new Error(`Timeout waiting for browser context after ${this.MAX_QUEUE_WAIT}ms`));
+                    }
+                }, this.MAX_QUEUE_WAIT);
+                
+                // Store timeout ID for cleanup
+                queueEntry.timeout = timeout;
+                
+                // Try to process queue immediately (in case context was freed)
+                this._processContextQueue();
+            });
+        }
+
+        // Use internal method to create context
+        return await this._createContextInternal();
     }
 
     /**
@@ -157,9 +291,15 @@ class BrowserPool {
             await context.close();
 
             console.log(`🔒 Closed browser context (${this.activeContexts.size} active)`);
+            
+            // IMPROVEMENT: Process queue when context is freed
+            this._processContextQueue();
         } catch (error) {
             console.error('⚠️ Error closing browser context:', error);
             // Don't throw - context might already be closed
+            
+            // Still process queue even if close failed
+            this._processContextQueue();
         }
     }
 

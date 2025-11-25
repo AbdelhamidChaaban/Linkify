@@ -183,6 +183,16 @@ async function updateDashboardData(adminId, dashboardData) {
       cleanPreservedFields.removedSubscribers = [];
     }
     
+    // CRITICAL: Only save if primaryData exists (prevents admins becoming inactive)
+    const hasPrimaryData = cleanDashboardData.primaryData && 
+                          typeof cleanDashboardData.primaryData === 'object' && 
+                          Object.keys(cleanDashboardData.primaryData).length > 0;
+    
+    if (!hasPrimaryData) {
+      console.warn(`⚠️ Skipping Firebase save for ${adminId} - primaryData missing (would mark admin inactive)`);
+      return; // Don't save incomplete data
+    }
+    
     // Update document
     try {
       await setDoc(userDocRef, {

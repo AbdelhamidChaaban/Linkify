@@ -7,7 +7,28 @@ const browserPool = require('./browserPool');
 const COOKIE_TTL = 24 * 60 * 60; // 24 hours in seconds (86400)
 // REMOVED: MIN_COOKIE_TTL - use actual cookie expiry from Set-Cookie headers
 const LAST_JSON_TTL = 60; // 60 seconds TTL for cached data (user:{id}:lastData)
-const REFRESH_BUFFER_MS = 45 * 1000; // 45 seconds before expiry (30-60s range)
+const REFRESH_BUFFER_MS = 30 * 1000; // Default 30 seconds before expiry
+const MIN_REFRESH_BUFFER_MS = 10 * 1000; // Minimum 10 seconds
+const MAX_REFRESH_BUFFER_MS = 30 * 1000; // Maximum 30 seconds
+
+/**
+ * Calculate dynamic refresh buffer based on cookie lifetime
+ * Returns 20% of remaining time, clamped between MIN and MAX
+ * @param {number} cookieExpiry - Cookie expiry timestamp (ms)
+ * @param {number} now - Current timestamp (ms)
+ * @returns {number} Refresh buffer in milliseconds
+ */
+function calculateDynamicRefreshBuffer(cookieExpiry, now) {
+    if (!cookieExpiry || cookieExpiry <= now) {
+        return REFRESH_BUFFER_MS; // Default if expired or invalid
+    }
+    
+    const remainingTime = cookieExpiry - now;
+    const dynamicBuffer = Math.floor(remainingTime * 0.2); // 20% of remaining time
+    
+    // Clamp between MIN and MAX
+    return Math.max(MIN_REFRESH_BUFFER_MS, Math.min(MAX_REFRESH_BUFFER_MS, dynamicBuffer));
+}
 const CACHE_WINDOW_MS = 5 * 1000; // 5 seconds
 
 /**
@@ -172,27 +193,70 @@ async function storeNextRefresh(userId, nextRefreshTimestamp) {
     try {
         const nextRefreshKey = getNextRefreshKey(userId);
         const now = Date.now();
-        const nextRefreshTtl = Math.max(60, Math.floor((nextRefreshTimestamp - now) / 1000));
         
+        // Get cookie expiry to ensure nextRefresh is BEFORE expiry
+        const cookieExpiry = await getCookieExpiry(userId);
+        
+        // CRITICAL: Ensure nextRefresh is always BEFORE expiry (never at or after)
+        let finalNextRefresh = nextRefreshTimestamp;
+        if (cookieExpiry) {
+            // IMPROVEMENT: Use dynamic refresh buffer (20% of remaining time, clamped 10-30s)
+            const dynamicBuffer = calculateDynamicRefreshBuffer(cookieExpiry, now);
+            const minNextRefresh = cookieExpiry - dynamicBuffer;
+            if (finalNextRefresh >= cookieExpiry) {
+                // nextRefresh is at or after expiry - set to dynamic buffer before expiry
+                finalNextRefresh = minNextRefresh;
+                console.log(`⚠️ [${userId}] Adjusted nextRefresh to be BEFORE expiry (was at/after expiry)`);
+            } else if (finalNextRefresh > minNextRefresh) {
+                // nextRefresh is too close to expiry - set to dynamic buffer before expiry
+                finalNextRefresh = minNextRefresh;
+                const dynamicBuffer = calculateDynamicRefreshBuffer(cookieExpiry, now);
+                console.log(`⚠️ [${userId}] Adjusted nextRefresh to be ${Math.round(dynamicBuffer/1000)}s before expiry (dynamic buffer)`);
+            }
+        }
+        
+        // Clamp to now+10s minimum (never schedule in the past, minimum 10s in future)
+        const minNextRefresh = now + (10 * 1000); // 10 seconds minimum
+        if (finalNextRefresh < minNextRefresh) {
+            finalNextRefresh = minNextRefresh;
+        }
+        
+        // Prevent double scheduling: check if current nextRefresh differs by <5s
+        const currentNextRefresh = await getNextRefresh(userId);
+        if (currentNextRefresh) {
+            const diff = Math.abs(finalNextRefresh - currentNextRefresh);
+            if (diff < 5000) {
+                // Less than 5s difference - skip update to prevent double scheduling
+                console.log(`⏭️ [${userId}] Skipping nextRefresh update (diff: ${diff}ms < 5s threshold)`);
+                return;
+            }
+        }
+        
+        const nextRefreshTtl = Math.max(60, Math.floor((finalNextRefresh - now) / 1000));
         if (nextRefreshTtl > 0) {
             // Store in individual key
-            await cacheLayer.set(nextRefreshKey, nextRefreshTimestamp.toString(), nextRefreshTtl);
+            await cacheLayer.set(nextRefreshKey, finalNextRefresh.toString(), nextRefreshTtl);
             
             // Update sorted set for adaptive scheduling (refreshSchedule)
             const memberKey = `user:${String(userId).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-            await cacheLayer.zadd('refreshSchedule', memberKey, nextRefreshTimestamp);
+            await cacheLayer.zadd('refreshSchedule', memberKey, finalNextRefresh);
             
-            const nextRefreshDate = new Date(nextRefreshTimestamp);
-            console.log(`📅 [${userId}] Stored next refresh at ${nextRefreshDate.toISOString()}`);
+            const nextRefreshDate = new Date(finalNextRefresh);
+            if (cookieExpiry) {
+                const timeUntilExpiry = Math.round((cookieExpiry - finalNextRefresh) / 1000);
+                console.log(`📅 [${userId}] Stored next refresh at ${nextRefreshDate.toISOString()} (${timeUntilExpiry}s before expiry)`);
+            } else {
+                console.log(`📅 [${userId}] Stored next refresh at ${nextRefreshDate.toISOString()}`);
+            }
         } else {
-            // Timestamp is in the past, set to now (refresh immediately)
-            const immediateRefresh = Date.now();
+            // Timestamp is in the past, set to now+10s (minimum future time)
+            const immediateRefresh = now + (10 * 1000);
             await cacheLayer.set(nextRefreshKey, immediateRefresh.toString(), 60);
             
             const memberKey = `user:${String(userId).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
             await cacheLayer.zadd('refreshSchedule', memberKey, immediateRefresh);
             
-            console.log(`📅 [${userId}] Stored immediate refresh (timestamp was in past)`);
+            console.log(`📅 [${userId}] Stored immediate refresh (timestamp was in past, set to now+10s)`);
         }
     } catch (error) {
         console.error(`❌ Failed to store nextRefresh for ${userId}:`, error.message);
@@ -263,16 +327,25 @@ async function saveCookies(userId, cookies) {
             cookieExpiryTimestamp = Date.now() + (actualExpiration * 1000);
             
             // Use actual expiration for Redis TTL (no minimum enforcement)
+            // Handle short-lived cookies (e.g., 60 seconds) correctly
             ttl = Math.min(actualExpiration, COOKIE_TTL); // Cap at 24h max, but use actual expiry
-            const actualHours = Math.round(actualExpiration / 3600);
-            const actualMinutes = Math.round((actualExpiration % 3600) / 60);
-            const ttlHours = Math.round(ttl / 3600);
-            const ttlMinutes = Math.round((ttl % 3600) / 60);
-            console.log(`📅 Cookie expiration: ${actualHours}h ${actualMinutes}m (Alfa) → Redis TTL: ${ttlHours}h ${ttlMinutes}m (actual expiry)`);
+            
+            // Log expiration details (handle both short and long-lived cookies)
+            if (actualExpiration < 120) {
+                // Short-lived cookie (e.g., 60 seconds)
+                console.log(`📅 Cookie expiration: ${actualExpiration}s (Alfa) → Redis TTL: ${ttl}s (short-lived cookie)`);
+            } else {
+                const actualHours = Math.round(actualExpiration / 3600);
+                const actualMinutes = Math.round((actualExpiration % 3600) / 60);
+                const ttlHours = Math.round(ttl / 3600);
+                const ttlMinutes = Math.round((ttl % 3600) / 60);
+                console.log(`📅 Cookie expiration: ${actualHours}h ${actualMinutes}m (Alfa) → Redis TTL: ${ttlHours}h ${ttlMinutes}m (actual expiry)`);
+            }
         } else {
             // No expiration found, use default
             cookieExpiryTimestamp = Date.now() + (COOKIE_TTL * 1000);
             ttl = COOKIE_TTL;
+            console.log(`⚠️ [${userId}] No cookie expiration found, using default TTL: ${COOKIE_TTL}s`);
         }
         
         // Save cookies with TTL matching shortest cookie expiry
@@ -285,8 +358,24 @@ async function saveCookies(userId, cookies) {
             const expiryTtl = Math.max(60, Math.floor((cookieExpiryTimestamp - Date.now()) / 1000));
             await cacheLayer.set(expiryKey, cookieExpiryTimestamp.toString(), expiryTtl);
             
-            // Calculate and store next refresh time (15 minutes before expiry)
-            const nextRefreshTimestamp = cookieExpiryTimestamp - REFRESH_BUFFER_MS;
+            // IMPROVEMENT: Calculate dynamic refresh buffer (20% of remaining time, clamped 10-30s)
+            const now = Date.now();
+            const dynamicBuffer = calculateDynamicRefreshBuffer(cookieExpiryTimestamp, now);
+            let nextRefreshTimestamp = cookieExpiryTimestamp - dynamicBuffer;
+            
+            // CRITICAL: Ensure nextRefresh is always BEFORE expiry (never at or after)
+            if (nextRefreshTimestamp >= cookieExpiryTimestamp) {
+                // Safety check: set to dynamic buffer before expiry
+                const dynamicBuffer = calculateDynamicRefreshBuffer(cookieExpiryTimestamp, now);
+                nextRefreshTimestamp = cookieExpiryTimestamp - dynamicBuffer;
+            }
+            
+            // Clamp to now+10s minimum (never schedule in the past, minimum 10s in future)
+            const minNextRefresh = now + (10 * 1000); // 10 seconds minimum
+            if (nextRefreshTimestamp < minNextRefresh) {
+                nextRefreshTimestamp = minNextRefresh;
+            }
+            
             const nextRefreshKey = getNextRefreshKey(userId);
             const nextRefreshTtl = Math.max(60, Math.floor((nextRefreshTimestamp - Date.now()) / 1000));
             if (nextRefreshTtl > 0) {
@@ -297,7 +386,8 @@ async function saveCookies(userId, cookies) {
                 await cacheLayer.zadd('refreshSchedule', memberKey, nextRefreshTimestamp);
                 
                 const nextRefreshDate = new Date(nextRefreshTimestamp);
-                console.log(`📅 Scheduled next refresh for ${userId} at ${nextRefreshDate.toISOString()}`);
+                const timeUntilExpiry = Math.round((cookieExpiryTimestamp - nextRefreshTimestamp) / 1000);
+                console.log(`📅 Scheduled next refresh for ${userId} at ${nextRefreshDate.toISOString()} (${timeUntilExpiry}s before expiry)`);
             }
         }
     } catch (error) {
@@ -409,8 +499,8 @@ async function loginAndSaveCookies(phone, password, userId) {
     let page = null;
 
     try {
-        // Get a new browser context
-        const contextData = await browserPool.createContext();
+        // IMPROVEMENT: Use pre-warmed context if available for faster login
+        const contextData = await browserPool.getOrCreateContext();
         context = contextData.context;
         page = contextData.page;
 

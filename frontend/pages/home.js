@@ -1,7 +1,363 @@
 // Home Page Script
 class HomeManager {
     constructor() {
+        this.admins = [];
+        this.unsubscribe = null;
+        this.periodicRefreshInterval = null;
         this.initCardListeners();
+        this.initRealTimeListener();
+        
+        // Also force a fresh fetch on initialization to ensure we have latest data
+        this.forceRefresh();
+        
+        // Refresh when page becomes visible (user switches back to tab)
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                console.log('👁️ [Home] Page became visible, refreshing data...');
+                this.forceRefresh();
+            }
+        });
+
+        // Set up periodic refresh every 30 seconds to ensure we're always in sync
+        // This acts as a safety net in case the real-time listener misses something
+        this.periodicRefreshInterval = setInterval(() => {
+            console.log('⏰ [Home] Periodic refresh triggered');
+            this.forceRefresh();
+        }, 30000); // 30 seconds
+    }
+
+    async forceRefresh() {
+        // Force a fresh fetch from server to ensure we have latest data
+        if (typeof db === 'undefined') {
+            console.warn('⚠️ [Home] Firebase not available, skipping force refresh');
+            return;
+        }
+
+        try {
+            console.log('🔄 [Home] Force refreshing data from server...');
+            // Note: Compat version may not support source option, but get() should still work
+            const snapshot = await db.collection('admins').get();
+            
+            // Update admins array from fresh server data
+            const previousCount = this.admins.length;
+            const previousIds = new Set(this.admins.map(a => a.id));
+            
+            // CRITICAL: Only include documents that actually exist in the snapshot
+            const newAdmins = [];
+            snapshot.docs.forEach(doc => {
+                try {
+                    const data = doc.data();
+                    if (data && doc.id) {
+                        newAdmins.push({
+                            id: doc.id,
+                            ...data
+                        });
+                    } else {
+                        console.warn(`⚠️ [Home] Skipping invalid document: ${doc.id}`);
+                    }
+                } catch (e) {
+                    console.error(`❌ [Home] Error processing document ${doc.id}:`, e);
+                }
+            });
+
+            this.admins = newAdmins;
+
+            const currentIds = new Set(this.admins.map(a => a.id));
+            const deletedIds = [...previousIds].filter(id => !currentIds.has(id));
+            const addedIds = [...currentIds].filter(id => !previousIds.has(id));
+
+            console.log(`✅ [Home] Force refresh complete:`, {
+                previousCount: previousCount,
+                currentCount: this.admins.length,
+                deleted: deletedIds.length,
+                added: addedIds.length,
+                deletedIds: deletedIds,
+                addedIds: addedIds
+            });
+            
+            // Update card counts
+            this.updateCardCounts();
+        } catch (error) {
+            console.error('❌ [Home] Force refresh failed:', error);
+        }
+    }
+
+    initRealTimeListener() {
+        // Check if Firebase is available
+        if (typeof db === 'undefined') {
+            console.error('Firebase Firestore (db) is not initialized. Real-time updates disabled.');
+            return;
+        }
+
+        // Set up real-time listener for admins collection
+        // Note: Compat version doesn't support includeMetadataChanges option
+        this.unsubscribe = db.collection('admins').onSnapshot(
+            (snapshot) => {
+                // Check if this is from cache (offline mode)
+                const source = snapshot.metadata && snapshot.metadata.fromCache ? 'cache' : 'server';
+                
+                // Log document changes to track deletions
+                let hasDeletions = false;
+                const deletedIdsFromChanges = [];
+                try {
+                    const changes = snapshot.docChanges ? snapshot.docChanges() : [];
+                    if (changes.length > 0) {
+                        console.log(`📝 [Home] Detected ${changes.length} document change(s) (source: ${source}):`);
+                        changes.forEach((change) => {
+                            console.log(`   - ${change.type}: ${change.doc.id}`);
+                            if (change.type === 'removed') {
+                                hasDeletions = true;
+                                deletedIdsFromChanges.push(change.doc.id);
+                                console.log(`   🗑️ [Home] Admin deleted: ${change.doc.id}`);
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.log('📝 [Home] Could not get docChanges (compat version limitation)');
+                }
+
+                // CRITICAL: Always rebuild admins array from snapshot.docs
+                // Deleted documents won't be in snapshot.docs, so they're automatically excluded
+                const previousAdminIds = new Set(this.admins.map(a => a.id));
+                
+                // Rebuild admins array from current snapshot (this automatically excludes deleted docs)
+                // IMPORTANT: Only include documents that exist in the snapshot
+                const newAdmins = [];
+                snapshot.docs.forEach(doc => {
+                    try {
+                        const data = doc.data();
+                        if (data && doc.id) {
+                            newAdmins.push({
+                                id: doc.id,
+                                ...data
+                            });
+                        }
+                    } catch (e) {
+                        console.error(`❌ [Home] Error processing document ${doc.id}:`, e);
+                    }
+                });
+
+                // Update admins array
+                this.admins = newAdmins;
+                
+                const currentAdminIds = new Set(this.admins.map(a => a.id));
+                
+                // Find deleted admins by comparing previous and current IDs
+                const deletedIds = [...previousAdminIds].filter(id => !currentAdminIds.has(id));
+                
+                if (deletedIds.length > 0) {
+                    console.log(`🗑️ [Home] Detected ${deletedIds.length} deleted admin(s):`, deletedIds);
+                    console.log(`🗑️ [Home] Deleted IDs from changes:`, deletedIdsFromChanges);
+                }
+
+                console.log('🔄 [Home] Real-time listener triggered!', {
+                    docCount: snapshot.docs.length,
+                    previousCount: previousAdminIds.size,
+                    currentCount: this.admins.length,
+                    deletedCount: deletedIds.length,
+                    source: source,
+                    timestamp: new Date().toISOString()
+                });
+
+                // ALWAYS update card counts when listener fires (to catch any deletions)
+                console.log(`🔄 [Home] Updating card counts (hasDeletions: ${hasDeletions}, deletedIds: ${deletedIds.length})`);
+                this.updateCardCounts();
+                this.updateOpenModals();
+
+                // If using cache, warn and force a server refresh
+                if (source === 'cache') {
+                    console.warn('⚠️ [Home] Using cached data - forcing server refresh to ensure accuracy');
+                    // Force a server refresh to get latest data
+                    setTimeout(() => {
+                        this.forceRefresh();
+                    }, 1000);
+                }
+            },
+            (error) => {
+                console.error('❌ [Home] Real-time listener error:', error);
+                
+                // Try to reconnect after a delay
+                setTimeout(() => {
+                    console.log('🔄 [Home] Attempting to reconnect to Firestore...');
+                    if (this.unsubscribe) {
+                        this.unsubscribe();
+                    }
+                    this.initRealTimeListener();
+                }, 5000);
+            }
+        );
+    }
+
+    updateCardCounts() {
+        // Log current state for debugging
+        console.log(`📊 [Home] Updating card counts with ${this.admins.length} admin(s)`);
+        
+        // CRITICAL: Filter out any invalid admins first
+        const validAdmins = this.admins.filter(admin => {
+            if (!admin || !admin.id) {
+                console.warn(`⚠️ [Home] Found invalid admin (missing id):`, admin);
+                return false;
+            }
+            return true;
+        });
+
+        if (validAdmins.length !== this.admins.length) {
+            console.log(`🧹 [Home] Filtered out ${this.admins.length - validAdmins.length} invalid admin(s)`);
+            this.admins = validAdmins;
+        }
+        
+        // CRITICAL: Remove duplicates by ID
+        const uniqueAdmins = [];
+        const seenIds = new Set();
+        this.admins.forEach(admin => {
+            if (!seenIds.has(admin.id)) {
+                seenIds.add(admin.id);
+                uniqueAdmins.push(admin);
+            } else {
+                console.warn(`⚠️ [Home] Found duplicate admin ID: ${admin.id}`);
+            }
+        });
+        
+        if (uniqueAdmins.length !== this.admins.length) {
+            console.log(`🧹 [Home] Removed ${this.admins.length - uniqueAdmins.length} duplicate admin(s)`);
+            this.admins = uniqueAdmins;
+        }
+        
+        if (!this.admins || this.admins.length === 0) {
+            // No admins yet, set all counts to 0
+            console.log('📊 [Home] No admins found, setting all counts to 0');
+            this.setCardCount('1', 0); // Available Services
+            this.setCardCount('2', 0); // Expired Numbers
+            this.setCardCount('3', 0); // Services To Expire Today
+            this.setCardCount('6', 0); // Finished Services
+            this.setCardCount('7', 0); // High Admin Consumption
+            this.setCardCount('9', 0); // Inactive Numbers
+            return;
+        }
+
+        // Create a snapshot-like object for compatibility with filter functions
+        // IMPORTANT: Only include valid admins that exist in this.admins
+        const snapshot = {
+            docs: this.admins.map(admin => ({
+                id: admin.id,
+                data: () => admin
+            }))
+        };
+
+        console.log(`📊 [Home] Processing ${snapshot.docs.length} unique admin document(s) for filtering`);
+
+        // Calculate counts for each card
+        const availableServices = this.filterAvailableServices(snapshot);
+        const expiredNumbers = this.filterExpiredNumbers(snapshot);
+        const expiringToday = this.filterServicesToExpireToday(snapshot);
+        const finishedServices = this.filterFinishedServices(snapshot);
+        const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
+        const inactiveNumbers = this.filterInactiveNumbers(snapshot);
+
+        // Update card counts
+        this.setCardCount('1', availableServices.length); // Available Services
+        this.setCardCount('2', expiredNumbers.length); // Expired Numbers
+        this.setCardCount('3', expiringToday.length); // Services To Expire Today
+        this.setCardCount('6', finishedServices.length); // Finished Services
+        this.setCardCount('7', highAdminConsumption.length); // High Admin Consumption
+        this.setCardCount('9', inactiveNumbers.length); // Inactive Numbers
+
+        console.log(`📊 [Home] Card counts updated:`, {
+            availableServices: availableServices.length,
+            expiredNumbers: expiredNumbers.length,
+            expiringToday: expiringToday.length,
+            finishedServices: finishedServices.length,
+            highAdminConsumption: highAdminConsumption.length,
+            inactiveNumbers: inactiveNumbers.length,
+            totalAdmins: this.admins.length
+        });
+    }
+
+    setCardCount(cardId, count) {
+        const card = document.querySelector(`.card[data-card-id="${cardId}"]`);
+        if (card) {
+            // Find or create count element
+            let countElement = card.querySelector('.card-count');
+            if (!countElement) {
+                countElement = document.createElement('div');
+                countElement.className = 'card-count';
+                // Append directly to card (not card-content) so it doesn't overlap with title
+                card.appendChild(countElement);
+            }
+            countElement.textContent = count;
+        }
+    }
+
+    updateOpenModals() {
+        // Update modals if they're currently open
+        const availableServicesModal = document.getElementById('availableServicesModal');
+        if (availableServicesModal && !availableServicesModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            // Modal is open and not loading - refresh data
+            this.refreshOpenModal('availableServices');
+        }
+
+        const expiredNumbersModal = document.getElementById('expiredNumbersModal');
+        if (expiredNumbersModal && !expiredNumbersModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('expiredNumbers');
+        }
+
+        const servicesToExpireTodayModal = document.getElementById('servicesToExpireTodayModal');
+        if (servicesToExpireTodayModal && !servicesToExpireTodayModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('servicesToExpireToday');
+        }
+
+        const finishedServicesModal = document.getElementById('finishedServicesModal');
+        if (finishedServicesModal && !finishedServicesModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('finishedServices');
+        }
+
+        const highAdminConsumptionModal = document.getElementById('highAdminConsumptionModal');
+        if (highAdminConsumptionModal && !highAdminConsumptionModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('highAdminConsumption');
+        }
+
+        const inactiveNumbersModal = document.getElementById('inactiveNumbersModal');
+        if (inactiveNumbersModal && !inactiveNumbersModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('inactiveNumbers');
+        }
+    }
+
+    refreshOpenModal(modalType) {
+        if (!this.admins || this.admins.length === 0) return;
+
+        const snapshot = {
+            docs: this.admins.map(admin => ({
+                id: admin.id,
+                data: () => admin
+            }))
+        };
+
+        switch (modalType) {
+            case 'availableServices':
+                const availableServices = this.filterAvailableServices(snapshot);
+                this.showAvailableServicesModal(availableServices);
+                break;
+            case 'expiredNumbers':
+                const expiredNumbers = this.filterExpiredNumbers(snapshot);
+                this.showExpiredNumbersModal(expiredNumbers);
+                break;
+            case 'servicesToExpireToday':
+                const expiringToday = this.filterServicesToExpireToday(snapshot);
+                this.showServicesToExpireTodayModal(expiringToday);
+                break;
+            case 'finishedServices':
+                const finishedServices = this.filterFinishedServices(snapshot);
+                this.showFinishedServicesModal(finishedServices);
+                break;
+            case 'highAdminConsumption':
+                const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
+                this.showHighAdminConsumptionModal(highAdminConsumption);
+                break;
+            case 'inactiveNumbers':
+                const inactiveNumbers = this.filterInactiveNumbers(snapshot);
+                this.showInactiveNumbersModal(inactiveNumbers);
+                break;
+        }
     }
 
     initCardListeners() {
@@ -53,16 +409,27 @@ class HomeManager {
 
     async openAvailableServicesModal() {
         try {
-            // Check if Firebase is available
-            if (typeof db === 'undefined') {
-                throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
-            }
-
             // Show loading state
             this.showLoadingModal();
 
-            // Fetch all admins from Firebase
-            const snapshot = await db.collection('admins').get();
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                // Use cached real-time data
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                // Fallback: fetch from Firebase if real-time data not available
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                const firebaseSnapshot = await db.collection('admins').get();
+                snapshot = firebaseSnapshot;
+            }
             
             // Process and filter admins
             const availableServices = this.filterAvailableServices(snapshot);
@@ -79,16 +446,25 @@ class HomeManager {
 
     async openExpiredNumbersModal() {
         try {
-            // Check if Firebase is available
-            if (typeof db === 'undefined') {
-                throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
-            }
-
             // Show loading state
             this.showLoadingModal();
 
-            // Fetch all admins from Firebase
-            const snapshot = await db.collection('admins').get();
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                const firebaseSnapshot = await db.collection('admins').get();
+                snapshot = firebaseSnapshot;
+            }
             
             // Process and filter admins
             const expiredNumbers = this.filterExpiredNumbers(snapshot);
@@ -303,7 +679,10 @@ class HomeManager {
 
     /**
      * Helper function to determine if an admin is inactive
-     * Uses the same logic as insights.js - checks if "u-share" exists in getconsumption response
+     * Uses the EXACT same logic as insights.js
+     * RULE 1: Admin is active if ServiceNameValue contains "U-share Main"
+     * RULE 2 (EXCEPTION): Admin is active if ServiceNameValue is "Mobile Internet" AND ValidityDateValue has a valid date
+     * Otherwise, admin is inactive
      * @param {Object} data - Admin document data from Firebase
      * @param {Object} alfaData - Alfa data from admin document
      * @returns {boolean} - True if admin is inactive, false if active
@@ -311,17 +690,49 @@ class HomeManager {
     isAdminInactive(data, alfaData) {
         const hasAlfaData = alfaData && Object.keys(alfaData).length > 0 && !alfaData.error;
         
-        // Determine status based on getconsumption API response (same logic as insights.js)
+        // Determine status based on getconsumption API response (EXACT same logic as insights.js)
+        // RULE 1: Admin is active if ServiceNameValue contains "U-share Main"
+        // RULE 2 (EXCEPTION): Admin is active if ServiceNameValue is "Mobile Internet" AND ValidityDateValue has a valid date
+        // Otherwise, admin is inactive
         let status = 'inactive'; // Default to inactive
         
         if (hasAlfaData && alfaData.primaryData) {
             try {
                 const apiData = alfaData.primaryData;
                 
-                // First, do a simple string search (most reliable)
-                const responseStr = JSON.stringify(apiData).toLowerCase();
-                if (responseStr.includes('u-share')) {
-                    status = 'active';
+                // Check ServiceInformationValue array
+                if (apiData.ServiceInformationValue && Array.isArray(apiData.ServiceInformationValue)) {
+                    for (const service of apiData.ServiceInformationValue) {
+                        if (service.ServiceNameValue) {
+                            const serviceName = String(service.ServiceNameValue).trim();
+                            
+                            // RULE 1: Check if ServiceNameValue is "U-share Main" (case-insensitive)
+                            if (serviceName.toLowerCase() === 'u-share main') {
+                                status = 'active';
+                                break;
+                            }
+                            
+                            // RULE 2 (EXCEPTION): Check if ServiceNameValue is "Mobile Internet" AND has valid ValidityDateValue
+                            if (serviceName.toLowerCase() === 'mobile internet') {
+                                // Check ServiceDetailsInformationValue for ValidityDateValue
+                                if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                    for (const details of service.ServiceDetailsInformationValue) {
+                                        const validityDate = details.ValidityDateValue;
+                                        // Check if ValidityDateValue exists and is not empty/null
+                                        if (validityDate && String(validityDate).trim() !== '' && String(validityDate).trim() !== 'null') {
+                                            // Check if it looks like a valid date (e.g., "22/11/2025")
+                                            const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+                                            if (datePattern.test(String(validityDate).trim())) {
+                                                status = 'active';
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (status === 'active') break;
+                                }
+                            }
+                        }
+                    }
                 }
             } catch (statusError) {
                 // If error, keep as inactive
@@ -335,19 +746,41 @@ class HomeManager {
             );
             if (getConsumptionResponse && getConsumptionResponse.data) {
                 try {
-                    const responseStr = JSON.stringify(getConsumptionResponse.data).toLowerCase();
-                    if (responseStr.includes('u-share')) {
-                        status = 'active';
+                    const responseData = getConsumptionResponse.data;
+                    if (responseData.ServiceInformationValue && Array.isArray(responseData.ServiceInformationValue)) {
+                        for (const service of responseData.ServiceInformationValue) {
+                            if (service.ServiceNameValue) {
+                                const serviceName = String(service.ServiceNameValue).trim();
+                                
+                                // RULE 1: Check for "U-share Main"
+                                if (serviceName.toLowerCase() === 'u-share main') {
+                                    status = 'active';
+                                    break;
+                                }
+                                
+                                // RULE 2 (EXCEPTION): Check for "Mobile Internet" with valid ValidityDateValue
+                                if (serviceName.toLowerCase() === 'mobile internet') {
+                                    if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                        for (const details of service.ServiceDetailsInformationValue) {
+                                            const validityDate = details.ValidityDateValue;
+                                            if (validityDate && String(validityDate).trim() !== '' && String(validityDate).trim() !== 'null') {
+                                                const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+                                                if (datePattern.test(String(validityDate).trim())) {
+                                                    status = 'active';
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if (status === 'active') break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 } catch (e) {
                     // Ignore errors
                 }
             }
-        }
-        
-        // Fallback to existing status logic if getconsumption response not found
-        if (status === 'inactive' && data.status && data.status.toLowerCase().includes('active')) {
-            status = 'active';
         }
         
         return status === 'inactive';
@@ -693,16 +1126,25 @@ class HomeManager {
     // Services To Expire Today Modal
     async openServicesToExpireTodayModal() {
         try {
-            // Check if Firebase is available
-            if (typeof db === 'undefined') {
-                throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
-            }
-
             // Show loading state
             this.showLoadingModal();
 
-            // Fetch all admins from Firebase
-            const snapshot = await db.collection('admins').get();
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                const firebaseSnapshot = await db.collection('admins').get();
+                snapshot = firebaseSnapshot;
+            }
             
             // Process and filter admins
             const expiringToday = this.filterServicesToExpireToday(snapshot);
@@ -1045,16 +1487,25 @@ class HomeManager {
     // Finished Services Modal
     async openFinishedServicesModal() {
         try {
-            // Check if Firebase is available
-            if (typeof db === 'undefined') {
-                throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
-            }
-
             // Show loading state
             this.showLoadingModal();
 
-            // Fetch all admins from Firebase
-            const snapshot = await db.collection('admins').get();
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                const firebaseSnapshot = await db.collection('admins').get();
+                snapshot = firebaseSnapshot;
+            }
             
             // Process and filter admins
             const finishedServices = this.filterFinishedServices(snapshot);
@@ -1179,16 +1630,25 @@ class HomeManager {
     // High Admin Consumption Modal
     async openHighAdminConsumptionModal() {
         try {
-            // Check if Firebase is available
-            if (typeof db === 'undefined') {
-                throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
-            }
-
             // Show loading state
             this.showLoadingModal();
 
-            // Fetch all admins from Firebase
-            const snapshot = await db.collection('admins').get();
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                const firebaseSnapshot = await db.collection('admins').get();
+                snapshot = firebaseSnapshot;
+            }
             
             // Process and filter admins
             const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
@@ -1572,19 +2032,39 @@ class HomeManager {
 
     async openInactiveNumbersModal() {
         try {
-            // Check if Firebase is available
+            // Show loading state
+            this.showLoadingModal();
+
+            // CRITICAL: Always fetch fresh data from Firebase to ensure we have latest state
+            // Don't rely on cached this.admins as it might contain deleted admins
             if (typeof db === 'undefined') {
                 throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
             }
 
-            // Show loading state
-            this.showLoadingModal();
-
-            // Fetch all admins from Firebase
-            const snapshot = await db.collection('admins').get();
+            console.log('🔄 [Home] Fetching fresh data for inactive numbers modal...');
+            const firebaseSnapshot = await db.collection('admins').get();
+            
+            // Update this.admins with fresh data
+            const previousCount = this.admins.length;
+            this.admins = firebaseSnapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            
+            console.log(`✅ [Home] Fresh data fetched: ${previousCount} → ${this.admins.length} admins`);
+            
+            // Create snapshot from fresh data
+            const snapshot = {
+                docs: this.admins.map(admin => ({
+                    id: admin.id,
+                    data: () => admin
+                }))
+            };
             
             // Process and filter admins
             const inactiveNumbers = this.filterInactiveNumbers(snapshot);
+            
+            console.log(`📋 [Home] Found ${inactiveNumbers.length} inactive admin(s) for modal`);
             
             // Hide loading and show modal with data
             this.hideLoadingModal();
@@ -1598,13 +2078,38 @@ class HomeManager {
 
     filterInactiveNumbers(snapshot) {
         const inactiveNumbers = [];
+        const processedIds = new Set();
+
+        console.log(`🔍 [Home] Filtering inactive numbers from ${snapshot.docs.length} admin(s)`);
 
         snapshot.docs.forEach(doc => {
+            // CRITICAL: Ensure document has valid ID
+            if (!doc || !doc.id) {
+                console.warn(`⚠️ [Home] Skipping invalid document in filterInactiveNumbers`);
+                return;
+            }
+
+            // CRITICAL: Skip if we've already processed this ID (duplicate check)
+            if (processedIds.has(doc.id)) {
+                console.warn(`⚠️ [Home] Skipping duplicate admin ID: ${doc.id}`);
+                return;
+            }
+            processedIds.add(doc.id);
+
             const data = doc.data();
+            
+            // CRITICAL: Ensure data exists
+            if (!data) {
+                console.warn(`⚠️ [Home] Skipping admin ${doc.id} - no data`);
+                return;
+            }
+
             const alfaData = data.alfaData || {};
 
             // Filter: only show admins with status === 'inactive' (using helper function)
-            if (this.isAdminInactive(data, alfaData)) {
+            const isInactive = this.isAdminInactive(data, alfaData);
+            
+            if (isInactive) {
                 // Parse balance
                 let balance = 0;
                 if (alfaData.balance) {
@@ -1613,6 +2118,8 @@ class HomeManager {
                     balance = match ? parseFloat(match[0]) : 0;
                 }
 
+                console.log(`📋 [Home] Found inactive admin: ${doc.id} (${data.name || 'N/A'})`);
+                
                 inactiveNumbers.push({
                     id: doc.id,
                     name: data.name || 'N/A',
@@ -1623,6 +2130,7 @@ class HomeManager {
             }
         });
 
+        console.log(`✅ [Home] Filtered ${inactiveNumbers.length} inactive admin(s) from ${snapshot.docs.length} total`);
         return inactiveNumbers;
     }
 
@@ -1702,6 +2210,23 @@ class HomeManager {
     }
 }
 
+// Global instance for cleanup
+let homeManagerInstance = null;
+
 document.addEventListener('DOMContentLoaded', () => {
-    new HomeManager();
+    homeManagerInstance = new HomeManager();
+});
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (homeManagerInstance) {
+        if (homeManagerInstance.unsubscribe) {
+            homeManagerInstance.unsubscribe();
+            console.log('🔄 [Home] Real-time listener unsubscribed');
+        }
+        if (homeManagerInstance.periodicRefreshInterval) {
+            clearInterval(homeManagerInstance.periodicRefreshInterval);
+            console.log('🔄 [Home] Periodic refresh cleared');
+        }
+    }
 });

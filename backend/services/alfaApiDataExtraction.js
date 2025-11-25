@@ -354,17 +354,34 @@ function extractExpiration(apiResponseData) {
 /**
  * Format date as DD/MM/YYYY
  * @param {string} dateString - Date string
- * @returns {string|null} Formatted date or null
+ * @returns {string|null} Formatted date or null (never returns NaN/NaN/NaN)
  */
 function formatDate(dateString) {
     if (!dateString) return null;
     try {
         const date = new Date(dateString);
-        const day = String(date.getDate()).padStart(2, '0');
-        const month = String(date.getMonth() + 1).padStart(2, '0');
+        // CRITICAL: Validate date is valid (not Invalid Date)
+        if (isNaN(date.getTime())) {
+            console.warn(`⚠️ Invalid date string: ${dateString}`);
+            return null;
+        }
+        const day = date.getDate();
+        const month = date.getMonth() + 1;
         const year = date.getFullYear();
-        return `${day}/${month}/${year}`;
+        
+        // CRITICAL: Check for NaN values before formatting
+        if (isNaN(day) || isNaN(month) || isNaN(year)) {
+            console.warn(`⚠️ Date components are NaN for: ${dateString}`);
+            return null;
+        }
+        
+        const formattedDay = String(day).padStart(2, '0');
+        const formattedMonth = String(month).padStart(2, '0');
+        const formattedYear = String(year);
+        
+        return `${formattedDay}/${formattedMonth}/${formattedYear}`;
     } catch (e) {
+        console.warn(`⚠️ Error formatting date: ${dateString}`, e.message);
         return null;
     }
 }

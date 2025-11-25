@@ -20,6 +20,10 @@ class InsightsManager {
         // This persists across Firebase listener updates
         this.recentManualUpdates = new Map();
         
+        // Flags to prevent duplicate form submissions
+        this.isSubmittingEditForm = false;
+        this.isSubmittingAddForm = false;
+        
         this.init();
     }
     
@@ -2835,6 +2839,9 @@ class InsightsManager {
         
         // Bind events after loading
         this.bindEditSubscribersEvents();
+        
+        // Update add button state after loading subscribers
+        this.updateEditAddSubscriberButtonState();
     }
     
     createEditSubscriberItem(phone, consumption, quota, index, isPending) {
@@ -2881,6 +2888,8 @@ class InsightsManager {
             addBtn.addEventListener('click', () => {
                 this.addEditSubscriberItem();
             });
+            // Update button state initially
+            this.updateEditAddSubscriberButtonState();
         }
         
         // Form submit
@@ -2904,14 +2913,35 @@ class InsightsManager {
     }
     
     removeEditSubscriberItem(index) {
+        const itemsContainer = document.getElementById('editSubscribersItems');
+        if (!itemsContainer) return;
+        
+        // Prevent removing all subscribers - at least 1 must remain
+        const existingItems = itemsContainer.querySelectorAll('.edit-subscriber-item');
+        if (existingItems.length <= 1) {
+            alert('At least one subscriber must remain. You cannot remove all subscribers.');
+            return;
+        }
+        
         const item = document.querySelector(`.edit-subscriber-item[data-index="${index}"]`);
         if (item) {
+            // Get subscriber phone for confirmation message
+            const subscriberInput = item.querySelector('input[name*="subscriber"]');
+            const subscriberPhone = subscriberInput ? subscriberInput.value.trim() : 'this subscriber';
+            
+            // Ask for confirmation before removing
+            if (!confirm(`Are you sure you want to remove ${subscriberPhone}?`)) {
+                return; // User cancelled
+            }
+            
             const divider = item.nextElementSibling;
             if (divider && divider.classList.contains('edit-subscriber-divider')) {
                 divider.remove();
             }
             item.remove();
             this.reindexEditSubscriberItems();
+            // Update add button state after removing an item
+            this.updateEditAddSubscriberButtonState();
         }
     }
     
@@ -2921,8 +2951,15 @@ class InsightsManager {
         const itemsContainer = document.getElementById('editSubscribersItems');
         if (!itemsContainer) return;
         
-        // Find the highest index
+        // Limit to maximum 3 subscriber rows
+        const MAX_SUBSCRIBERS = 3;
         const existingItems = itemsContainer.querySelectorAll('.edit-subscriber-item');
+        if (existingItems.length >= MAX_SUBSCRIBERS) {
+            console.log(`⚠️ Maximum ${MAX_SUBSCRIBERS} subscribers allowed`);
+            return;
+        }
+        
+        // Find the highest index
         let maxIndex = -1;
         existingItems.forEach(item => {
             const idx = parseInt(item.dataset.index) || 0;
@@ -2930,14 +2967,13 @@ class InsightsManager {
         });
         const newIndex = maxIndex + 1;
         
-        // For now, create a new row that opens admin selector when clicking on subscriber field
-        // This mimics the "Add Subscribers" modal behavior
+        // Create a new row with editable subscriber phone number input
         const itemHtml = `
             <div class="edit-subscriber-item" data-index="${newIndex}" data-phone="" data-pending="false" data-is-new="true">
                 <div class="edit-subscriber-fields">
                     <div class="edit-subscriber-field">
                         <label>Subscriber</label>
-                        <input type="tel" name="items[${newIndex}].subscriber" value="" placeholder="Click to select admin" readonly class="edit-subscriber-input service-selector" data-item-index="${newIndex}">
+                        <input type="tel" name="items[${newIndex}].subscriber" value="" placeholder="Enter phone number (8 digits)" class="edit-subscriber-input" data-item-index="${newIndex}">
                     </div>
                     <div class="edit-subscriber-field">
                         <label>Consumption</label>
@@ -2945,7 +2981,7 @@ class InsightsManager {
                     </div>
                     <div class="edit-subscriber-field">
                         <label>Quota</label>
-                        <input type="number" step="any" name="items[${newIndex}].quota" value="0" class="edit-subscriber-input">
+                        <input type="number" step="any" name="items[${newIndex}].quota" value="0" class="edit-subscriber-input" placeholder="Enter quota">
                     </div>
                 </div>
                 <button type="button" class="edit-subscriber-remove-btn" data-index="${newIndex}" data-phone="">
@@ -2969,13 +3005,30 @@ class InsightsManager {
                 });
             }
             
-            // Make subscriber field open admin selector when clicked
-            const subscriberInput = newItem.querySelector('input[name*="subscriber"]');
-            if (subscriberInput && subscriberInput.classList.contains('service-selector')) {
-                subscriberInput.addEventListener('click', () => {
-                    this.openAdminSelectorForEditItem(newIndex);
-                });
-            }
+            // Subscriber input is now editable - no admin selector needed
+            // User can directly type the phone number
+        }
+        
+        // Update add button state after adding an item
+        this.updateEditAddSubscriberButtonState();
+    }
+    
+    updateEditAddSubscriberButtonState() {
+        const itemsContainer = document.getElementById('editSubscribersItems');
+        const addBtn = document.getElementById('editSubscribersAddBtn');
+        const MAX_SUBSCRIBERS = 3;
+        
+        if (!itemsContainer || !addBtn) return;
+        
+        const existingItems = itemsContainer.querySelectorAll('.edit-subscriber-item');
+        const currentCount = existingItems.length;
+        
+        if (currentCount >= MAX_SUBSCRIBERS) {
+            // Hide the button completely when limit is reached
+            addBtn.style.display = 'none';
+        } else {
+            // Show the button when below limit
+            addBtn.style.display = '';
         }
     }
     
@@ -3038,32 +3091,62 @@ class InsightsManager {
     }
     
     async handleEditSubscribersSubmit() {
+        // Prevent duplicate submissions
+        if (this.isSubmittingEditForm) {
+            console.log('⏸️ Form submission already in progress, ignoring duplicate request');
+            return;
+        }
+        
         if (!this.editingAdminId) {
             console.error('No admin ID set for editing');
             return;
         }
         
-        const itemsContainer = document.getElementById('editSubscribersItems');
-        if (!itemsContainer) return;
+        this.isSubmittingEditForm = true;
         
-        const items = Array.from(itemsContainer.querySelectorAll('.edit-subscriber-item'));
-        const updates = [];
-        const removals = [];
-        const additions = [];
-        
-        // Get original subscriber data to compare
-        const subscriber = this.subscribers.find(s => s.id === this.editingAdminId);
-        if (!subscriber) {
-            console.error('Subscriber not found');
-            return;
+        // Disable submit button to prevent multiple clicks
+        const submitButton = document.querySelector('#editSubscribersForm button[type="submit"]');
+        let originalButtonText = '';
+        if (submitButton) {
+            originalButtonText = submitButton.textContent;
+            submitButton.disabled = true;
+            submitButton.textContent = 'Processing...';
         }
         
-        const viewData = this.extractViewDetailsData(subscriber);
-        const originalSubscribers = viewData.subscribers.map(s => s.phoneNumber);
-        const originalPending = (viewData.pendingSubscribers || []).map(p => p.phoneNumber || p.phone);
-        
-        // Collect data from form
-        items.forEach((item) => {
+        try {
+            const itemsContainer = document.getElementById('editSubscribersItems');
+            if (!itemsContainer) {
+                this.isSubmittingEditForm = false;
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = originalButtonText;
+                }
+                return;
+            }
+            
+            const items = Array.from(itemsContainer.querySelectorAll('.edit-subscriber-item'));
+            const updates = [];
+            const removals = [];
+            const additions = [];
+            
+            // Get original subscriber data to compare
+            const subscriber = this.subscribers.find(s => s.id === this.editingAdminId);
+            if (!subscriber) {
+                console.error('Subscriber not found');
+                this.isSubmittingEditForm = false;
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = originalButtonText;
+                }
+                return;
+            }
+            
+            const viewData = this.extractViewDetailsData(subscriber);
+            const originalSubscribers = viewData.subscribers.map(s => s.phoneNumber);
+            const originalPending = (viewData.pendingSubscribers || []).map(p => p.phoneNumber || p.phone);
+            
+            // Collect data from form
+            items.forEach((item) => {
             const subscriberInput = item.querySelector('input[name*="subscriber"]');
             const quotaInput = item.querySelector('input[name*="quota"]');
             const isPending = item.dataset.pending === 'true';
@@ -3094,65 +3177,104 @@ class InsightsManager {
                     }
                 }
             }
-        });
+            });
+            
+            // Find removed subscribers (in original but not in form)
+            const currentPhones = items
+                .map(item => {
+                    const input = item.querySelector('input[name*="subscriber"]');
+                    return input ? input.value.trim() : '';
+                })
+                .filter(phone => phone);
+            
+            originalSubscribers.forEach(phone => {
+                if (!currentPhones.includes(phone)) {
+                    removals.push(phone);
+                }
+            });
+            
+            originalPending.forEach(phone => {
+                if (!currentPhones.includes(phone)) {
+                    removals.push(phone);
+                }
+            });
         
-        // Find removed subscribers (in original but not in form)
-        const currentPhones = items
-            .map(item => {
-                const input = item.querySelector('input[name*="subscriber"]');
-                return input ? input.value.trim() : '';
-            })
-            .filter(phone => phone);
-        
-        originalSubscribers.forEach(phone => {
-            if (!currentPhones.includes(phone)) {
-                removals.push(phone);
+            // Ensure at least 1 subscriber remains (existing + new additions)
+            const totalSubscribers = currentPhones.length + additions.length;
+            if (totalSubscribers === 0) {
+                alert('At least one subscriber must remain. You cannot remove all subscribers.');
+                this.isSubmittingEditForm = false;
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = originalButtonText;
+                }
+                return;
             }
-        });
-        
-        originalPending.forEach(phone => {
-            if (!currentPhones.includes(phone)) {
-                removals.push(phone);
-            }
-        });
-        
-        // If there are removals, ask for confirmation
-        if (removals.length > 0) {
-            const confirmMessage = `Are you sure you want to remove ${removals.length} subscriber(s)?\n\nSubscribers: ${removals.join(', ')}`;
-            if (!confirm(confirmMessage)) {
-                return; // User cancelled
-            }
-        }
-        
-        // Call backend API
-        try {
-            const response = await fetch('/api/subscribers/edit', {
+            
+            // No need to ask for confirmation again - user already confirmed when clicking remove button
+            
+            // Call backend API
+            try {
+                const response = await fetch('/api/subscribers/edit', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    adminId: this.editingAdminId,
-                    updates: updates,
-                    removals: removals,
-                    additions: additions
-                })
-            });
-            
-            const result = await response.json();
-            
-            if (response.ok && result.success) {
+                    body: JSON.stringify({
+                        adminId: this.editingAdminId,
+                        updates: updates,
+                        removals: removals,
+                        additions: additions
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {
                 console.log('✅ Subscribers updated successfully');
-                // Refresh the subscriber data
-                await this.refreshSubscriber(this.editingAdminId);
-                this.closeEditSubscribersModal();
-            } else {
-                console.error('❌ Error updating subscribers:', result.error || 'Unknown error');
-                alert('Error updating subscribers: ' + (result.error || 'Unknown error'));
+                
+                    // Build success message
+                    const messages = [];
+                    if (additions.length > 0) {
+                        messages.push(`Added ${additions.length} subscriber(s)`);
+                    }
+                    if (updates.length > 0) {
+                        messages.push(`Updated ${updates.length} subscriber(s)`);
+                    }
+                    if (removals.length > 0) {
+                        messages.push(`Removed ${removals.length} subscriber(s)`);
+                    }
+                    
+                    const successMessage = messages.length > 0 
+                        ? `✅ Successfully ${messages.join(', ')}!`
+                        : '✅ Subscribers updated successfully!';
+                    
+                    alert(successMessage);
+                    
+                    // Close the modal
+                    this.closeEditSubscribersModal();
+                    
+                    // Refresh the specific admin's data to update dashboard (subscriber count, etc.)
+                    // This will update the view details modal if it's open
+                    await this.refreshSubscriber(this.editingAdminId);
+                    
+                    // Refresh the entire subscribers table to update counts and data
+                    this.loadSubscribers();
+                } else {
+                    console.error('❌ Error updating subscribers:', result.error || 'Unknown error');
+                    alert('Error updating subscribers: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('❌ Error calling API:', error);
+                alert('Error updating subscribers. Please try again.');
             }
-        } catch (error) {
-            console.error('❌ Error calling API:', error);
-            alert('Error updating subscribers. Please try again.');
+        } finally {
+            // Re-enable submit button and reset flag
+            this.isSubmittingEditForm = false;
+            if (submitButton && originalButtonText) {
+                submitButton.disabled = false;
+                submitButton.textContent = originalButtonText;
+            }
         }
     }
     
@@ -3180,13 +3302,15 @@ class InsightsManager {
         // Clear existing items
         container.innerHTML = '';
         
-        // Add first subscriber row
+        // Start with just 1 subscriber row (user can add more up to 3)
         this.addSubscriberRow();
         
-        // Bind add button
+        // Bind add button (but it will be disabled when 3 rows are present)
         const addBtn = document.getElementById('addSubscriberRowBtn');
         if (addBtn) {
             addBtn.onclick = () => this.addSubscriberRow();
+            // Initially enable since we only have 1 row
+            this.updateAddSubscriberButtonState();
         }
         
         // Bind form submit
@@ -3213,20 +3337,31 @@ class InsightsManager {
         const container = document.getElementById('subscribersItemsContainer');
         if (!container) return;
         
+        // Limit to maximum 3 subscriber rows
+        const MAX_SUBSCRIBERS = 3;
+        if (container.children.length >= MAX_SUBSCRIBERS) {
+            console.log(`⚠️ Maximum ${MAX_SUBSCRIBERS} subscribers allowed`);
+            return;
+        }
+        
         const itemIndex = container.children.length;
         const itemDiv = document.createElement('div');
         itemDiv.className = 'add-subscribers-item';
         itemDiv.dataset.index = itemIndex;
         
+        // Only require fields for the first row (index 0)
+        const isFirstRow = itemIndex === 0;
+        const requiredAttr = isFirstRow ? 'required' : '';
+        
         itemDiv.innerHTML = `
             <div class="add-subscribers-item-fields">
                 <div class="add-subscribers-field">
                     <label for="subscriber_${itemIndex}">Subscriber</label>
-                    <input type="tel" id="subscriber_${itemIndex}" name="items[${itemIndex}].subscriber" placeholder="Enter phone number" required>
+                    <input type="tel" id="subscriber_${itemIndex}" name="items[${itemIndex}].subscriber" placeholder="Enter phone number" ${requiredAttr}>
                 </div>
                 <div class="add-subscribers-field">
                     <label for="quota_${itemIndex}">Quota</label>
-                    <input type="number" id="quota_${itemIndex}" name="items[${itemIndex}].quota" step="any" placeholder="Enter quota" required>
+                    <input type="number" id="quota_${itemIndex}" name="items[${itemIndex}].quota" step="any" placeholder="Enter quota" ${requiredAttr}>
                 </div>
                 <div class="add-subscribers-field">
                     <label for="service_${itemIndex}">Service</label>
@@ -3236,7 +3371,7 @@ class InsightsManager {
                             <path d="M6 9l6 6 6-6"/>
                         </svg>
                     </div>
-                    <input type="hidden" id="service_${itemIndex}" name="items[${itemIndex}].service" data-admin-id="" data-admin-name="" required>
+                    <input type="hidden" id="service_${itemIndex}" name="items[${itemIndex}].service" data-admin-id="" data-admin-name="" ${requiredAttr}>
                 </div>
             </div>
             <button type="button" class="add-subscribers-remove-btn" onclick="insightsManager.removeSubscriberRow(this)">
@@ -3254,6 +3389,29 @@ class InsightsManager {
         const selector = document.getElementById(`service_selector_${itemIndex}`);
         if (selector) {
             selector.onclick = () => this.openAdminSelector(itemIndex);
+        }
+        
+        // Update add button state after adding a row
+        this.updateAddSubscriberButtonState();
+    }
+    
+    updateAddSubscriberButtonState() {
+        const container = document.getElementById('subscribersItemsContainer');
+        const addBtn = document.getElementById('addSubscriberRowBtn');
+        const MAX_SUBSCRIBERS = 3;
+        
+        if (!container || !addBtn) return;
+        
+        const currentCount = container.children.length;
+        if (currentCount >= MAX_SUBSCRIBERS) {
+            // Hide the button completely when limit is reached
+            addBtn.style.display = 'none';
+        } else {
+            // Show the button when below limit
+            addBtn.style.display = '';
+            addBtn.disabled = false;
+            addBtn.style.opacity = '1';
+            addBtn.style.cursor = 'pointer';
         }
     }
     
@@ -3291,6 +3449,9 @@ class InsightsManager {
                     });
                 });
             }
+            
+            // Update add button state after removing a row (re-enable if below limit)
+            this.updateAddSubscriberButtonState();
         }
     }
     
@@ -3461,54 +3622,74 @@ class InsightsManager {
     }
     
     async handleAddSubscribersSubmit() {
+        // Prevent duplicate submissions
+        if (this.isSubmittingAddForm) {
+            console.log('⏸️ Form submission already in progress, ignoring duplicate request');
+            return;
+        }
+        
         const form = document.getElementById('addSubscribersForm');
         if (!form) return;
         
-        const formData = new FormData(form);
-        const items = [];
+        this.isSubmittingAddForm = true;
         
-        // Collect all subscriber items
-        const container = document.getElementById('subscribersItemsContainer');
-        if (container) {
-            const itemDivs = container.querySelectorAll('.add-subscribers-item');
-            itemDivs.forEach((itemDiv, index) => {
-                const subscriber = itemDiv.querySelector(`input[name="items[${index}].subscriber"]`)?.value.trim();
-                const quota = itemDiv.querySelector(`input[name="items[${index}].quota"]`)?.value.trim();
-                const serviceInput = itemDiv.querySelector(`input[name="items[${index}].service"]`);
-                const adminId = serviceInput?.dataset.adminId || serviceInput?.value.trim();
-                const adminName = serviceInput?.dataset.adminName || '';
-                
-                if (subscriber && quota && adminId) {
-                    items.push({
-                        subscriber: subscriber,
-                        quota: parseFloat(quota) || 0,
-                        adminId: adminId,
-                        adminName: adminName
-                    });
-                }
-            });
-        }
-        
-        if (items.length === 0) {
-            alert('Please add at least one subscriber with all fields filled.');
-            return;
-        }
-        
-        // Validate that all items have admin selected
-        const missingAdmin = items.find(item => !item.adminId);
-        if (missingAdmin) {
-            alert('Please select an admin for all subscribers.');
-            return;
-        }
-        
-        // Disable submit button
+        // Disable submit button to prevent multiple clicks
         const submitBtn = document.getElementById('shareSubscribersBtn');
+        let originalButtonText = '';
         if (submitBtn) {
+            originalButtonText = submitBtn.textContent;
             submitBtn.disabled = true;
-            submitBtn.textContent = 'Sharing...';
+            submitBtn.textContent = 'Processing...';
         }
         
         try {
+            const formData = new FormData(form);
+            const items = [];
+            
+            // Collect all subscriber items
+            const container = document.getElementById('subscribersItemsContainer');
+            if (container) {
+                const itemDivs = container.querySelectorAll('.add-subscribers-item');
+                itemDivs.forEach((itemDiv, index) => {
+                    const subscriber = itemDiv.querySelector(`input[name="items[${index}].subscriber"]`)?.value.trim();
+                    const quota = itemDiv.querySelector(`input[name="items[${index}].quota"]`)?.value.trim();
+                    const serviceInput = itemDiv.querySelector(`input[name="items[${index}].service"]`);
+                    const adminId = serviceInput?.dataset.adminId || serviceInput?.value.trim();
+                    const adminName = serviceInput?.dataset.adminName || '';
+                    
+                    if (subscriber && quota && adminId) {
+                        items.push({
+                            subscriber: subscriber,
+                            quota: parseFloat(quota) || 0,
+                            adminId: adminId,
+                            adminName: adminName
+                        });
+                    }
+                });
+            }
+            
+            if (items.length === 0) {
+                alert('Please add at least one subscriber with all fields filled.');
+                this.isSubmittingAddForm = false;
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalButtonText;
+                }
+                return;
+            }
+            
+            // Validate that all items have admin selected
+            const missingAdmin = items.find(item => !item.adminId);
+            if (missingAdmin) {
+                alert('Please select an admin for all subscribers.');
+                this.isSubmittingAddForm = false;
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalButtonText;
+                }
+                return;
+            }
+            
             console.log('Submitting subscribers:', items);
             
             // Call API for each subscriber
@@ -3578,9 +3759,11 @@ class InsightsManager {
             console.error('Error adding subscribers:', error);
             alert('Failed to add subscribers. Please try again.');
         } finally {
-            if (submitBtn) {
+            // Re-enable submit button and reset flag
+            this.isSubmittingAddForm = false;
+            if (submitBtn && originalButtonText) {
                 submitBtn.disabled = false;
-                submitBtn.textContent = 'Share';
+                submitBtn.textContent = originalButtonText;
             }
         }
     }
