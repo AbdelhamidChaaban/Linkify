@@ -5,6 +5,7 @@ const { updateDashboardData, getPendingSubscribers, removePendingSubscriber } = 
 const { isLoginInProgress, setLoginInProgress, clearLoginInProgress } = require('./cookieRefreshWorker');
 const { refreshCookiesKeepAlive } = require('./pseudoKeepAlive');
 const { getAdminData } = require('./firebaseDbService');
+const { fetchUshareHtml } = require('./ushareHtmlParser');
 
 const BASE_URL = 'https://www.alfa.com.lb';
 
@@ -229,7 +230,7 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             // Wait for slot (may be queued)
             await acquireBackgroundRefreshSlot(userId);
             backgroundSlotAcquired = true;
-            console.log(`🔄 [${userId}] Background refresh started (${activeBackgroundRefreshes.size}/${MAX_CONCURRENT_BACKGROUND_REFRESHES} active)`);
+            // Reduced logging for background refreshes - only log if there's an issue
         }
         // Step 0: Acquire refresh lock for manual refresh (skip for background refreshes)
         if (!background) {
@@ -260,6 +261,11 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
 
         // MANUAL REFRESH PATH (API-first, lightweight)
         if (!background) {
+            // ========== MANUAL REFRESH START ==========
+            console.log(`\n${'='.repeat(80)}`);
+            console.log(`🔄 MANUAL REFRESH STARTED for ${userId} at ${new Date().toISOString()}`);
+            console.log(`${'='.repeat(80)}\n`);
+            
             // Step 1: Get cookies from Redis (don't check expiry yet - try APIs first)
             let cookies = await getCookies(userId);
             const cookieExpiry = await getCookieExpiry(userId);
@@ -275,8 +281,45 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                     console.log(`📡 [${userId}] Manual refresh: Using cached cookies (expiry: ${cookieExpiry ? new Date(cookieExpiry).toISOString() : 'N/A'}), fetching APIs...`);
                     
                     try {
-                        // Fetch all APIs in parallel (fast path - 2-3s)
-                        apiData = await fetchAllApis(cookies, { maxRetries: 1 }); // 1 retry for speed
+                        // Fetch all APIs in parallel, plus ushare HTML page (fast path - 2-3s)
+                        const [apiResults, ushareHtmlResult] = await Promise.allSettled([
+                            fetchAllApis(cookies, { maxRetries: 1 }), // 1 retry for speed
+                            fetchUshareHtml(phone, cookies).catch(err => ({ success: false, data: null, error: err.message }))
+                        ]);
+                        
+                        // Extract API data
+                        if (apiResults.status === 'fulfilled') {
+                            apiData = apiResults.value;
+                        } else {
+                            throw apiResults.reason;
+                        }
+                        
+                        // Extract ushare HTML data
+                        let ushareData = null;
+                        if (ushareHtmlResult.status === 'fulfilled' && ushareHtmlResult.value.success) {
+                            ushareData = ushareHtmlResult.value.data;
+                            console.log(`✅ [${userId}] Ushare HTML parsed: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
+                        } else {
+                            const error = ushareHtmlResult.status === 'fulfilled' ? ushareHtmlResult.value.error : ushareHtmlResult.reason?.message;
+                            console.log(`⚠️ [${userId}] Ushare HTML fetch failed: ${error || 'Unknown error'}`);
+                            
+                            // CRITICAL: For manual refresh, retry Ushare HTML fetch (subscribers may have changed on Alfa website)
+                            console.log(`🔄 [${userId}] Retrying Ushare HTML fetch (manual refresh - need accurate subscriber data)...`);
+                            try {
+                                const retryResult = await fetchUshareHtml(phone, cookies);
+                                if (retryResult.success && retryResult.data) {
+                                    ushareData = retryResult.data;
+                                    console.log(`✅ [${userId}] Ushare HTML retry succeeded: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
+                                } else {
+                                    console.log(`⚠️ [${userId}] Ushare HTML retry also failed: ${retryResult.error || 'Unknown error'}`);
+                                }
+                            } catch (retryError) {
+                                console.log(`⚠️ [${userId}] Ushare HTML retry error: ${retryError.message || 'Unknown error'}`);
+                            }
+                        }
+                        
+                        // Store ushare data in apiData for later use
+                        apiData.ushare = ushareData;
                         
                         // Check if APIs succeeded
                         const hasConsumption = apiData.consumption && Object.keys(apiData.consumption).length > 0;
@@ -287,7 +330,9 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                             // APIs succeeded - fast path (2-3s)
                             const apiDuration = Date.now() - apiCallStart;
                             const successCount = [hasConsumption, hasServices, hasExpiry].filter(Boolean).length;
-                            console.log(`✅ [${userId}] Manual refresh: APIs succeeded (${successCount}/3 in ${apiDuration}ms) - Manual refresh used cached cookies`);
+                            if (!background) {
+                                console.log(`✅ [${userId}] Manual refresh: APIs succeeded (${successCount}/3 in ${apiDuration}ms) - Manual refresh used cached cookies`);
+                            }
                             
                             // Release lock quickly (don't block scheduler)
                             if (refreshLockAcquired) {
@@ -499,8 +544,57 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 console.log(`📡 [${userId}] Found ${cookies.length} cookies, fetching APIs in parallel...`);
                 
                 try {
-                    // Fetch all APIs in parallel
-                    apiData = await fetchAllApis(cookies, {});
+                    // Fetch all APIs in parallel, plus ushare HTML page
+                    const [apiResults, ushareHtmlResult] = await Promise.allSettled([
+                        fetchAllApis(cookies, {}),
+                        fetchUshareHtml(phone, cookies).catch(err => ({ success: false, data: null, error: err.message }))
+                    ]);
+                    
+                    // Extract API data
+                    if (apiResults.status === 'fulfilled') {
+                        apiData = apiResults.value;
+                    } else {
+                        throw apiResults.reason;
+                    }
+                    
+                    // Extract ushare HTML data
+                    let ushareData = null;
+                    if (ushareHtmlResult.status === 'fulfilled' && ushareHtmlResult.value.success) {
+                        ushareData = ushareHtmlResult.value.data;
+                        if (!background) {
+                            console.log(`✅ [${userId}] Ushare HTML parsed: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
+                        }
+                    } else {
+                        const error = ushareHtmlResult.status === 'fulfilled' ? ushareHtmlResult.value.error : ushareHtmlResult.reason?.message;
+                        if (!background) {
+                            console.log(`⚠️ [${userId}] Ushare HTML fetch failed: ${error || 'Unknown error'}`);
+                        }
+                        
+                        // CRITICAL: Retry Ushare HTML fetch (subscribers may have changed on Alfa website)
+                        if (!background) {
+                            console.log(`🔄 [${userId}] Retrying Ushare HTML fetch (need accurate subscriber data)...`);
+                        }
+                        try {
+                            const retryResult = await fetchUshareHtml(phone, cookies);
+                            if (retryResult.success && retryResult.data) {
+                                ushareData = retryResult.data;
+                                if (!background) {
+                                    console.log(`✅ [${userId}] Ushare HTML retry succeeded: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
+                                }
+                            } else {
+                                if (!background) {
+                                    console.log(`⚠️ [${userId}] Ushare HTML retry also failed: ${retryResult.error || 'Unknown error'}`);
+                                }
+                            }
+                        } catch (retryError) {
+                            if (!background) {
+                                console.log(`⚠️ [${userId}] Ushare HTML retry error: ${retryError.message || 'Unknown error'}`);
+                            }
+                        }
+                    }
+                    
+                    // Store ushare data in apiData for later use
+                    apiData.ushare = ushareData;
                     
                     // CRITICAL: Check if getconsumption returned 401 (even if other APIs succeeded)
                     const consumptionFailed = !apiData.consumption || Object.keys(apiData.consumption || {}).length === 0;
@@ -683,10 +777,49 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 const loginDuration = Date.now() - loginStart;
                 console.log(`✅ [${userId}] Login completed in ${loginDuration}ms`);
                 
-                // Now fetch APIs in parallel with fresh cookies
+                // Now fetch APIs in parallel with fresh cookies, plus ushare HTML
                 apiCallStart = Date.now();
                 const apiOptions = background ? {} : { maxRetries: 1 }; // Manual refresh: fewer retries
-                apiData = await fetchAllApis(cookies, apiOptions);
+                
+                const [apiResults, ushareHtmlResult] = await Promise.allSettled([
+                    fetchAllApis(cookies, apiOptions),
+                    fetchUshareHtml(phone, cookies).catch(err => ({ success: false, data: null, error: err.message }))
+                ]);
+                
+                // Extract API data
+                if (apiResults.status === 'fulfilled') {
+                    apiData = apiResults.value;
+                } else {
+                    throw apiResults.reason;
+                }
+                
+                // Extract ushare HTML data
+                let ushareData = null;
+                if (ushareHtmlResult.status === 'fulfilled' && ushareHtmlResult.value.success) {
+                    ushareData = ushareHtmlResult.value.data;
+                    console.log(`✅ [${userId}] Ushare HTML parsed: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
+                } else {
+                    const error = ushareHtmlResult.status === 'fulfilled' ? ushareHtmlResult.value.error : ushareHtmlResult.reason?.message;
+                    console.log(`⚠️ [${userId}] Ushare HTML fetch failed: ${error || 'Unknown error'}`);
+                    
+                    // CRITICAL: Retry Ushare HTML fetch (subscribers may have changed on Alfa website)
+                    console.log(`🔄 [${userId}] Retrying Ushare HTML fetch (need accurate subscriber data)...`);
+                    try {
+                        const retryResult = await fetchUshareHtml(phone, cookies);
+                        if (retryResult.success && retryResult.data) {
+                            ushareData = retryResult.data;
+                            console.log(`✅ [${userId}] Ushare HTML retry succeeded: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
+                        } else {
+                            console.log(`⚠️ [${userId}] Ushare HTML retry also failed: ${retryResult.error || 'Unknown error'}`);
+                        }
+                    } catch (retryError) {
+                        console.log(`⚠️ [${userId}] Ushare HTML retry error: ${retryError.message || 'Unknown error'}`);
+                    }
+                }
+                
+                // Store ushare data in apiData for later use
+                apiData.ushare = ushareData;
+                
                 const apiDuration = Date.now() - apiCallStart;
                 const successCount = [apiData.consumption, apiData.services, apiData.expiry].filter(Boolean).length;
                 console.log(`✅ [${userId}] API calls successful after login (${successCount}/3 APIs in ${apiDuration}ms)`);
@@ -704,6 +837,17 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         const cachedData = await getLastJson(userId, true); // allowStale for fallback
         const dashboardData = cachedData && cachedData.data ? { ...cachedData.data } : {};
         
+        // CRITICAL: Filter out invalid dates (NaN) immediately when initializing from cache
+        // This prevents displaying NaN/NaN/NaN when API fails
+        if (dashboardData.subscriptionDate && (dashboardData.subscriptionDate.includes('NaN') || dashboardData.subscriptionDate === 'NaN/NaN/NaN')) {
+            console.log(`⚠️ [${userId}] Removing invalid subscriptionDate from cached data (NaN)`);
+            delete dashboardData.subscriptionDate;
+        }
+        if (dashboardData.validityDate && (dashboardData.validityDate.includes('NaN') || dashboardData.validityDate === 'NaN/NaN/NaN')) {
+            console.log(`⚠️ [${userId}] Removing invalid validityDate from cached data (NaN)`);
+            delete dashboardData.validityDate;
+        }
+        
         console.log(`📦 [${userId}] Starting with cached data: ${Object.keys(dashboardData).length} fields`);
 
         // Extract from getconsumption (override cached data only if API succeeded)
@@ -714,6 +858,10 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             Object.assign(dashboardData, extracted);
             if (extracted.secondarySubscribers && extracted.secondarySubscribers.length > 0) {
                 console.log(`✅ [${userId}] Extracted ${extracted.secondarySubscribers.length} secondary subscribers from API`);
+            }
+            // Also set subscribersCount if not already set from ushare HTML
+            if (!dashboardData.subscribersCount && extracted.subscribersCount) {
+                dashboardData.subscribersCount = extracted.subscribersCount;
             }
         } else {
             // API failed - CRITICAL: Must preserve primaryData from cache to prevent admin becoming inactive
@@ -735,13 +883,89 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 if (!dashboardData.totalConsumption && extracted.totalConsumption) dashboardData.totalConsumption = extracted.totalConsumption;
                 if (!dashboardData.adminConsumption && extracted.adminConsumption) dashboardData.adminConsumption = extracted.adminConsumption;
                 if (!dashboardData.secondarySubscribers && extracted.secondarySubscribers) dashboardData.secondarySubscribers = extracted.secondarySubscribers;
-                if (!dashboardData.subscribersCount && extracted.subscribersCount) dashboardData.subscribersCount = extracted.subscribersCount;
+                if (!dashboardData.subscribersCount && extracted.subscribersCount) {
+                    dashboardData.subscribersCount = extracted.subscribersCount;
+                    // If ushare HTML failed, set activeCount = totalCount (all are active) and requestedCount = 0
+                    if (!dashboardData.subscribersActiveCount) {
+                        dashboardData.subscribersActiveCount = extracted.subscribersCount;
+                    }
+                    if (!dashboardData.subscribersRequestedCount) {
+                        dashboardData.subscribersRequestedCount = 0;
+                    }
+                }
             } else if (dashboardData.primaryData) {
                 // primaryData exists in cached dashboardData, keep it
                 console.log(`✅ [${userId}] Preserved existing primaryData from cached dashboardData`);
             } else {
                 // No cached consumption data at all - this is a problem
                 console.error(`❌ [${userId}] CRITICAL: No cached consumption data available - admin may become inactive!`);
+            }
+        }
+        
+        // CRITICAL: Override subscriber data from ushare HTML page (more accurate than getconsumption)
+        // This gives us Active vs Requested status and accurate consumption per subscriber
+        // ALWAYS use Ushare HTML data when available (even if 0 subscribers) - it's the source of truth
+        if (apiData.ushare) {
+            // Ushare HTML was fetched (successfully or returned empty)
+            if (apiData.ushare.subscribers && apiData.ushare.subscribers.length > 0) {
+                console.log(`\n🎯 [${userId}] ✅ USING USHARE HTML PAGE DATA (NOT getconsumption API)`);
+                console.log(`   📊 Subscribers: ${apiData.ushare.totalCount} total (${apiData.ushare.activeCount} Active, ${apiData.ushare.requestedCount} Requested)`);
+                
+                // Update subscribers count with Active/Requested breakdown
+                dashboardData.subscribersCount = apiData.ushare.totalCount;
+                dashboardData.subscribersActiveCount = apiData.ushare.activeCount;
+                dashboardData.subscribersRequestedCount = apiData.ushare.requestedCount;
+                
+                // Convert ushare subscribers to secondarySubscribers format
+                // Keep consumption in GB (don't convert to MB) since frontend expects GB
+                const secondarySubscribers = apiData.ushare.subscribers.map(sub => {
+                    return {
+                        phoneNumber: sub.phoneNumber,
+                        fullPhoneNumber: sub.fullPhoneNumber,
+                        consumption: sub.usedConsumption, // In GB (from data-val)
+                        consumptionUnit: 'GB',
+                        quota: sub.totalQuota, // In GB (from data-quota)
+                        quotaUnit: 'GB',
+                        status: sub.status, // 'Active' or 'Requested'
+                        consumptionText: sub.consumptionText // "0.48 / 30 GB"
+                    };
+                });
+                
+                dashboardData.secondarySubscribers = secondarySubscribers;
+                console.log(`   ✅ Updated ${secondarySubscribers.length} subscribers from ushare HTML page\n`);
+            } else {
+                // Ushare HTML returned 0 subscribers (valid - admin may have removed all subscribers)
+                console.log(`\n🎯 [${userId}] ✅ USING USHARE HTML PAGE DATA: 0 subscribers (all removed)`);
+                dashboardData.subscribersCount = 0;
+                dashboardData.subscribersActiveCount = 0;
+                dashboardData.subscribersRequestedCount = 0;
+                dashboardData.secondarySubscribers = [];
+                console.log(`   ✅ Updated subscriber counts from ushare HTML page: 0 total (0 Active, 0 Requested)\n`);
+            }
+        } else {
+            // Ushare HTML fetch completely failed - DO NOT use stale data from getconsumption
+            // Only use getconsumption data if we have no other option, but warn about it
+            console.log(`\n⚠️ [${userId}] ⚠️ USHARE HTML FETCH FAILED - Cannot determine accurate subscriber counts`);
+            console.log(`   ⚠️ Subscriber counts may be stale if changes were made directly on Alfa website`);
+            console.log(`   ⚠️ Falling back to getconsumption API data (may not reflect recent changes)\n`);
+            
+            // Only use getconsumption data if we don't have any subscriber data at all
+            // But don't override if we already have counts (they might be from a previous successful Ushare HTML fetch)
+            if (!dashboardData.subscribersCount && !dashboardData.subscribersActiveCount && !dashboardData.subscribersRequestedCount) {
+                // No subscriber data at all - use getconsumption as last resort
+                if (dashboardData.subscribersCount && (!dashboardData.subscribersActiveCount || dashboardData.subscribersActiveCount === undefined)) {
+                    // Assume all subscribers are active if we can't determine from ushare HTML
+                    dashboardData.subscribersActiveCount = dashboardData.subscribersCount;
+                    dashboardData.subscribersRequestedCount = 0;
+                    if (!background) {
+                        console.log(`📊 [${userId}] Set default counts from getconsumption: activeCount=${dashboardData.subscribersActiveCount}, requestedCount=0 (ushare HTML unavailable)`);
+                    }
+                }
+            } else {
+                // We have some subscriber data - keep it but warn
+                if (!background) {
+                    console.log(`⚠️ [${userId}] Keeping existing subscriber counts (may be stale): ${dashboardData.subscribersCount || 0} total`);
+                }
             }
         }
 
@@ -768,52 +992,48 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             
             // CRITICAL: Always check cachedData.data for dates, even if dashboardData is empty
             // This ensures dates are preserved even when cachedData.data has 0 fields initially
+            // IMPORTANT: Only preserve if dashboardData doesn't have valid dates already
             if (cachedData && cachedData.data) {
-                // Preserve subscriptionDate from cache (only if valid and not already set)
-                if (!dashboardData.subscriptionDate && cachedData.data.subscriptionDate) {
+                // Preserve subscriptionDate from cache (only if valid and dashboardData doesn't have a valid one)
+                if (!dashboardData.subscriptionDate || dashboardData.subscriptionDate.includes('NaN')) {
                     const cachedSubDate = cachedData.data.subscriptionDate;
                     // Validate: must be a string in DD/MM/YYYY format, not null/undefined/NaN
-                    if (typeof cachedSubDate === 'string' && cachedSubDate.trim() && !cachedSubDate.includes('NaN')) {
+                    if (cachedSubDate && typeof cachedSubDate === 'string' && cachedSubDate.trim() && !cachedSubDate.includes('NaN')) {
                         dashboardData.subscriptionDate = cachedSubDate;
                         console.log(`✅ [${userId}] Preserved cached subscriptionDate: ${dashboardData.subscriptionDate}`);
+                    } else {
+                        // No valid cached date - remove invalid one from dashboardData
+                        if (dashboardData.subscriptionDate && dashboardData.subscriptionDate.includes('NaN')) {
+                            delete dashboardData.subscriptionDate;
+                            console.log(`⚠️ [${userId}] Removed invalid subscriptionDate (no valid cached value to restore)`);
+                        }
                     }
                 }
                 
-                // Preserve validityDate from cache (only if valid and not already set)
-                if (!dashboardData.validityDate && cachedData.data.validityDate) {
+                // Preserve validityDate from cache (only if valid and dashboardData doesn't have a valid one)
+                if (!dashboardData.validityDate || dashboardData.validityDate.includes('NaN')) {
                     const cachedValDate = cachedData.data.validityDate;
                     // Validate: must be a string in DD/MM/YYYY format, not null/undefined/NaN
-                    if (typeof cachedValDate === 'string' && cachedValDate.trim() && !cachedValDate.includes('NaN')) {
+                    if (cachedValDate && typeof cachedValDate === 'string' && cachedValDate.trim() && !cachedValDate.includes('NaN')) {
                         dashboardData.validityDate = cachedValDate;
                         console.log(`✅ [${userId}] Preserved cached validityDate: ${dashboardData.validityDate}`);
+                    } else {
+                        // No valid cached date - remove invalid one from dashboardData
+                        if (dashboardData.validityDate && dashboardData.validityDate.includes('NaN')) {
+                            delete dashboardData.validityDate;
+                            console.log(`⚠️ [${userId}] Removed invalid validityDate (no valid cached value to restore)`);
+                        }
                     }
                 }
-            }
-            
-            // Also check if dates exist in dashboardData but are invalid (NaN)
-            if (dashboardData.subscriptionDate && (dashboardData.subscriptionDate.includes('NaN') || dashboardData.subscriptionDate === 'NaN/NaN/NaN')) {
-                console.log(`⚠️ [${userId}] Invalid subscriptionDate detected (NaN), removing it`);
-                delete dashboardData.subscriptionDate;
-                // Try to restore from cache
-                if (cachedData && cachedData.data && cachedData.data.subscriptionDate) {
-                    const cachedSubDate = cachedData.data.subscriptionDate;
-                    if (typeof cachedSubDate === 'string' && cachedSubDate.trim() && !cachedSubDate.includes('NaN')) {
-                        dashboardData.subscriptionDate = cachedSubDate;
-                        console.log(`✅ [${userId}] Restored valid subscriptionDate from cache: ${dashboardData.subscriptionDate}`);
-                    }
+            } else {
+                // No cached data available - remove invalid dates from dashboardData
+                if (dashboardData.subscriptionDate && dashboardData.subscriptionDate.includes('NaN')) {
+                    delete dashboardData.subscriptionDate;
+                    console.log(`⚠️ [${userId}] Removed invalid subscriptionDate (no cached data available)`);
                 }
-            }
-            
-            if (dashboardData.validityDate && (dashboardData.validityDate.includes('NaN') || dashboardData.validityDate === 'NaN/NaN/NaN')) {
-                console.log(`⚠️ [${userId}] Invalid validityDate detected (NaN), removing it`);
-                delete dashboardData.validityDate;
-                // Try to restore from cache
-                if (cachedData && cachedData.data && cachedData.data.validityDate) {
-                    const cachedValDate = cachedData.data.validityDate;
-                    if (typeof cachedValDate === 'string' && cachedValDate.trim() && !cachedValDate.includes('NaN')) {
-                        dashboardData.validityDate = cachedValDate;
-                        console.log(`✅ [${userId}] Restored valid validityDate from cache: ${dashboardData.validityDate}`);
-                    }
+                if (dashboardData.validityDate && dashboardData.validityDate.includes('NaN')) {
+                    delete dashboardData.validityDate;
+                    console.log(`⚠️ [${userId}] Removed invalid validityDate (no cached data available)`);
                 }
             }
         }
@@ -911,7 +1131,7 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             }
             
             // Preserve other critical fields that might be missing
-            const criticalFields = ['balance', 'totalConsumption', 'adminConsumption', 'secondarySubscribers', 'subscribersCount'];
+            const criticalFields = ['balance', 'totalConsumption', 'adminConsumption', 'secondarySubscribers', 'subscribersCount', 'subscribersActiveCount', 'subscribersRequestedCount'];
             for (const field of criticalFields) {
                 if (dashboardData[field] === undefined || dashboardData[field] === null) {
                     if (cachedData.data[field] !== undefined && cachedData.data[field] !== null) {
@@ -932,6 +1152,16 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             console.log(`✅ [${userId}] primaryData verified: ${typeof dashboardData.primaryData === 'object' ? 'object' : typeof dashboardData.primaryData}`);
         }
 
+        // FINAL CLEANUP: Remove any invalid dates before saving (CRITICAL: prevent NaN/NaN/NaN in Firebase)
+        if (dashboardData.subscriptionDate && (dashboardData.subscriptionDate.includes('NaN') || dashboardData.subscriptionDate === 'NaN/NaN/NaN')) {
+            console.log(`⚠️ [${userId}] FINAL CLEANUP: Removing invalid subscriptionDate before save`);
+            delete dashboardData.subscriptionDate;
+        }
+        if (dashboardData.validityDate && (dashboardData.validityDate.includes('NaN') || dashboardData.validityDate === 'NaN/NaN/NaN')) {
+            console.log(`⚠️ [${userId}] FINAL CLEANUP: Removing invalid validityDate before save`);
+            delete dashboardData.validityDate;
+        }
+        
         // Step 5: Save to Redis cache (non-blocking)
         await saveLastJson(userId, dashboardData);
         await saveLastVerified(userId);
@@ -979,7 +1209,14 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         }
 
         const duration = Date.now() - startTime;
-        console.log(`✅ [${userId}] API-first refresh completed in ${duration}ms (login: ${loginPerformed ? 'yes' : 'no'})`);
+        
+        // Add completion marker for manual refresh (only for manual, not background)
+        if (!background) {
+            console.log(`✅ [${userId}] API-first refresh completed in ${duration}ms (login: ${loginPerformed ? 'yes' : 'no'})`);
+            console.log(`\n${'='.repeat(80)}`);
+            console.log(`✅ MANUAL REFRESH COMPLETED for ${userId} in ${duration}ms`);
+            console.log(`${'='.repeat(80)}\n`);
+        }
 
         // Lock is already released in manual refresh path (for speed)
         // Only release here if it wasn't released earlier (background refresh)

@@ -25,8 +25,11 @@ async function editSubscriber(adminId, adminPhone, adminPassword, subscriberPhon
     let refreshLockAcquired = false;
 
     try {
-        console.log(`🔵 Starting edit subscriber operation for admin: ${adminId}`);
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`✏️ EDIT SUBSCRIBER OPERATION STARTED for admin: ${adminId}`);
         console.log(`   Subscriber: ${subscriberPhone}, New Quota: ${newQuota} GB`);
+        console.log(`   Started at: ${new Date().toISOString()}`);
+        console.log(`${'='.repeat(80)}\n`);
 
         // Acquire refresh lock to prevent cookie worker from interfering
         refreshLockAcquired = await acquireRefreshLock(adminId, 300); // 5 minute lock
@@ -327,6 +330,12 @@ async function editSubscriber(adminId, adminPhone, adminPassword, subscriberPhon
             success: true,
             message: `Subscriber ${subscriberPhoneWithPrefix} quota updated to ${newQuota} GB successfully.`
         };
+        
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`✅ EDIT SUBSCRIBER OPERATION COMPLETED for admin: ${adminId}`);
+        console.log(`   Subscriber: ${subscriberPhoneWithPrefix}, New Quota: ${newQuota} GB`);
+        console.log(`   Completed at: ${new Date().toISOString()}`);
+        console.log(`${'='.repeat(80)}\n`);
 
     } catch (error) {
         console.error(`❌ Error editing subscriber:`, error);

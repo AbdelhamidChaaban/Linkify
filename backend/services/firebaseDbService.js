@@ -112,6 +112,9 @@ async function updateDashboardData(adminId, dashboardData) {
     const adminConsumptionTemplateBackup = dashboardData.adminConsumptionTemplate ? JSON.parse(JSON.stringify(dashboardData.adminConsumptionTemplate)) : null;
     const apiResponsesBackup = dashboardData.apiResponses ? JSON.parse(JSON.stringify(dashboardData.apiResponses)) : null;
     const primaryDataBackup = dashboardData.primaryData ? JSON.parse(JSON.stringify(dashboardData.primaryData)) : null;
+    const subscribersCountBackup = dashboardData.subscribersCount;
+    const subscribersActiveCountBackup = dashboardData.subscribersActiveCount;
+    const subscribersRequestedCountBackup = dashboardData.subscribersRequestedCount;
     
     // Clean data
     const cleanDashboardData = removeUndefined(dashboardData || {});
@@ -145,6 +148,17 @@ async function updateDashboardData(adminId, dashboardData) {
       if (primaryDataBackup.ServiceInformationValue && Array.isArray(primaryDataBackup.ServiceInformationValue)) {
         cleanDashboardData.primaryData = primaryDataBackup;
       }
+    }
+    
+    // Force restore subscriber count fields
+    if (subscribersCountBackup !== undefined && subscribersCountBackup !== null) {
+      cleanDashboardData.subscribersCount = subscribersCountBackup;
+    }
+    if (subscribersActiveCountBackup !== undefined && subscribersActiveCountBackup !== null) {
+      cleanDashboardData.subscribersActiveCount = subscribersActiveCountBackup;
+    }
+    if (subscribersRequestedCountBackup !== undefined && subscribersRequestedCountBackup !== null) {
+      cleanDashboardData.subscribersRequestedCount = subscribersRequestedCountBackup;
     }
     
     // Get current document to preserve other fields
@@ -203,7 +217,12 @@ async function updateDashboardData(adminId, dashboardData) {
         lastDataFetch: new Date().toISOString()
       }, { merge: false });
       
-      console.log('✅ Dashboard data saved to database');
+      // Log subscriber counts for debugging
+      if (cleanDashboardData.subscribersCount !== undefined || cleanDashboardData.subscribersActiveCount !== undefined) {
+        console.log(`✅ Dashboard data saved to database - subscribersCount: ${cleanDashboardData.subscribersCount}, activeCount: ${cleanDashboardData.subscribersActiveCount}, requestedCount: ${cleanDashboardData.subscribersRequestedCount}`);
+      } else {
+        console.log('✅ Dashboard data saved to database');
+      }
     } catch (setError) {
       // Firebase is offline or failed - that's OK, data was fetched successfully
       console.warn('⚠️ Could not save to Firebase (Firebase may be offline):', setError.message);

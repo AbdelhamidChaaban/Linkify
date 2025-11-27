@@ -192,8 +192,11 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
     let refreshLockAcquired = false;
 
     try {
-        console.log(`🔵 Starting add subscriber operation for admin: ${adminId}`);
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`➕ ADD SUBSCRIBER OPERATION STARTED for admin: ${adminId}`);
         console.log(`   Subscriber: ${subscriberPhone}, Quota: ${quota} GB`);
+        console.log(`   Started at: ${new Date().toISOString()}`);
+        console.log(`${'='.repeat(80)}\n`);
 
         // Validate inputs
         const cleanSubscriberPhone = subscriberPhone.replace(/\D/g, '').substring(0, 8);
@@ -802,6 +805,12 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
             
             // Update Firebase with pending subscriber
             await addPendingSubscriber(adminId, cleanSubscriberPhone, quota);
+            
+            console.log(`\n${'='.repeat(80)}`);
+            console.log(`✅ ADD SUBSCRIBER OPERATION COMPLETED for admin: ${adminId}`);
+            console.log(`   Subscriber: ${cleanSubscriberPhone}, Quota: ${quota} GB`);
+            console.log(`   Completed at: ${new Date().toISOString()}`);
+            console.log(`${'='.repeat(80)}\n`);
             
             // Release refresh lock before returning
             if (refreshLockAcquired) {

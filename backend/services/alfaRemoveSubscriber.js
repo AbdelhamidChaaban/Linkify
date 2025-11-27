@@ -24,8 +24,11 @@ async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPh
     let refreshLockAcquired = false;
 
     try {
-        console.log(`🔵 Starting remove subscriber operation for admin: ${adminId}`);
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`➖ REMOVE SUBSCRIBER OPERATION STARTED for admin: ${adminId}`);
         console.log(`   Subscriber: ${subscriberPhone}`);
+        console.log(`   Started at: ${new Date().toISOString()}`);
+        console.log(`${'='.repeat(80)}\n`);
 
         // Acquire refresh lock to prevent cookie worker from interfering
         refreshLockAcquired = await acquireRefreshLock(adminId, 300); // 5 minute lock
@@ -324,6 +327,12 @@ async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPh
             success: true,
             message: `Subscriber ${subscriberPhoneWithPrefix} removed successfully.`
         };
+        
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`✅ REMOVE SUBSCRIBER OPERATION COMPLETED for admin: ${adminId}`);
+        console.log(`   Subscriber: ${subscriberPhoneWithPrefix}`);
+        console.log(`   Completed at: ${new Date().toISOString()}`);
+        console.log(`${'='.repeat(80)}\n`);
 
     } catch (error) {
         console.error(`❌ Error removing subscriber:`, error);

@@ -258,6 +258,15 @@ class InsightsManager {
                 const alfaData = data.alfaData || {};
                 const hasAlfaData = alfaData && Object.keys(alfaData).length > 0 && !alfaData.error;
                 
+                // Debug: Log subscriber counts from Firebase
+                if (alfaData.subscribersCount !== undefined || alfaData.subscribersActiveCount !== undefined) {
+                    console.log(`📊 [${doc.id}] Subscriber counts from Firebase:`, {
+                        subscribersCount: alfaData.subscribersCount,
+                        subscribersActiveCount: alfaData.subscribersActiveCount,
+                        subscribersRequestedCount: alfaData.subscribersRequestedCount
+                    });
+                }
+                
                 // Determine status based on getconsumption API response
                 // RULE 1: Admin is active if ServiceNameValue contains "U-share Main"
                 // RULE 2 (EXCEPTION): Admin is active if ServiceNameValue is "Mobile Internet" AND ValidityDateValue has a valid date
@@ -866,12 +875,24 @@ class InsightsManager {
                     balance = parseBalance(alfaData.balance);
                 }
                 
-                // Extract subscribers count (confirmed subscribers from API)
+                // Extract subscribers count from ushare HTML (Active/Requested breakdown)
                 let subscribersCount = hasAlfaData && alfaData.subscribersCount !== undefined 
                     ? (typeof alfaData.subscribersCount === 'number' ? alfaData.subscribersCount : parseInt(alfaData.subscribersCount) || 0)
                     : 0;
                 
-                // Get pending subscribers count from Firebase
+                // Get Active and Requested counts from ushare HTML data
+                // CRITICAL: Ushare HTML is the source of truth - always trust it when available
+                const hasUshareHtmlData = hasAlfaData && alfaData.subscribersRequestedCount !== undefined;
+                
+                let activeCount = hasAlfaData && alfaData.subscribersActiveCount !== undefined
+                    ? (typeof alfaData.subscribersActiveCount === 'number' ? alfaData.subscribersActiveCount : parseInt(alfaData.subscribersActiveCount) || 0)
+                    : subscribersCount; // Fallback to total count if active count not available
+                
+                let requestedCount = hasUshareHtmlData
+                    ? (typeof alfaData.subscribersRequestedCount === 'number' ? alfaData.subscribersRequestedCount : parseInt(alfaData.subscribersRequestedCount) || 0)
+                    : undefined; // Don't set to 0 if Ushare HTML data is not available
+                
+                // Get pending subscribers count from Firebase (for backward compatibility - only use if Ushare HTML not available)
                 const pendingSubscribers = data.pendingSubscribers || [];
                 const removedSubscribers = data.removedSubscribers || [];
                 
@@ -881,6 +902,31 @@ class InsightsManager {
                     return !removedSubscribers.includes(pendingPhone);
                 });
                 const pendingCount = activePendingSubscribers.length;
+                
+                // CRITICAL: Only use pending count as fallback if Ushare HTML data is NOT available
+                // If Ushare HTML says 0 requested, trust it (subscriber was removed on Alfa website)
+                if (!hasUshareHtmlData && pendingCount > 0) {
+                    requestedCount = pendingCount;
+                } else if (!hasUshareHtmlData) {
+                    requestedCount = 0; // No Ushare HTML data and no pending subscribers
+                }
+                // If hasUshareHtmlData is true, requestedCount is already set above (even if 0)
+                
+                // Debug: Log extracted counts
+                if (hasAlfaData && (alfaData.subscribersCount !== undefined || alfaData.subscribersActiveCount !== undefined)) {
+                    console.log(`📊 [${doc.id}] Extracted subscriber counts:`, {
+                        subscribersCount,
+                        activeCount,
+                        requestedCount,
+                        hasUshareHtmlData,
+                        pendingCount,
+                        fromAlfaData: {
+                            subscribersCount: alfaData.subscribersCount,
+                            subscribersActiveCount: alfaData.subscribersActiveCount,
+                            subscribersRequestedCount: alfaData.subscribersRequestedCount
+                        }
+                    });
+                }
                 
                 // Debug: Log pending subscribers
                 if (pendingCount > 0) {
@@ -896,11 +942,26 @@ class InsightsManager {
                 let subscriptionDate = this.formatDate(createdAt);
                 let validityDate = this.formatDate(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
                 
+                // CRITICAL: Only use dates from API if they are valid (not NaN)
                 if (hasAlfaData && alfaData.subscriptionDate) {
-                    subscriptionDate = alfaData.subscriptionDate;
+                    const apiSubDate = alfaData.subscriptionDate;
+                    // Validate: must be a string, not empty, and not contain NaN
+                    if (typeof apiSubDate === 'string' && apiSubDate.trim() && !apiSubDate.includes('NaN')) {
+                        subscriptionDate = apiSubDate;
+                    } else {
+                        // Invalid date from API - keep fallback date or empty
+                        console.warn(`⚠️ Invalid subscriptionDate from API: ${apiSubDate}, using fallback`);
+                    }
                 }
                 if (hasAlfaData && alfaData.validityDate) {
-                    validityDate = alfaData.validityDate;
+                    const apiValDate = alfaData.validityDate;
+                    // Validate: must be a string, not empty, and not contain NaN
+                    if (typeof apiValDate === 'string' && apiValDate.trim() && !apiValDate.includes('NaN')) {
+                        validityDate = apiValDate;
+                    } else {
+                        // Invalid date from API - keep fallback date or empty
+                        console.warn(`⚠️ Invalid validityDate from API: ${apiValDate}, using fallback`);
+                    }
                 }
                 
                 // Check if validity date is yesterday or earlier (expired)
@@ -939,8 +1000,10 @@ class InsightsManager {
                     subscriptionDate: subscriptionDate,
                     validityDate: validityDate,
                     subscribersCount: subscribersCount,
+                    subscribersActiveCount: activeCount,
+                    subscribersRequestedCount: requestedCount,
                     pendingSubscribers: activePendingSubscribers, // Store active pending subscribers (excluding removed)
-                    pendingCount: pendingCount, // Store pending count (excluding removed)
+                    pendingCount: pendingCount, // Store pending count (excluding removed) - for backward compatibility
                     removedSubscribers: removedSubscribers, // Store removed subscribers array
                     adminConsumption: adminConsumption,
                     adminLimit: isExpired ? 0 : (adminLimit || 1), // If expired, set to 0; otherwise avoid division by zero
@@ -949,13 +1012,38 @@ class InsightsManager {
                     lastUpdate: (() => {
                         // CRITICAL: Ensure lastUpdate is always a valid Date object for THIS admin
                         // CRITICAL: Never use another admin's lastUpdate - always validate it belongs to this admin
-                        let finalLastUpdate = lastUpdate || updatedAt;
                         
-                        // CRITICAL: Validate finalLastUpdate is a valid Date
-                        if (!(finalLastUpdate instanceof Date) || isNaN(finalLastUpdate.getTime())) {
-                            console.error(`❌ [${doc.id}] Invalid lastUpdate detected, using updatedAt:`, finalLastUpdate);
-                            finalLastUpdate = updatedAt;
-                        }
+                        // Helper function to convert any value to a valid Date
+                        const toValidDate = (value) => {
+                            if (!value) return null;
+                            // If it's already a valid Date
+                            if (value instanceof Date && !isNaN(value.getTime())) {
+                                return value;
+                            }
+                            // If it's a Firebase Timestamp
+                            if (value.toDate && typeof value.toDate === 'function') {
+                                try {
+                                    const date = value.toDate();
+                                    if (date instanceof Date && !isNaN(date.getTime())) {
+                                        return date;
+                                    }
+                                } catch (e) {
+                                    // Conversion failed
+                                }
+                            }
+                            // Try to parse as Date
+                            try {
+                                const date = new Date(value);
+                                if (date instanceof Date && !isNaN(date.getTime())) {
+                                    return date;
+                                }
+                            } catch (e) {
+                                // Parsing failed
+                            }
+                            return null;
+                        };
+                        
+                        let finalLastUpdate = toValidDate(lastUpdate) || toValidDate(updatedAt) || new Date();
                         
                         // CRITICAL: Double-check cached update belongs to this admin
                         const cachedUpdate = this.recentManualUpdates.get(doc.id);
@@ -1767,9 +1855,9 @@ class InsightsManager {
                     </div>
                     `}
                 </td>
-                <td>${subscriber.status === 'inactive' ? '' : (subscriber.subscriptionDate || '')}</td>
-                <td>${subscriber.status === 'inactive' ? '' : (subscriber.validityDate || '')}</td>
-                <td>${subscriber.status === 'inactive' ? '' : this.formatSubscribersCount(subscriber.subscribersCount, subscriber.pendingCount)}</td>
+                <td>${subscriber.status === 'inactive' ? '' : (subscriber.subscriptionDate && !subscriber.subscriptionDate.includes('NaN') ? subscriber.subscriptionDate : '')}</td>
+                <td>${subscriber.status === 'inactive' ? '' : (subscriber.validityDate && !subscriber.validityDate.includes('NaN') ? subscriber.validityDate : '')}</td>
+                <td>${subscriber.status === 'inactive' ? '' : this.formatSubscribersCount(subscriber.subscribersActiveCount !== undefined ? subscriber.subscribersActiveCount : subscriber.subscribersCount, subscriber.subscribersRequestedCount !== undefined ? subscriber.subscribersRequestedCount : subscriber.pendingCount)}</td>
                 <td>
                     ${subscriber.status === 'inactive' ? '' : `
                     <div class="progress-container">
@@ -1794,10 +1882,7 @@ class InsightsManager {
                 <td>
                     <div class="action-buttons">
                         <button class="action-btn view-btn" data-subscriber-id="${subscriber.id}" aria-label="Quick View">
-                            <svg viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M9.75 12a2.25 2.25 0 1 1 4.5 0a2.25 2.25 0 0 1-4.5 0"/>
-                                <path fill-rule="evenodd" d="M2 12c0 1.64.425 2.191 1.275 3.296C4.972 17.5 7.818 20 12 20s7.028-2.5 8.725-4.704C21.575 14.192 22 13.639 22 12c0-1.64-.425-2.191-1.275-3.296C19.028 6.5 16.182 4 12 4S4.972 6.5 3.275 8.704C2.425 9.81 2 10.361 2 12m10-3.75a3.75 3.75 0 1 0 0 7.5a3.75 3.75 0 0 0 0-7.5" clip-rule="evenodd"/>
-                            </svg>
+                            <img src="/assets/eye.png" alt="View Details" style="width: 20px; height: 20px; object-fit: contain;" />
                         </button>
                         <button class="action-btn menu-btn" data-subscriber-id="${subscriber.id}">
                             <svg viewBox="0 0 24 24" fill="currentColor">
@@ -1862,13 +1947,22 @@ class InsightsManager {
         }
         
         // DEBUG: Log the full subscriber data to see what's available
-        console.log('🔍 Full subscriber data:', subscriber);
-        console.log('🔍 alfaData:', subscriber.alfaData);
+        console.log('\n🔍 [View Details] Full subscriber data check:');
+        console.log('   - alfaData exists:', !!subscriber.alfaData);
         if (subscriber.alfaData) {
-            console.log('🔍 alfaData keys:', Object.keys(subscriber.alfaData));
-            console.log('🔍 secondarySubscribers:', subscriber.alfaData.secondarySubscribers);
-            console.log('🔍 consumptions:', subscriber.alfaData.consumptions);
+            console.log('   - alfaData keys:', Object.keys(subscriber.alfaData));
+            console.log('   - secondarySubscribers:', subscriber.alfaData.secondarySubscribers);
+            console.log('   - secondarySubscribers type:', typeof subscriber.alfaData.secondarySubscribers);
+            console.log('   - secondarySubscribers is array:', Array.isArray(subscriber.alfaData.secondarySubscribers));
+            if (Array.isArray(subscriber.alfaData.secondarySubscribers)) {
+                console.log('   - secondarySubscribers length:', subscriber.alfaData.secondarySubscribers.length);
+                if (subscriber.alfaData.secondarySubscribers.length > 0) {
+                    console.log('   - First subscriber sample:', subscriber.alfaData.secondarySubscribers[0]);
+                }
+            }
+            console.log('   - consumptions:', subscriber.alfaData.consumptions);
         }
+        console.log('');
         
         // Extract view details data
         const viewData = this.extractViewDetailsData(subscriber);
@@ -1900,10 +1994,11 @@ class InsightsManager {
             adminConsumption: subscriber.adminConsumption || 0, // Use exactly what the table shows
             adminLimit: adminLimit, // Use quota, not API limit
             subscribers: [],
-            pendingSubscribers: subscriber.pendingSubscribers || [], // Include pending subscribers
+            pendingSubscribers: [], // Will be set conditionally - only if Ushare HTML data not available
             removedSubscribers: subscriber.removedSubscribers || [], // Include removed subscribers
             totalConsumption: subscriber.totalConsumption || 0, // Use exactly what the table shows
-            totalLimit: subscriber.totalLimit || 0 // Use exactly what the table shows
+            totalLimit: subscriber.totalLimit || 0, // Use exactly what the table shows
+            hasUshareHtmlData: false // Flag to track if Ushare HTML data was used
         };
         
         // NO FALLBACK EXTRACTION - trust the values from the table
@@ -1911,51 +2006,89 @@ class InsightsManager {
         // This ensures the modal shows EXACTLY the same values as the table
         console.log(`📊 View Details: Using values from table - adminConsumption: ${data.adminConsumption}, totalConsumption: ${data.totalConsumption}, totalLimit: ${data.totalLimit}`);
         
-        // PRIORITY 1: Get subscriber data from secondarySubscribers array (from getconsumption API - most reliable)
-        if (subscriber.alfaData && subscriber.alfaData.secondarySubscribers && Array.isArray(subscriber.alfaData.secondarySubscribers) && subscriber.alfaData.secondarySubscribers.length > 0) {
-            console.log('📊 Using secondarySubscribers from API:', subscriber.alfaData.secondarySubscribers.length, 'subscribers');
-            subscriber.alfaData.secondarySubscribers.forEach(secondary => {
+        // PRIORITY 1: Get subscriber data from secondarySubscribers array (from ushare HTML - most accurate with Active/Requested status)
+        console.log('🔍 [View Details] Checking for ushare HTML data...');
+        console.log('   - alfaData exists:', !!subscriber.alfaData);
+        console.log('   - secondarySubscribers exists:', !!(subscriber.alfaData && subscriber.alfaData.secondarySubscribers));
+        console.log('   - secondarySubscribers is array:', !!(subscriber.alfaData && Array.isArray(subscriber.alfaData.secondarySubscribers)));
+        console.log('   - secondarySubscribers length:', subscriber.alfaData && subscriber.alfaData.secondarySubscribers ? subscriber.alfaData.secondarySubscribers.length : 0);
+        
+        // Check if Ushare HTML data exists (even if it has 0 subscribers - it's still the source of truth)
+        const hasUshareHtmlArray = subscriber.alfaData && subscriber.alfaData.secondarySubscribers && Array.isArray(subscriber.alfaData.secondarySubscribers);
+        if (hasUshareHtmlArray) {
+            // Ushare HTML data exists - it's the source of truth (even if empty array means 0 subscribers)
+            data.hasUshareHtmlData = true;
+            if (subscriber.alfaData.secondarySubscribers.length > 0) {
+                console.log(`\n🎯 [View Details] ✅ USING USHARE HTML DATA (${subscriber.alfaData.secondarySubscribers.length} subscribers)`);
+                subscriber.alfaData.secondarySubscribers.forEach((secondary, idx) => {
+                console.log(`   [${idx + 1}] Subscriber: ${secondary.phoneNumber}, Status: ${secondary.status || 'Active'}, Consumption: ${secondary.consumption}, Quota: ${secondary.quota}`);
                 if (secondary && secondary.phoneNumber) {
-                    // Parse consumption string (format: "1.18 / 30 GB" or "1.18/30 GB")
-                    const consumptionStr = secondary.consumption || '';
                     let used = 0;
                     let total = 0;
                     
-                    // Try to parse from consumption string first
-                    if (consumptionStr) {
-                        const consumptionMatch = consumptionStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                    // Check if data is from ushare HTML (has consumption and quota as numbers in GB)
+                    if (typeof secondary.consumption === 'number' && typeof secondary.quota === 'number') {
+                        // Data from ushare HTML - already in GB
+                        used = secondary.consumption;
+                        total = secondary.quota;
+                    } else if (secondary.consumptionText) {
+                        // Parse from consumptionText (format: "0.48 / 30 GB")
+                        const consumptionMatch = secondary.consumptionText.match(/([\d.]+)\s*\/\s*([\d.]+)/);
                         if (consumptionMatch) {
                             used = parseFloat(consumptionMatch[1]) || 0;
                             total = parseFloat(consumptionMatch[2]) || 0;
                         }
-                    }
-                    
-                    // Fallback: use raw values if consumption string parsing failed
-                    if ((used === 0 && total === 0) && secondary.rawConsumption && secondary.quota) {
-                        used = parseFloat(secondary.rawConsumption) || 0;
-                        total = parseFloat(secondary.quota) || 0;
+                    } else {
+                        // Fallback: parse from consumption string (format: "1.18 / 30 GB" or "1.18/30 GB")
+                        const consumptionStr = secondary.consumption || '';
+                        if (consumptionStr) {
+                            const consumptionMatch = consumptionStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                            if (consumptionMatch) {
+                                used = parseFloat(consumptionMatch[1]) || 0;
+                                total = parseFloat(consumptionMatch[2]) || 0;
+                            }
+                        }
                         
-                        // Convert MB to GB if needed
-                        if (secondary.rawConsumptionUnit === 'MB' && secondary.quotaUnit === 'GB') {
-                            used = used / 1024;
+                        // Fallback: use raw values if consumption string parsing failed
+                        if ((used === 0 && total === 0) && secondary.rawConsumption && secondary.quota) {
+                            used = parseFloat(secondary.rawConsumption) || 0;
+                            total = parseFloat(secondary.quota) || 0;
+                            
+                            // Convert MB to GB if needed
+                            if (secondary.rawConsumptionUnit === 'MB' && secondary.quotaUnit === 'GB') {
+                                used = used / 1024;
+                            }
                         }
                     }
                     
-                    if (used > 0 || total > 0) {
+                    // Always add subscriber if phoneNumber exists (even if consumption is 0, status might be 'Requested')
+                    if (secondary.phoneNumber) {
+                        const subscriberStatus = secondary.status || 'Active'; // 'Active' or 'Requested'
                         data.subscribers.push({
                             phoneNumber: secondary.phoneNumber,
+                            fullPhoneNumber: secondary.fullPhoneNumber || secondary.phoneNumber,
+                            status: subscriberStatus, // 'Active' or 'Requested' from ushare HTML
                             consumption: used,
                             limit: total
                         });
-                        console.log(`✅ Added subscriber from API: ${secondary.phoneNumber} - ${used} / ${total} GB`);
+                        console.log(`✅ Added subscriber from ushare HTML: ${secondary.phoneNumber} - ${used} / ${total} GB (Status: ${subscriberStatus})`);
                     }
                 }
-            });
+                });
+                console.log(`✅ [View Details] Successfully extracted ${data.subscribers.length} subscribers from ushare HTML\n`);
+            } else {
+                // Ushare HTML data exists but is empty (0 subscribers) - this is valid data
+                console.log(`\n🎯 [View Details] ✅ USING USHARE HTML DATA (0 subscribers - all removed)\n`);
+            }
+        } else {
+            console.log(`⚠️ [View Details] ⚠️ USHARE HTML DATA NOT AVAILABLE - will fallback to getconsumption API\n`);
         }
         
         // PRIORITY 1.5: Try to extract from apiResponses if secondarySubscribers not available
         if (data.subscribers.length === 0 && subscriber.alfaData && subscriber.alfaData.apiResponses && Array.isArray(subscriber.alfaData.apiResponses)) {
-            console.log('📊 Trying to extract from apiResponses array...');
+            console.log('⚠️ [View Details] ⚠️ FALLING BACK TO getconsumption API (ushare HTML not available)');
+            // Ushare HTML not available - allow pending subscribers to be shown
+            data.hasUshareHtmlData = false;
             const getConsumptionResponse = subscriber.alfaData.apiResponses.find(resp => resp.url && resp.url.includes('getconsumption'));
             if (getConsumptionResponse && getConsumptionResponse.data) {
                 console.log('📊 Found getconsumption in apiResponses, extracting...');
@@ -2008,6 +2141,8 @@ class InsightsManager {
         // PRIORITY 2: Fallback to consumption circles from HTML (if secondarySubscribers not available)
         if (data.subscribers.length === 0 && subscriber.alfaData && subscriber.alfaData.consumptions && Array.isArray(subscriber.alfaData.consumptions)) {
             console.log('📊 Using consumption circles from HTML:', subscriber.alfaData.consumptions.length, 'circles');
+            // Ushare HTML not available - allow pending subscribers to be shown
+            data.hasUshareHtmlData = false;
             subscriber.alfaData.consumptions.forEach(circle => {
                 // Check if this is a U-share secondary circle
                 if (circle && circle.planName && circle.planName.toLowerCase().includes('u-share secondary')) {
@@ -2065,10 +2200,11 @@ class InsightsManager {
                     if (phoneNumber && (used > 0 || total > 0)) {
                         data.subscribers.push({
                             phoneNumber: phoneNumber,
+                            status: 'Active', // Consumption circles don't have status, default to Active
                             consumption: used,
                             limit: total
                         });
-                        console.log(`✅ Added subscriber from HTML: ${phoneNumber} - ${used} / ${total} GB`);
+                        console.log(`✅ Added subscriber from HTML (consumption circles): ${phoneNumber} - ${used} / ${total} GB (Status: Active - default)`);
                     }
                 }
             });
@@ -2079,6 +2215,30 @@ class InsightsManager {
             console.warn('⚠️ No subscribers found in alfaData. Available keys:', subscriber.alfaData ? Object.keys(subscriber.alfaData) : 'no alfaData');
         } else {
             console.log(`✅ Total subscribers found: ${data.subscribers.length}`);
+        }
+        
+        // CRITICAL: Handle pendingSubscribers based on Ushare HTML data availability
+        // If Ushare HTML data is available, it's the source of truth - completely ignore stale pendingSubscribers
+        // Ushare HTML data is always the most accurate (fetched directly from Alfa website)
+        if (data.hasUshareHtmlData) {
+            // Ushare HTML data is available - it's the ONLY source of truth
+            // Do NOT show any pendingSubscribers - they are all stale
+            // If Ushare HTML says 0 requested subscribers, that's the truth (subscriber was removed on Alfa website)
+            data.pendingSubscribers = [];
+            console.log(`📋 [View Details] Ushare HTML data available - ignoring all pendingSubscribers (source of truth)`);
+        } else {
+            // Ushare HTML data NOT available - use pendingSubscribers as fallback
+            if (subscriber.pendingSubscribers && Array.isArray(subscriber.pendingSubscribers)) {
+                // Filter out removed subscribers
+                const activePending = subscriber.pendingSubscribers.filter(pending => {
+                    const pendingPhone = String(pending.phone || '').trim();
+                    return !(data.removedSubscribers || []).includes(pendingPhone);
+                });
+                data.pendingSubscribers = activePending;
+                console.log(`📋 [View Details] Ushare HTML data NOT available - using ${activePending.length} pendingSubscribers as fallback`);
+            } else {
+                data.pendingSubscribers = [];
+            }
         }
         
         // Fallback: If API doesn't have totalConsumption, calculate from admin + subscribers
@@ -2160,9 +2320,18 @@ class InsightsManager {
         // Admin row
         const adminPercent = data.adminLimit > 0 ? (data.adminConsumption / data.adminLimit) * 100 : 0;
         const adminProgressClass = adminPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+        const adminWhatsappNumber = data.adminPhone.startsWith('961') ? data.adminPhone : `961${data.adminPhone}`;
+        const adminWhatsappUrl = `https://wa.me/${adminWhatsappNumber}`;
+        const adminCopyId = `copy-btn-admin-${data.adminPhone.replace(/\s/g, '-')}`;
         rows += `
             <tr>
-                <td>Admin - ${data.adminPhone}</td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <a href="${adminWhatsappUrl}" target="_blank" style="text-decoration: none; display: flex; align-items: center;" title="Open WhatsApp chat"><img src="/assets/wlogo.png" alt="WhatsApp" style="width: 18px; height: 18px; object-fit: contain;" /></a>
+                        <a href="${adminWhatsappUrl}" target="_blank" style="text-decoration: none; color: inherit; cursor: pointer;" title="Click to open WhatsApp chat">Admin - ${data.adminPhone}</a>
+                        <button onclick="navigator.clipboard.writeText('${data.adminPhone}').then(() => { const btn = document.getElementById('${adminCopyId}'); if (btn) { const img = btn.querySelector('img'); if (img) { img.src = '/assets/copy.png'; img.style.opacity = '0.5'; setTimeout(() => { img.src = '/assets/copy.png'; img.style.opacity = '1'; }, 2000); } } })" id="${adminCopyId}" style="background: rgba(100, 116, 139, 0.1); border: none; padding: 0.375rem; border-radius: 50%; cursor: pointer; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; margin-left: 0.5rem; transition: all 0.2s ease;" title="Copy phone number" onmouseover="this.style.background='rgba(100, 116, 139, 0.2)'" onmouseout="this.style.background='rgba(100, 116, 139, 0.1)'"><img src="/assets/copy.png" alt="Copy" style="width: 16px; height: 16px; object-fit: contain; transition: opacity 0.2s ease;" /></button>
+                    </div>
+                </td>
                 <td>
                     <div class="progress-container">
                         <div class="progress-bar">
@@ -2179,11 +2348,24 @@ class InsightsManager {
             // Check if this subscriber was removed
             const isRemoved = (data.removedSubscribers || []).includes(sub.phoneNumber);
             
+            // Format phone number for WhatsApp (add 961 prefix if needed)
+            const fullPhoneNumber = sub.fullPhoneNumber || sub.phoneNumber;
+            const whatsappNumber = fullPhoneNumber.startsWith('961') ? fullPhoneNumber : `961${fullPhoneNumber}`;
+            const whatsappUrl = `https://wa.me/${whatsappNumber}`;
+            const uniqueId = `copy-btn-${sub.phoneNumber.replace(/\s/g, '-')}`;
+            
             if (isRemoved) {
                 // Show removed subscriber as "Out" in red with hashed styling
                 rows += `
                     <tr style="opacity: 0.5; text-decoration: line-through;">
-                        <td>${sub.phoneNumber} <span style="color: #ef4444; font-weight: bold;">Out</span></td>
+                        <td>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <img src="/assets/wlogo.png" alt="WhatsApp" style="width: 18px; height: 18px; object-fit: contain;" />
+                                <span>${sub.phoneNumber}</span>
+                                <span style="color: #ef4444; font-weight: bold;">Out</span>
+                                <button onclick="navigator.clipboard.writeText('${sub.phoneNumber}').then(() => { const btn = document.getElementById('${uniqueId}'); if (btn) { const img = btn.querySelector('img'); if (img) { img.style.opacity = '0.5'; setTimeout(() => { img.style.opacity = '1'; }, 2000); } } })" id="${uniqueId}" style="background: rgba(100, 116, 139, 0.1); border: none; padding: 0.375rem; border-radius: 50%; cursor: pointer; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; margin-left: 0.5rem; transition: all 0.2s ease;" title="Copy phone number" onmouseover="this.style.background='rgba(100, 116, 139, 0.2)'" onmouseout="this.style.background='rgba(100, 116, 139, 0.1)'"><img src="/assets/copy.png" alt="Copy" style="width: 16px; height: 16px; object-fit: contain; transition: opacity 0.2s ease;" /></button>
+                            </div>
+                        </td>
                         <td>
                             <div style="padding: 0.5rem 0; color: #64748b;">
                                 ${sub.consumption.toFixed(2)} / ${sub.limit} GB
@@ -2192,12 +2374,32 @@ class InsightsManager {
                     </tr>
                 `;
             } else {
-                // Normal subscriber display
+                // Normal subscriber display with status (Active/Requested)
                 const subPercent = sub.limit > 0 ? (sub.consumption / sub.limit) * 100 : 0;
                 const subProgressClass = subPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+                const status = sub.status || 'Active'; // 'Active' or 'Requested' from ushare HTML
+                
+                // Display status badge for both Active and Requested
+                let statusBadge = '';
+                if (status === 'Requested') {
+                    statusBadge = '<span style="color: #f59e0b; font-weight: bold; margin-left: 0.5rem;">[Requested]</span>';
+                } else if (status === 'Active') {
+                    statusBadge = '<span style="color: #10b981; font-weight: bold; margin-left: 0.5rem;">[Active]</span>';
+                }
+                
+                // Debug: Log subscriber data being rendered
+                console.log(`📊 [View Details] Rendering subscriber: ${sub.phoneNumber}, Status: "${status}", Has status property: ${'status' in sub}, Badge HTML: ${statusBadge.substring(0, 50)}...`);
+                
                 rows += `
                     <tr>
-                        <td>${sub.phoneNumber}</td>
+                        <td>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <a href="${whatsappUrl}" target="_blank" style="text-decoration: none; display: flex; align-items: center;" title="Open WhatsApp chat"><img src="/assets/wlogo.png" alt="WhatsApp" style="width: 18px; height: 18px; object-fit: contain;" /></a>
+                                <a href="${whatsappUrl}" target="_blank" style="text-decoration: none; color: inherit; cursor: pointer;" title="Click to open WhatsApp chat">${sub.phoneNumber}</a>
+                                ${statusBadge}
+                                <button onclick="navigator.clipboard.writeText('${sub.phoneNumber}').then(() => { const btn = document.getElementById('${uniqueId}'); if (btn) { const img = btn.querySelector('img'); if (img) { img.style.opacity = '0.5'; setTimeout(() => { img.style.opacity = '1'; }, 2000); } } })" id="${uniqueId}" style="background: rgba(100, 116, 139, 0.1); border: none; padding: 0.375rem; border-radius: 50%; cursor: pointer; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; margin-left: 0.5rem; transition: all 0.2s ease;" title="Copy phone number" onmouseover="this.style.background='rgba(100, 116, 139, 0.2)'" onmouseout="this.style.background='rgba(100, 116, 139, 0.1)'"><img src="/assets/copy.png" alt="Copy" style="width: 16px; height: 16px; object-fit: contain; transition: opacity 0.2s ease;" /></button>
+                            </div>
+                        </td>
                         <td>
                             <div class="progress-container">
                                 <div class="progress-bar">
@@ -2212,14 +2414,16 @@ class InsightsManager {
         });
         
         // Pending subscriber rows (not yet accepted)
-        // Only show pending subscribers that are NOT already in the confirmed subscribers list
-        // AND are NOT in the removedSubscribers list
-        if (data.pendingSubscribers && Array.isArray(data.pendingSubscribers)) {
-            data.pendingSubscribers.forEach(pending => {
+        // CRITICAL: Show pending subscribers that are NOT in Ushare HTML data
+        // This handles newly added subscribers that haven't been fetched from Ushare HTML yet
+        // Note: pendingSubscribers should be passed in data object from extractViewDetailsData
+        const pendingSubscribersToShow = data.pendingSubscribers || [];
+        if (pendingSubscribersToShow.length > 0) {
+            pendingSubscribersToShow.forEach(pending => {
                 const pendingPhone = String(pending.phone || '').trim();
                 
-                // Check if this pending subscriber is already confirmed (in data.subscribers)
-                const isConfirmed = data.subscribers.some(sub => {
+                // Check if this pending subscriber is already in Ushare HTML data (data.subscribers)
+                const isInUshareHtml = data.subscribers.some(sub => {
                     const subPhone = String(sub.phoneNumber || '').trim();
                     return subPhone === pendingPhone;
                 });
@@ -2227,12 +2431,26 @@ class InsightsManager {
                 // Check if this pending subscriber was removed
                 const isRemoved = (data.removedSubscribers || []).includes(pendingPhone);
                 
-                // Only show if not confirmed AND not removed
-                if (!isConfirmed && !isRemoved) {
+                // Only show if:
+                // 1. NOT in Ushare HTML data (newly added, not yet fetched)
+                // 2. AND not removed
+                if (!isInUshareHtml && !isRemoved) {
+                    // Format phone number for WhatsApp (add 961 prefix if needed)
+                    const pendingWhatsappNumber = pendingPhone.startsWith('961') ? pendingPhone : `961${pendingPhone}`;
+                    const pendingWhatsappUrl = `https://wa.me/${pendingWhatsappNumber}`;
+                    const pendingCopyId = `copy-btn-pending-${pendingPhone.replace(/\s/g, '-')}`;
+                    
                     // Display pending subscriber without progress bar - just text
                     rows += `
                         <tr>
-                            <td>${pending.phone}</td>
+                            <td>
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <a href="${pendingWhatsappUrl}" target="_blank" style="text-decoration: none; display: flex; align-items: center;" title="Open WhatsApp chat"><img src="/assets/wlogo.png" alt="WhatsApp" style="width: 18px; height: 18px; object-fit: contain;" /></a>
+                                    <a href="${pendingWhatsappUrl}" target="_blank" style="text-decoration: none; color: inherit; cursor: pointer;" title="Click to open WhatsApp chat">${pending.phone}</a>
+                                    <span style="color: #f59e0b; font-weight: bold; margin-left: 0.5rem;">[Requested]</span>
+                                    <button onclick="navigator.clipboard.writeText('${pending.phone}').then(() => { const btn = document.getElementById('${pendingCopyId}'); if (btn) { const img = btn.querySelector('img'); if (img) { img.style.opacity = '0.5'; setTimeout(() => { img.style.opacity = '1'; }, 2000); } } })" id="${pendingCopyId}" style="background: rgba(100, 116, 139, 0.1); border: none; padding: 0.375rem; border-radius: 50%; cursor: pointer; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; margin-left: 0.5rem; transition: all 0.2s ease;" title="Copy phone number" onmouseover="this.style.background='rgba(100, 116, 139, 0.2)'" onmouseout="this.style.background='rgba(100, 116, 139, 0.1)'"><img src="/assets/copy.png" alt="Copy" style="width: 16px; height: 16px; object-fit: contain; transition: opacity 0.2s ease;" /></button>
+                                </div>
+                            </td>
                             <td>
                                 <div style="padding: 0.5rem 0; color: #64748b;">Requested: ${pending.quota} GB</div>
                             </td>
@@ -2559,7 +2777,10 @@ class InsightsManager {
                 hasConsumptions: !!(alfaData.consumptions && alfaData.consumptions.length > 0),
                 alfaDataKeys: Object.keys(alfaData || {}),
                 totalConsumptionValue: alfaData.totalConsumption,
-                adminConsumptionValue: alfaData.adminConsumption
+                adminConsumptionValue: alfaData.adminConsumption,
+                subscribersCount: alfaData.subscribersCount,
+                subscribersActiveCount: alfaData.subscribersActiveCount,
+                subscribersRequestedCount: alfaData.subscribersRequestedCount
             });
             
             // Validate that we have consumption data before saving
@@ -3835,15 +4056,17 @@ class InsightsManager {
         }
     }
     
-    formatSubscribersCount(confirmedCount, pendingCount) {
-        if (confirmedCount === undefined && pendingCount === undefined) return '';
-        const confirmed = confirmedCount || 0;
-        const pending = pendingCount || 0;
+    formatSubscribersCount(activeCount, requestedCount) {
+        // Support both old format (confirmedCount, pendingCount) and new format (activeCount, requestedCount)
+        if (activeCount === undefined && requestedCount === undefined) return '';
         
-        if (pending > 0) {
-            return `${confirmed} (${pending})`;
+        const active = activeCount || 0;
+        const requested = requestedCount || 0;
+        
+        if (requested > 0) {
+            return `${active} (${requested})`;
         }
-        return confirmed.toString();
+        return active.toString();
     }
     
     formatDateTime(date) {
