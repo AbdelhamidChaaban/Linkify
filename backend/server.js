@@ -45,7 +45,8 @@ const cookieRefreshWorker = require('./services/cookieRefreshWorker');
 const { addSubscriber } = require('./services/alfaAddSubscriber');
 const { editSubscriber } = require('./services/alfaEditSubscriber');
 const { removeSubscriber } = require('./services/alfaRemoveSubscriber');
-const { getAdminData } = require('./services/firebaseDbService');
+const { getAdminData, getBalanceHistory } = require('./services/firebaseDbService');
+const { prepareEditSession, getActiveSession, closeSession } = require('./services/ushareEditSession');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -218,6 +219,45 @@ app.post('/api/scheduled-refresh/trigger', async (req, res) => {
     }
 });
 
+// Clear stuck request for an admin
+app.post('/api/refresh/clear-stuck', async (req, res) => {
+    try {
+        const { adminId } = req.body;
+        if (!adminId) {
+            return res.status(400).json({
+                success: false,
+                error: 'adminId is required'
+            });
+        }
+
+        // Clear from request queue
+        const cleared = requestQueue.clearRequest(adminId);
+        
+        // Also clear Redis lock if it exists
+        const { releaseRefreshLock } = require('./services/cookieManager');
+        await releaseRefreshLock(adminId).catch(() => {});
+
+        if (cleared) {
+            console.log(`🧹 Cleared stuck request for admin: ${adminId}`);
+            res.json({
+                success: true,
+                message: `Cleared stuck request for ${adminId}`
+            });
+        } else {
+            res.json({
+                success: true,
+                message: `No stuck request found for ${adminId} (may have already cleared)`
+            });
+        }
+    } catch (error) {
+        console.error('❌ Error clearing stuck request:', error);
+        res.status(500).json({
+            success: false,
+            error: error?.message || 'Unknown error occurred'
+        });
+    }
+});
+
 // Add subscriber endpoint
 app.post('/api/subscribers/add', async (req, res) => {
     try {
@@ -293,7 +333,7 @@ app.post('/api/subscribers/add', async (req, res) => {
 // Edit subscribers endpoint (update quota, add, remove)
 app.post('/api/subscribers/edit', async (req, res) => {
     try {
-        const { adminId, updates, removals, additions } = req.body;
+        const { adminId, sessionId, updates, removals, additions } = req.body;
 
         if (!adminId) {
             return res.status(400).json({
@@ -320,18 +360,31 @@ app.post('/api/subscribers/edit', async (req, res) => {
             removals: [],
             additions: []
         };
+        
+        // Get session data if sessionId provided (for faster edits using existing page)
+        let sessionData = null;
+        if (sessionId) {
+            sessionData = getActiveSession(sessionId);
+            if (sessionData) {
+                console.log(`⚡ Using existing edit session for faster operations`);
+            } else {
+                console.log(`⚠️ Session ${sessionId} not found or expired, will create new page`);
+            }
+        }
 
         // Handle additions
         if (additions && Array.isArray(additions) && additions.length > 0) {
             for (const addition of additions) {
                 if (addition.phone && addition.quota) {
                     try {
+                        // Pass sessionData to use existing page if available (faster)
                         const result = await addSubscriber(
                             adminId,
                             adminData.phone,
                             adminData.password,
                             addition.phone,
-                            parseFloat(addition.quota)
+                            parseFloat(addition.quota),
+                            sessionData
                         );
                         
                         if (result.success) {
@@ -352,11 +405,13 @@ app.post('/api/subscribers/edit', async (req, res) => {
             for (const phone of removals) {
                 try {
                     // Remove from Alfa using browser automation
+                    // Pass sessionData to use existing page if available (faster)
                     const result = await removeSubscriber(
                         adminId,
                         adminData.phone,
                         adminData.password,
-                        phone
+                        phone,
+                        sessionData
                     );
                     
                     if (result.success) {
@@ -432,6 +487,99 @@ app.post('/api/subscribers/edit', async (req, res) => {
         res.status(500).json({
             success: false,
             error: error?.message || 'Unknown error occurred while editing subscribers'
+        });
+    }
+});
+
+// Prepare edit session: Navigate to Ushare page and return subscriber data + session ID
+app.post('/api/ushare/prepare-edit', async (req, res) => {
+    try {
+        const { adminId } = req.body;
+        
+        if (!adminId) {
+            return res.status(400).json({
+                success: false,
+                error: 'adminId is required'
+            });
+        }
+        
+        console.log(`[${new Date().toISOString()}] Preparing edit session for admin: ${adminId}`);
+        
+        // Get admin data
+        const adminData = await getAdminData(adminId);
+        if (!adminData || !adminData.phone || !adminData.password) {
+            return res.status(404).json({
+                success: false,
+                error: 'Admin not found or missing credentials'
+            });
+        }
+        
+        // Prepare edit session (navigates to Ushare page and returns data + session ID)
+        const result = await prepareEditSession(adminId, adminData.phone, adminData.password);
+        
+        if (result.success) {
+            res.json({
+                success: true,
+                sessionId: result.sessionId,
+                data: result.data
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                error: result.error || 'Failed to prepare edit session'
+            });
+        }
+    } catch (error) {
+        console.error('❌ Error preparing edit session:', error);
+        res.status(500).json({
+            success: false,
+            error: error?.message || 'Unknown error occurred'
+        });
+    }
+});
+
+// Close edit session
+app.post('/api/ushare/close-session', async (req, res) => {
+    try {
+        const { sessionId } = req.body;
+        
+        if (sessionId) {
+            await closeSession(sessionId);
+        }
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('❌ Error closing session:', error);
+        res.status(500).json({
+            success: false,
+            error: error?.message || 'Unknown error occurred'
+        });
+    }
+});
+
+// Get balance history endpoint
+app.get('/api/admin/:adminId/balance-history', async (req, res) => {
+    try {
+        const { adminId } = req.params;
+        
+        if (!adminId) {
+            return res.status(400).json({
+                success: false,
+                error: 'adminId is required'
+            });
+        }
+        
+        const balanceHistory = await getBalanceHistory(adminId);
+        
+        res.json({
+            success: true,
+            data: balanceHistory
+        });
+    } catch (error) {
+        console.error('❌ Error getting balance history:', error);
+        res.status(500).json({
+            success: false,
+            error: error?.message || 'Unknown error occurred'
         });
     }
 });

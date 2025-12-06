@@ -1,8 +1,19 @@
 const { getSession, saveSession } = require('./sessionManager');
 const { getCaptchaSiteKey, solveCaptcha, injectCaptchaToken } = require('./captchaService');
+const https = require('https');
+const { URL } = require('url');
 
 const AEFA_LOGIN_URL = 'https://www.alfa.com.lb/en/account/login';
 const AEFA_DASHBOARD_URL = 'https://www.alfa.com.lb/en/account';
+
+// HTTP Agent for connection pooling (faster requests)
+const httpsAgent = new https.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 1000,
+    maxSockets: 50,
+    maxFreeSockets: 10,
+    timeout: 60000
+});
 
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -355,5 +366,215 @@ async function loginToAlfa(page, phone, password, adminId) {
     }
 }
 
-module.exports = { loginToAlfa, delay, AEFA_DASHBOARD_URL };
+/**
+ * Parse Set-Cookie header into cookie objects (Puppeteer format)
+ * @param {Array} setCookieHeaders - Array of Set-Cookie header strings
+ * @param {string} domain - Cookie domain
+ * @returns {Array} Array of cookie objects
+ */
+function parseCookiesFromHeaders(setCookieHeaders, domain = 'www.alfa.com.lb') {
+    const cookies = [];
+    
+    if (!setCookieHeaders || !Array.isArray(setCookieHeaders)) {
+        return cookies;
+    }
+    
+    setCookieHeaders.forEach(header => {
+        const parts = header.split(';');
+        const [nameValue] = parts;
+        const [name, value] = nameValue.split('=').map(s => s.trim());
+        
+        if (!name || !value) return;
+        
+        const cookie = {
+            name: name,
+            value: value,
+            domain: domain,
+            path: '/',
+            httpOnly: header.includes('HttpOnly'),
+            secure: header.includes('Secure'),
+            sameSite: header.includes('SameSite=None') ? 'None' : 
+                     header.includes('SameSite=Lax') ? 'Lax' : 
+                     header.includes('SameSite=Strict') ? 'Strict' : 'Lax'
+        };
+        
+        // Parse expiry
+        const expiresMatch = header.match(/Expires=([^;]+)/i) || header.match(/Max-Age=(\d+)/i);
+        if (expiresMatch) {
+            if (expiresMatch[0].startsWith('Max-Age')) {
+                cookie.expires = Math.floor(Date.now() / 1000) + parseInt(expiresMatch[1]);
+            } else {
+                cookie.expires = Math.floor(new Date(expiresMatch[1]).getTime() / 1000);
+            }
+        }
+        
+        cookies.push(cookie);
+    });
+    
+    return cookies;
+}
+
+/**
+ * Fast HTTP-based login (much faster than Puppeteer - 2-5s vs 10-20s)
+ * @param {string} phone - Phone number (8 digits)
+ * @param {string} password - Password
+ * @param {string} adminId - Admin ID
+ * @returns {Promise<{success: boolean, cookies: Array, needsCaptcha: boolean, fallback: boolean}>}
+ */
+async function loginViaHttp(phone, password, adminId) {
+    const cleanPhone = phone.replace(/\D/g, '').substring(0, 8);
+    if (cleanPhone.length !== 8) {
+        throw new Error(`Phone number must be exactly 8 digits. Got: ${cleanPhone.length} digits`);
+    }
+    
+    return new Promise((resolve, reject) => {
+        const startTime = Date.now();
+        const loginUrl = new URL(AEFA_LOGIN_URL);
+        let cookies = [];
+        let csrfToken = null;
+        
+        // Step 1: Fetch login page to get CSRF token
+        const getOptions = {
+            hostname: loginUrl.hostname,
+            path: loginUrl.pathname,
+            method: 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.alfa.com.lb/'
+            },
+            agent: httpsAgent
+        };
+        
+        console.log(`⚡ [HTTP Login] Fetching login page to extract CSRF token...`);
+        const getReq = https.request(getOptions, (getRes) => {
+            let htmlData = '';
+            
+            // Collect cookies from initial request
+            if (getRes.headers['set-cookie']) {
+                cookies = parseCookiesFromHeaders(getRes.headers['set-cookie']);
+            }
+            
+            getRes.on('data', (chunk) => {
+                htmlData += chunk;
+            });
+            
+            getRes.on('end', () => {
+                // Extract CSRF token from HTML
+                const tokenMatch = htmlData.match(/name="__RequestVerificationToken"\s+value="([^"]+)"/) ||
+                                 htmlData.match(/<input[^>]*name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
+                
+                if (!tokenMatch) {
+                    console.log(`⚠️ [HTTP Login] Could not extract CSRF token, falling back to Puppeteer`);
+                    resolve({ success: false, needsCaptcha: false, fallback: true });
+                    return;
+                }
+                
+                csrfToken = tokenMatch[1];
+                console.log(`✅ [HTTP Login] Extracted CSRF token`);
+                
+                // Check for CAPTCHA in HTML
+                const hasCaptcha = htmlData.includes('g-recaptcha') || htmlData.includes('recaptcha');
+                if (hasCaptcha) {
+                    console.log(`⚠️ [HTTP Login] CAPTCHA detected, falling back to Puppeteer`);
+                    resolve({ success: false, needsCaptcha: true, fallback: true });
+                    return;
+                }
+                
+                // Step 2: POST login form
+                const postUrl = new URL(AEFA_LOGIN_URL);
+                const formData = `Username=${encodeURIComponent(cleanPhone)}&Password=${encodeURIComponent(password)}&__RequestVerificationToken=${encodeURIComponent(csrfToken)}`;
+                
+                // Build cookie header from initial cookies
+                const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+                
+                const postOptions = {
+                    hostname: postUrl.hostname,
+                    path: postUrl.pathname,
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Content-Length': Buffer.byteLength(formData),
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Referer': AEFA_LOGIN_URL,
+                        'Origin': 'https://www.alfa.com.lb',
+                        'Cookie': cookieHeader
+                    },
+                    agent: httpsAgent
+                };
+                
+                console.log(`⚡ [HTTP Login] Submitting login form...`);
+                const postReq = https.request(postOptions, (postRes) => {
+                    // Collect cookies from login response
+                    if (postRes.headers['set-cookie']) {
+                        const newCookies = parseCookiesFromHeaders(postRes.headers['set-cookie']);
+                        // Merge cookies, keeping latest values
+                        const cookieMap = new Map();
+                        [...cookies, ...newCookies].forEach(c => cookieMap.set(c.name, c));
+                        cookies = Array.from(cookieMap.values());
+                    }
+                    
+                    // Check if login was successful (redirect to dashboard or 302/301)
+                    const location = postRes.headers.location || '';
+                    const isSuccess = postRes.statusCode === 302 || postRes.statusCode === 301 || 
+                                     location.includes('/account') || 
+                                     !location.includes('/login');
+                    
+                    if (isSuccess && cookies.length > 0) {
+                        console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
+                        resolve({ success: true, cookies, needsCaptcha: false });
+                    } else {
+                        // Check response body for errors or CAPTCHA
+                        let responseData = '';
+                        postRes.on('data', (chunk) => {
+                            responseData += chunk.toString();
+                        });
+                        
+                        postRes.on('end', () => {
+                            if (responseData.includes('g-recaptcha') || responseData.includes('recaptcha')) {
+                                console.log(`⚠️ [HTTP Login] CAPTCHA required, falling back to Puppeteer`);
+                                resolve({ success: false, needsCaptcha: true, fallback: true });
+                            } else {
+                                console.log(`⚠️ [HTTP Login] Login failed (status: ${postRes.statusCode}), falling back to Puppeteer`);
+                                resolve({ success: false, needsCaptcha: false, fallback: true });
+                            }
+                        });
+                    }
+                });
+                
+                postReq.on('error', (error) => {
+                    console.log(`⚠️ [HTTP Login] POST request error: ${error.message}, falling back to Puppeteer`);
+                    resolve({ success: false, needsCaptcha: false, fallback: true });
+                });
+                
+                postReq.setTimeout(10000, () => {
+                    postReq.destroy();
+                    console.log(`⚠️ [HTTP Login] POST request timeout, falling back to Puppeteer`);
+                    resolve({ success: false, needsCaptcha: false, fallback: true });
+                });
+                
+                postReq.write(formData);
+                postReq.end();
+            });
+        });
+        
+        getReq.on('error', (error) => {
+            console.log(`⚠️ [HTTP Login] GET request error: ${error.message}, falling back to Puppeteer`);
+            resolve({ success: false, needsCaptcha: false, fallback: true });
+        });
+        
+        getReq.setTimeout(8000, () => {
+            getReq.destroy();
+            console.log(`⚠️ [HTTP Login] GET request timeout, falling back to Puppeteer`);
+            resolve({ success: false, needsCaptcha: false, fallback: true });
+        });
+        
+        getReq.end();
+    });
+}
+
+module.exports = { loginToAlfa, loginViaHttp, delay, AEFA_LOGIN_URL, AEFA_DASHBOARD_URL };
 

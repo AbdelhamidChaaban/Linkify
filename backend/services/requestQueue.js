@@ -32,20 +32,31 @@ class RequestQueue {
         const activeRequest = this.activeRequests.get(identifier);
         
         if (activeRequest) {
-            console.log(`⏳ Request for ${identifier} is already in progress, deduplicating (${this.activeRequests.size} active, ${this.currentConcurrent}/${this.maxConcurrent} concurrent)...`);
+            // Check if the request has been stuck for more than 5 minutes (300 seconds)
+            // If so, clear it and allow a new request
+            const requestAge = Date.now() - (activeRequest.startTime || 0);
+            const maxAge = 5 * 60 * 1000; // 5 minutes
             
-            // Return the existing promise (deduplication)
-            // This means if multiple requests come for the same admin, they all wait for the same result
-            try {
-                return await activeRequest;
-            } catch (error) {
-                // If the original request failed, allow a retry
-                // But only if it's still the same request (not a new one)
-                if (this.activeRequests.get(identifier) === activeRequest) {
-                    throw error;
+            if (requestAge > maxAge) {
+                console.log(`⚠️ Request for ${identifier} has been stuck for ${Math.round(requestAge / 1000)}s, clearing and allowing new request...`);
+                this.activeRequests.delete(identifier);
+                this.currentConcurrent = Math.max(0, this.currentConcurrent - 1);
+            } else {
+                console.log(`⏳ Request for ${identifier} is already in progress, deduplicating (${this.activeRequests.size} active, ${this.currentConcurrent}/${this.maxConcurrent} concurrent)...`);
+                
+                // Return the existing promise (deduplication)
+                // This means if multiple requests come for the same admin, they all wait for the same result
+                try {
+                    return await activeRequest.promise;
+                } catch (error) {
+                    // If the original request failed, allow a retry
+                    // But only if it's still the same request (not a new one)
+                    if (this.activeRequests.get(identifier) === activeRequest) {
+                        throw error;
+                    }
+                    // Otherwise, a new request has started, return that result
+                    return await this.activeRequests.get(identifier).promise;
                 }
-                // Otherwise, a new request has started, return that result
-                return await this.activeRequests.get(identifier);
             }
         }
 
@@ -57,11 +68,23 @@ class RequestQueue {
             await this.waitForSlot();
         }
 
-        // Create a new request promise
-        const requestPromise = this._executeRequest(identifier, refreshFn);
+        // Create a new request promise with timeout
+        const requestWrapper = {
+            promise: this._executeRequest(identifier, refreshFn),
+            startTime: Date.now()
+        };
+        
+        // Add timeout to prevent stuck requests (5 minutes max)
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+                reject(new Error(`Request timeout after 5 minutes`));
+            }, 5 * 60 * 1000); // 5 minutes
+        });
+        
+        const requestPromise = Promise.race([requestWrapper.promise, timeoutPromise]);
         
         // Store it as active
-        this.activeRequests.set(identifier, requestPromise);
+        this.activeRequests.set(identifier, requestWrapper);
         this.currentConcurrent++;
 
         try {
@@ -74,7 +97,7 @@ class RequestQueue {
         } finally {
             // Clean up
             this.activeRequests.delete(identifier);
-            this.currentConcurrent--;
+            this.currentConcurrent = Math.max(0, this.currentConcurrent - 1);
             
             console.log(`✅ Request for ${identifier} completed (${this.activeRequests.size} active, ${this.currentConcurrent}/${this.maxConcurrent} concurrent)`);
         }
@@ -148,6 +171,21 @@ class RequestQueue {
         this.activeRequests.clear();
         this.pendingQueues.clear();
         this.currentConcurrent = 0;
+    }
+
+    /**
+     * Clear a specific admin's stuck request
+     * @param {string} adminId - Admin identifier
+     */
+    clearRequest(adminId) {
+        const identifier = adminId || 'unknown';
+        if (this.activeRequests.has(identifier)) {
+            console.log(`🧹 Clearing stuck request for ${identifier}`);
+            this.activeRequests.delete(identifier);
+            this.currentConcurrent = Math.max(0, this.currentConcurrent - 1);
+            return true;
+        }
+        return false;
     }
 }
 

@@ -3,6 +3,7 @@ const { loginAndSaveCookies } = require('./cookieManager');
 const { apiRequest, ApiError } = require('./apiClient');
 const cacheLayer = require('./cacheLayer');
 const { refreshCookiesKeepAlive } = require('./pseudoKeepAlive');
+const { getAdminData } = require('./firebaseDbService');
 
 /**
  * Adaptive Cookie Refresh Worker
@@ -145,6 +146,20 @@ async function getActiveAdmins() {
         return await scheduledRefresh.getActiveAdmins();
     } catch (error) {
         console.error('❌ Failed to get active admins:', error.message);
+        return [];
+    }
+}
+
+/**
+ * Get all admins from Firebase (regardless of status)
+ * @returns {Promise<Array>} Array of all admin objects with id, phone, password
+ */
+async function getAllAdmins() {
+    try {
+        const scheduledRefresh = require('./scheduledRefresh');
+        return await scheduledRefresh.getAllAdmins();
+    } catch (error) {
+        console.error('❌ Failed to get all admins:', error.message);
         return [];
     }
 }
@@ -362,21 +377,10 @@ async function refreshCookiesForAdmin(admin) {
             logData.sessionFix = 'keep-alive';
             logData.outcomes.keepAlive = { success: true, duration: keepAliveDuration };
             logData.phases.push({ phase: 'keep-alive', duration: keepAliveDuration, outcome: 'success' });
-            console.log(`✅ [Worker] Successfully refreshed cookies for ${id} via keep-alive (no login needed)`);
+            console.log(`✅ [Worker] Successfully extended cookies for ${id} via keep-alive (no login needed, no refresh triggered)`);
             
-            // After successful keep-alive, refresh data via APIs to keep Firebase current (non-blocking)
-            process.nextTick(() => {
-                (async () => {
-                    try {
-                        const { fetchAlfaData } = require('./alfaServiceApiFirst');
-                        console.log(`🔄 [Worker] Refreshing data for ${id} after keep-alive...`);
-                        await fetchAlfaData(phone, password, id, null, true); // background = true
-                        console.log(`✅ [Worker] Data refreshed for ${id} after keep-alive`);
-                    } catch (error) {
-                        console.warn(`⚠️ [Worker] Failed to refresh data for ${id} after keep-alive:`, error.message);
-                    }
-                })();
-            });
+            // CRITICAL: Keep-alive is NOT a refresh - it only extends __ACCOUNT cookie validity
+            // Do NOT trigger data refresh after keep-alive - that's a separate operation
             
             return { success: true, method: 'keep-alive', expiry, logData };
         }
@@ -1048,23 +1052,599 @@ async function scheduleNextCycle() {
 }
 
 /**
+ * Calculate milliseconds until next 6 AM
+ * @returns {number} Milliseconds until next 6 AM
+ */
+function getMsUntil6AM() {
+    const now = new Date();
+    const next6AM = new Date();
+    next6AM.setHours(6, 0, 0, 0);
+    
+    // If it's already past 6 AM today, schedule for tomorrow
+    if (now >= next6AM) {
+        next6AM.setDate(next6AM.getDate() + 1);
+    }
+    
+    return next6AM.getTime() - now.getTime();
+}
+
+/**
+ * Perform daily cookie check at 6 AM
+ * Attempts to reuse existing cookies (kept alive overnight) instead of forcing full login
+ * Only performs login if cookies are invalid
+ */
+async function performDailyLogin() {
+    console.log('🌅 [Cookie Worker] Performing 6:00 AM cookie check...');
+    
+    try {
+        const admins = await getAllAdmins();
+        
+        if (!admins || admins.length === 0) {
+            console.log('⚠️ [Cookie Worker] No admins found for 6 AM check');
+            return;
+        }
+        
+        console.log(`📋 [Cookie Worker] 6 AM check: ${admins.length} admins to process`);
+        
+        let cookiesReused = 0;
+        let loginsPerformed = 0;
+        
+        // Process admins in batches to avoid overwhelming the system
+        for (let i = 0; i < admins.length; i += BATCH_SIZE) {
+            const batch = admins.slice(i, i + BATCH_SIZE);
+            
+            await Promise.allSettled(
+                batch.map(async (admin) => {
+                    try {
+                        if (!admin.phone || !admin.password) {
+                            console.warn(`⚠️ [Cookie Worker] Skipping admin ${admin.id}: missing credentials`);
+                            return;
+                        }
+                        
+                        // STEP 1: Retrieve cookies from Redis
+                        const cookies = await getCookies(admin.id);
+                        
+                        // STEP 2: Check __ACCOUNT cookie expiry and validity
+                        let cookiesValid = false;
+                        let cookieExpiry = null;
+                        
+                        if (cookies && cookies.length > 0) {
+                            // Check if __ACCOUNT cookie exists
+                            const accountCookie = cookies.find(c => c.name === '__ACCOUNT');
+                            if (accountCookie) {
+                                cookieExpiry = await getCookieExpiry(admin.id);
+                                const now = Date.now();
+                                
+                                // Check if cookie is expired
+                                if (cookieExpiry && cookieExpiry > now) {
+                                    // Cookie not expired yet - try lightweight request to verify
+                                    console.log(`🔍 [6 AM] ${admin.id}: Checking cookie validity (expires: ${new Date(cookieExpiry).toISOString()})...`);
+                                    
+                                    const keepAliveResult = await refreshCookiesKeepAlive(admin.id);
+                                    if (keepAliveResult.success) {
+                                        cookiesValid = true;
+                                        cookiesReused++;
+                                        const updatedExpiry = await getCookieExpiry(admin.id);
+                                        const expiryDate = updatedExpiry ? new Date(updatedExpiry).toISOString() : 'unknown';
+                                        console.log(`✅ [6 AM] ${admin.id}: Cookie check succeeded, continuing with existing cookies (expiry: ${expiryDate})`);
+                                    } else {
+                                        console.log(`⚠️ [6 AM] ${admin.id}: Cookie check failed (${keepAliveResult.error || 'invalid'}), performing full login`);
+                                    }
+                                } else {
+                                    console.log(`⚠️ [6 AM] ${admin.id}: Cookie expired (expiry: ${cookieExpiry ? new Date(cookieExpiry).toISOString() : 'unknown'}), performing full login`);
+                                }
+                            } else {
+                                console.log(`⚠️ [6 AM] ${admin.id}: No __ACCOUNT cookie found, performing full login`);
+                            }
+                        } else {
+                            console.log(`⚠️ [6 AM] ${admin.id}: No cookies found, performing full login`);
+                        }
+                        
+                        // STEP 3: If cookies invalid, perform full login
+                        if (!cookiesValid) {
+                            console.log(`🔐 [6 AM] ${admin.id}: Cookie check failed, performing full login...`);
+                            await loginAndSaveCookies(admin.phone, admin.password, admin.id);
+                            loginsPerformed++;
+                            const newExpiry = await getCookieExpiry(admin.id);
+                            const expiryDate = newExpiry ? new Date(newExpiry).toISOString() : 'unknown';
+                            console.log(`✅ [6 AM] ${admin.id}: Cookie check failed, performed full login (new expiry: ${expiryDate})`);
+                        }
+                    } catch (error) {
+                        console.error(`❌ [Cookie Worker] 6 AM check failed for admin ${admin.id}:`, error.message);
+                    }
+                })
+            );
+            
+            // Small delay between batches
+            if (i + BATCH_SIZE < admins.length) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+        
+        console.log(`✅ [Cookie Worker] 6 AM check completed: ${cookiesReused} reused cookies, ${loginsPerformed} full logins`);
+    } catch (error) {
+        console.error('❌ [Cookie Worker] Error in 6 AM check:', error);
+    }
+}
+
+/**
+ * Schedule next daily login at 6 AM
+ */
+function scheduleNextDailyLogin() {
+    const msUntil6AM = getMsUntil6AM();
+    const hoursUntil6AM = Math.round(msUntil6AM / (1000 * 60 * 60) * 10) / 10;
+    
+    console.log(`📅 [Cookie Worker] Next daily login scheduled in ${hoursUntil6AM} hours (at 6 AM)`);
+    
+    setTimeout(async () => {
+        await performDailyLogin();
+        scheduleNextDailyLogin(); // Schedule next day
+    }, msUntil6AM);
+}
+
+// Silent keep-alive scheduler - dynamic scheduling based on __ACCOUNT expiry
+let keepAliveTimeoutId = null;
+const KEEP_ALIVE_BUFFER_MS = 20 * 60 * 1000; // 20 minutes before expiry
+
+// Track last scheduled keep-alive times per admin (to avoid duplicate logs)
+// Map<adminId, { nextKeepAliveUTC: number, expiryUTC: number }>
+const lastScheduledKeepAlive = new Map();
+let lastEarliestScheduledUTC = null; // Track last earliest scheduled time
+
+/**
+ * Convert UTC timestamp to Lebanon local time (EET/EEST)
+ * Lebanon uses EET (UTC+2) in winter and EEST (UTC+3) in summer
+ * @param {number} utcTimestamp - UTC timestamp in milliseconds
+ * @returns {string} Formatted date string in Lebanon timezone
+ */
+function formatLebanonTime(utcTimestamp) {
+    // Use Intl.DateTimeFormat to handle timezone conversion
+    // Lebanon timezone: Asia/Beirut
+    const date = new Date(utcTimestamp);
+    return new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Beirut',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    }).format(date);
+}
+
+/**
+ * Format timestamp in both UTC and Lebanon time for logging
+ * @param {number} utcTimestamp - UTC timestamp in milliseconds
+ * @returns {string} Formatted string with both UTC and Lebanon time
+ */
+function formatTimeForLogging(utcTimestamp) {
+    const utcDate = new Date(utcTimestamp);
+    const utcStr = utcDate.toISOString().replace('T', ' ').replace('Z', ' UTC');
+    const lebanonStr = formatLebanonTime(utcTimestamp);
+    return `${utcStr} (${lebanonStr} Lebanon time)`;
+}
+
+/**
+ * Perform silent keep-alive ping for a single admin
+ * @param {string} userId - User ID
+ * @returns {Promise<{success: boolean, newExpiry: number|null}>} Result with success and new expiry
+ */
+async function performSilentKeepAlive(userId) {
+    try {
+        const cookies = await getCookies(userId);
+        if (!cookies || cookies.length === 0) {
+            console.log(`❌ [Keep-Alive] ${userId}: No cookies found, triggering auto-login...`);
+            return await triggerAutoLogin(userId);
+        }
+
+        // Check if __ACCOUNT cookie exists
+        const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+        if (!hasAccountCookie) {
+            console.log(`❌ [Keep-Alive] ${userId}: No __ACCOUNT cookie found, triggering auto-login...`);
+            return await triggerAutoLogin(userId);
+        }
+
+        // Use existing pseudoKeepAlive function
+        const result = await refreshCookiesKeepAlive(userId);
+        
+        if (result.success) {
+            const newExpiryUTC = await getCookieExpiry(userId);
+            if (newExpiryUTC) {
+                const newTimeUntilExpiry = Math.round((newExpiryUTC - Date.now()) / 60000);
+                const expiryStr = formatTimeForLogging(newExpiryUTC);
+                console.log(`✅ [Keep-Alive] ${userId}: Extended (expires in ${newTimeUntilExpiry} min, until ${expiryStr})`);
+                
+                // Clear last scheduled time for this admin so it gets logged when rescheduled
+                // (the expiry changed, so next keep-alive time will change)
+                lastScheduledKeepAlive.delete(userId);
+            } else {
+                console.log(`✅ [Keep-Alive] ${userId}: Extended`);
+            }
+            return { success: true, newExpiry: newExpiryUTC };
+        } else {
+            // Keep-alive failed - trigger auto-login immediately
+            const reason = result.needsRefresh ? 'expired' : 'timeout';
+            console.log(`❌ [Keep-Alive] ${userId}: Failed (${reason}), triggering auto-login...`);
+            return await triggerAutoLogin(userId);
+        }
+    } catch (error) {
+        console.log(`❌ [Keep-Alive] ${userId}: Failed (${error.message}), triggering auto-login...`);
+        return await triggerAutoLogin(userId);
+    }
+}
+
+/**
+ * Trigger auto-login for an admin when keep-alive fails
+ * @param {string} userId - User ID
+ * @returns {Promise<{success: boolean, newExpiry: number|null, autoLogin: boolean}>}
+ */
+async function triggerAutoLogin(userId) {
+    try {
+        // Get admin credentials from Firebase
+        const adminData = await getAdminData(userId);
+        if (!adminData || !adminData.phone || !adminData.password) {
+            console.error(`❌ [Keep-Alive] ${userId}: Auto-login failed - admin credentials not found`);
+            return { success: false, newExpiry: null };
+        }
+        
+        // Perform full login immediately
+        await loginAndSaveCookies(adminData.phone, adminData.password, userId);
+        
+        // Get new expiry after login
+        const newExpiryUTC = await getCookieExpiry(userId);
+        if (newExpiryUTC) {
+            const newTimeUntilExpiry = Math.round((newExpiryUTC - Date.now()) / 60000);
+            const expiryStr = formatTimeForLogging(newExpiryUTC);
+            console.log(`✅ [Keep-Alive] ${userId}: Auto-login successful (expires in ${newTimeUntilExpiry} min, until ${expiryStr})`);
+            
+            // Clear last scheduled time so it gets logged when rescheduled
+            lastScheduledKeepAlive.delete(userId);
+            
+            return { success: true, newExpiry: newExpiryUTC, autoLogin: true };
+        } else {
+            console.log(`✅ [Keep-Alive] ${userId}: Auto-login successful`);
+            return { success: true, newExpiry: null, autoLogin: true };
+        }
+    } catch (loginError) {
+        console.error(`❌ [Keep-Alive] ${userId}: Auto-login failed - ${loginError.message}`);
+        return { success: false, newExpiry: null };
+    }
+}
+
+/**
+ * Calculate next keep-alive time for an admin
+ * Returns: __ACCOUNT expiryUTC - 20 minutes (dynamic scheduling in UTC)
+ * All scheduling math uses UTC timestamps
+ * @param {string} userId - User ID
+ * @returns {Promise<number|null>} Next keep-alive UTC timestamp in ms, or null if no cookies
+ */
+async function calculateNextKeepAliveTime(userId) {
+    try {
+        // Get __ACCOUNT expiryUTC from Redis (stored as UTC timestamp)
+        const expiryUTC = await getCookieExpiry(userId);
+        if (!expiryUTC) {
+            return null; // No expiry info, skip
+        }
+
+        const nowUTC = Date.now(); // Current UTC timestamp
+        const ttlMs = expiryUTC - nowUTC;
+        
+        if (ttlMs <= 0) {
+            return null; // Already expired
+        }
+
+        // Calculate keep-alive trigger: expiryUTC - 20 minutes (all in UTC)
+        // Example: if expiryUTC = 2025-12-01T14:26:00Z, schedule keep-alive at 2025-12-01T14:06:00Z
+        const nextKeepAliveUTC = expiryUTC - KEEP_ALIVE_BUFFER_MS;
+        
+        // Ensure it's in the future (at least 1 minute from now)
+        const minDelay = 60 * 1000; // 1 minute
+        if (nextKeepAliveUTC <= nowUTC + minDelay) {
+            // If keep-alive time is too soon or in the past, schedule for 1 minute from now (UTC)
+            return nowUTC + minDelay;
+        }
+        
+        return nextKeepAliveUTC;
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * Run silent keep-alive for admins whose keep-alive time has arrived
+ * Only processes admins scheduled for keep-alive at this time (dynamic scheduling)
+ */
+async function runSilentKeepAliveCycle() {
+    try {
+        const admins = await getAllAdmins();
+        
+        if (!admins || admins.length === 0) {
+            scheduleNextKeepAlive();
+            return;
+        }
+
+        const nowUTC = Date.now(); // Current UTC timestamp
+        const adminsToKeepAlive = [];
+        const adminsNeedingLogin = [];
+        
+        // Find admins whose keep-alive time has arrived OR who need login (expired/missing cookies)
+        for (const admin of admins) {
+            const cookies = await getCookies(admin.id);
+            const cookieExpiry = await getCookieExpiry(admin.id);
+            
+            // Check if cookies are expired or missing
+            const cookiesExpired = !cookieExpiry || cookieExpiry <= nowUTC;
+            const cookiesMissing = !cookies || cookies.length === 0;
+            const hasAccountCookie = cookies && cookies.some(c => c.name === '__ACCOUNT');
+            
+            if (cookiesMissing || cookiesExpired || !hasAccountCookie) {
+                // Cookies expired or missing - need proactive login
+                adminsNeedingLogin.push(admin);
+                continue;
+            }
+            
+            // Cookies exist and are valid - check if keep-alive time has arrived
+            const nextKeepAliveUTC = await calculateNextKeepAliveTime(admin.id);
+            if (nextKeepAliveUTC && nextKeepAliveUTC <= nowUTC + 60000) { // Within 1 minute tolerance
+                adminsToKeepAlive.push(admin);
+            }
+        }
+        
+        // PROACTIVE LOGIN: Perform login for admins with expired/missing cookies
+        if (adminsNeedingLogin.length > 0) {
+            console.log(`🔐 [Keep-Alive] Detected ${adminsNeedingLogin.length} admin(s) with expired/missing cookies - performing proactive login...`);
+            
+            let loginSuccessCount = 0;
+            let loginFailCount = 0;
+            
+            await Promise.allSettled(
+                adminsNeedingLogin.map(async (admin) => {
+                    try {
+                        console.log(`🔐 [Keep-Alive] Performing proactive login for ${admin.id}...`);
+                        await loginAndSaveCookies(admin.phone, admin.password, admin.id);
+                        loginSuccessCount++;
+                        console.log(`✅ [Keep-Alive] Proactive login SUCCESS for ${admin.id} - cookies refreshed`);
+                    } catch (error) {
+                        loginFailCount++;
+                        console.error(`❌ [Keep-Alive] Proactive login FAILED for ${admin.id}: ${error.message}`);
+                    }
+                })
+            );
+            
+            console.log(`📊 [Keep-Alive] Proactive login completed: ${loginSuccessCount} succeeded, ${loginFailCount} failed`);
+        }
+        
+        if (adminsToKeepAlive.length === 0) {
+            // No admins to keep-alive, silently reschedule (no log spam)
+            scheduleNextKeepAlive();
+            return;
+        }
+
+        console.log(`🔔 [Keep-Alive] Executing keep-alive for ${adminsToKeepAlive.length} admin(s)...`);
+        
+        let successCount = 0;
+        let failCount = 0;
+        let autoLoginCount = 0;
+        
+        // Process scheduled admins in parallel (lightweight operation)
+        await Promise.allSettled(
+            adminsToKeepAlive.map(async (admin) => {
+                const result = await performSilentKeepAlive(admin.id);
+                if (result.success) {
+                    successCount++;
+                    if (result.autoLogin) {
+                        autoLoginCount++;
+                    }
+                } else {
+                    failCount++;
+                }
+            })
+        );
+        
+        const summaryParts = [`${successCount} SUCCESS`];
+        if (autoLoginCount > 0) {
+            summaryParts.push(`${autoLoginCount} via auto-login`);
+        }
+        if (failCount > 0) {
+            summaryParts.push(`${failCount} FAILED`);
+        }
+        console.log(`✅ [Keep-Alive] Completed: ${summaryParts.join(', ')}`);
+        
+    } catch (error) {
+        console.error(`❌ [Keep-Alive] Error in keep-alive cycle:`, error.message);
+    } finally {
+        // Always reschedule next keep-alive cycle (finds earliest next time across all admins)
+        scheduleNextKeepAlive();
+    }
+}
+
+/**
+ * Schedule next silent keep-alive cycle
+ * Finds the earliest next keep-alive time across all admins (dynamic scheduling)
+ */
+async function scheduleNextKeepAlive() {
+    try {
+        // Clear any existing timeout
+        if (keepAliveTimeoutId) {
+            clearTimeout(keepAliveTimeoutId);
+            keepAliveTimeoutId = null;
+        }
+        
+        const admins = await getAllAdmins();
+        
+        if (!admins || admins.length === 0) {
+            // No admins, schedule check in 1 hour (fallback)
+            // Only log if this is a change (first time or after having admins)
+            if (lastEarliestScheduledUTC !== null) {
+                console.log(`📅 [Keep-Alive] No admins found, next check scheduled in 1 hour`);
+            }
+            lastEarliestScheduledUTC = null; // Reset tracking
+            const delay = 60 * 60 * 1000;
+            keepAliveTimeoutId = setTimeout(() => runSilentKeepAliveCycle(), delay);
+            return;
+        }
+
+        // Calculate next keep-alive time for each admin (based on __ACCOUNT expiryUTC - 20 minutes)
+        // All times are in UTC
+        const nextTimes = [];
+        const adminSchedules = [];
+        const nowUTC = Date.now(); // Current UTC timestamp
+        
+        // Process all admins (including inactive ones) - keep-alive should cover all admins with cookies
+        let adminsWithCookies = 0;
+        let adminsWithoutCookies = 0;
+        let adminsWithoutAccountCookie = 0;
+        
+        for (const admin of admins) {
+            const cookies = await getCookies(admin.id);
+            if (!cookies || cookies.length === 0) {
+                adminsWithoutCookies++;
+                continue; // Skip admins without cookies (can't keep-alive what doesn't exist)
+            }
+            
+            adminsWithCookies++;
+            const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+            if (!hasAccountCookie) {
+                adminsWithoutAccountCookie++;
+                continue; // Skip admins without __ACCOUNT cookie (can't keep-alive)
+            }
+            
+            const nextKeepAliveUTC = await calculateNextKeepAliveTime(admin.id);
+            if (nextKeepAliveUTC) {
+                nextTimes.push(nextKeepAliveUTC);
+                const expiryUTC = await getCookieExpiry(admin.id);
+                const expiryStr = expiryUTC ? formatTimeForLogging(expiryUTC) : 'unknown';
+                const nextKeepAliveStr = formatTimeForLogging(nextKeepAliveUTC);
+                const adminDelay = Math.round((nextKeepAliveUTC - nowUTC) / (60 * 1000));
+                adminSchedules.push({ adminId: admin.id, nextKeepAliveUTC, expiryUTC, expiryStr, nextKeepAliveStr, adminDelay });
+            }
+        }
+        
+        // Log statistics for debugging (only when schedules change)
+        if (nextTimes.length === 0) {
+            // No admins with valid __ACCOUNT cookies, schedule check in 1 hour (fallback)
+            // Only log if this is a change (first time or after having valid cookies)
+            if (lastEarliestScheduledUTC !== null) {
+                console.log(`📅 [Keep-Alive] No admins with __ACCOUNT cookies, next check scheduled in 1 hour`);
+            }
+            lastEarliestScheduledUTC = null; // Reset tracking
+            const delay = 60 * 60 * 1000;
+            keepAliveTimeoutId = setTimeout(() => runSilentKeepAliveCycle(), delay);
+            return;
+        }
+
+        // Find earliest next keep-alive time (all in UTC)
+        const earliestNextUTC = Math.min(...nextTimes);
+        
+        // CRITICAL: Also check for expired cookies periodically (every 5 minutes)
+        // This ensures we catch expired cookies quickly and perform proactive login
+        const EXPIRED_COOKIE_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+        const delayToNextKeepAlive = Math.max(0, earliestNextUTC - nowUTC);
+        const delay = Math.min(delayToNextKeepAlive, EXPIRED_COOKIE_CHECK_INTERVAL);
+        
+        const delayMinutes = Math.round(delay / (60 * 1000));
+        const delayHours = Math.round(delay / (60 * 60 * 1000) * 10) / 10;
+        const earliestStr = formatTimeForLogging(earliestNextUTC);
+        
+        // Check if scheduled times have changed (only log when changed)
+        let hasChanges = false;
+        const changedSchedules = [];
+        const currentAdminIds = new Set(adminSchedules.map(s => s.adminId));
+        
+        // Clean up tracking for admins that no longer have valid cookies
+        for (const [adminId] of lastScheduledKeepAlive) {
+            if (!currentAdminIds.has(adminId)) {
+                lastScheduledKeepAlive.delete(adminId);
+            }
+        }
+        
+        for (const schedule of adminSchedules) {
+            const lastScheduled = lastScheduledKeepAlive.get(schedule.adminId);
+            
+            // Check if this admin's schedule changed
+            const scheduleChanged = !lastScheduled || 
+                                   lastScheduled.nextKeepAliveUTC !== schedule.nextKeepAliveUTC ||
+                                   lastScheduled.expiryUTC !== schedule.expiryUTC;
+            
+            if (scheduleChanged) {
+                hasChanges = true;
+                changedSchedules.push(schedule);
+                // Update last scheduled time for this admin
+                lastScheduledKeepAlive.set(schedule.adminId, {
+                    nextKeepAliveUTC: schedule.nextKeepAliveUTC,
+                    expiryUTC: schedule.expiryUTC
+                });
+            }
+        }
+        
+        // Check if earliest scheduled time changed
+        const earliestTimeChanged = lastEarliestScheduledUTC !== earliestNextUTC;
+        if (earliestTimeChanged) {
+            hasChanges = true;
+            lastEarliestScheduledUTC = earliestNextUTC;
+        }
+        
+        // Only log if schedules changed
+        if (hasChanges) {
+            keepAliveTimeoutId = setTimeout(() => runSilentKeepAliveCycle(), delay);
+            
+            // Consolidated logging: one line with all changed schedules
+            if (changedSchedules.length > 0) {
+                // Build consolidated schedule summary
+                const scheduleParts = changedSchedules.map(schedule => {
+                    const scheduleStr = formatTimeForLogging(schedule.nextKeepAliveUTC);
+                    const adminDelay = Math.round((schedule.nextKeepAliveUTC - nowUTC) / (60 * 1000));
+                    return `${schedule.adminId} → ${scheduleStr} (in ${adminDelay} min)`;
+                });
+                
+                const delayStr = delayMinutes < 60 
+                    ? `${delayMinutes} min` 
+                    : `${delayHours} hours`;
+                
+                console.log(`📅 [Keep-Alive] Scheduled: ${scheduleParts.join(', ')} | Next cycle in ${delayStr} (at ${earliestStr})`);
+            } else if (earliestTimeChanged) {
+                // Only earliest time changed (no individual admin changes)
+                const delayStr = delayMinutes < 60 
+                    ? `${delayMinutes} min` 
+                    : `${delayHours} hours`;
+                console.log(`📅 [Keep-Alive] Next cycle scheduled in ${delayStr} (at ${earliestStr})`);
+            }
+        } else {
+            // No changes, but still schedule the next cycle (silently)
+            keepAliveTimeoutId = setTimeout(() => runSilentKeepAliveCycle(), delay);
+        }
+        
+    } catch (error) {
+        console.error(`❌ [Keep-Alive] Error scheduling next keep-alive:`, error.message);
+        // Fallback: schedule in 1 hour
+        const delay = 60 * 60 * 1000;
+        keepAliveTimeoutId = setTimeout(() => runSilentKeepAliveCycle(), delay);
+    }
+}
+
+/**
  * Start the adaptive cookie refresh worker
  */
 function startWorker() {
     console.log('🚀 [Cookie Worker] Starting adaptive cookie refresh worker...');
-    console.log(`   Refresh threshold: ${COOKIE_REFRESH_THRESHOLD_MS / 1000 / 60} minutes`);
-    console.log(`   Refresh buffer: ${REFRESH_BUFFER_MS / 1000 / 60} minutes before expiry`);
+    console.log(`   Daily login: 6 AM (proactive __ACCOUNT refresh)`);
+    console.log(`   Silent keep-alive: Every 30-45 min or before expiry`);
     console.log(`   Max concurrent logins: ${MAX_CONCURRENT_LOGINS}`);
     console.log(`   Batch size: ${BATCH_SIZE} admins`);
-    console.log(`   Stagger: ${ADMINS_PER_MINUTE} admins per minute`);
 
-    // Run initial cycle
-    adaptiveRefreshCycle().then(() => {
-        scheduleNextCycle();
-    }).catch(error => {
-        console.error('❌ [Cookie Worker] Error in initial cycle:', error);
-        scheduleNextCycle();
-    });
+    // Schedule daily login at 6 AM
+    scheduleNextDailyLogin();
+    
+    // Start silent keep-alive cycle
+    scheduleNextKeepAlive();
+    
+    // Note: We no longer run minute-by-minute refresh cycles
+    // All refreshes are now driven by:
+    // 1. Daily login at 6 AM (proactive)
+    // 2. Manual refresh requests (on-demand)
+    // 3. Cookie expiry-driven refreshes (when __ACCOUNT expires)
+    // 4. Silent keep-alive pings (every 30-45 min or before expiry)
 }
 
 /**
@@ -1074,6 +1654,10 @@ function stopWorker() {
     if (workerTimeoutId) {
         clearTimeout(workerTimeoutId);
         workerTimeoutId = null;
+    }
+    if (keepAliveTimeoutId) {
+        clearTimeout(keepAliveTimeoutId);
+        keepAliveTimeoutId = null;
     }
     isRunning = false;
     console.log('🛑 [Cookie Worker] Adaptive cookie refresh worker stopped');

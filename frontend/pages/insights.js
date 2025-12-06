@@ -645,11 +645,17 @@ class InsightsManager {
                             console.log(`✅ [${doc.id}] Extracted adminConsumption from number: ${adminConsumption}`);
                         } else if (typeof alfaData.adminConsumption === 'string') {
                             const adminConsumptionStr = alfaData.adminConsumption.trim();
-                            // Parse "17.11 / 15 GB" format to extract the used value and limit
-                            const match = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
-                            if (match) {
-                                const extractedConsumption = parseFloat(match[1]) || 0;
-                                const extractedLimit = parseFloat(match[2]) || 0;
+                            
+                            // Handle two formats:
+                            // 1. "X / Y GB" format (old format with limit)
+                            // 2. "X GB" format (new format without limit - frontend will add limit from quota)
+                            const matchWithLimit = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
+                            const matchWithoutLimit = adminConsumptionStr.match(/^([\d.]+)\s*(GB|MB)/i);
+                            
+                            if (matchWithLimit) {
+                                // Old format: "X / Y GB"
+                                const extractedConsumption = parseFloat(matchWithLimit[1]) || 0;
+                                const extractedLimit = parseFloat(matchWithLimit[2]) || 0;
                                 
                                 // IMPORTANT: Check if the limit matches totalLimit (not adminLimit)
                                 // If it matches totalLimit, this is actually total consumption, not admin consumption
@@ -667,6 +673,11 @@ class InsightsManager {
                                     adminConsumption = extractedConsumption;
                                     console.log(`✅ [${doc.id}] Extracted adminConsumption from string: "${adminConsumptionStr}" -> ${adminConsumption}`);
                                 }
+                            } else if (matchWithoutLimit) {
+                                // New format: "X GB" (consumption only, no limit)
+                                // Extract the consumption value and use admin quota as limit
+                                adminConsumption = parseFloat(matchWithoutLimit[1]) || 0;
+                                console.log(`✅ [${doc.id}] Extracted adminConsumption from value-only format: "${adminConsumptionStr}" -> ${adminConsumption} GB (limit will be from admin quota)`);
                             } else {
                                 // Try to extract just the number if format doesn't match
                                 const numMatch = adminConsumptionStr.match(/^([\d.]+)/);
@@ -814,6 +825,18 @@ class InsightsManager {
                     } catch (primaryError) {
                         console.warn(`⚠️ Error extracting adminConsumption from primaryData for admin ${doc.id}:`, primaryError);
                     }
+                }
+                
+                // CRITICAL: If there are 0 subscribers, admin consumption must be 0
+                // The admin hasn't used their share yet when there are no subscribers
+                // This overrides any incorrect value from Firebase (e.g., when backend sets it to 0 but Firebase save fails)
+                const finalSubscribersCount = hasAlfaData && alfaData.subscribersCount !== undefined
+                    ? (typeof alfaData.subscribersCount === 'number' ? alfaData.subscribersCount : parseInt(alfaData.subscribersCount) || 0)
+                    : 0;
+                
+                if (finalSubscribersCount === 0 && adminConsumption > 0) {
+                    console.log(`✅ [${doc.id}] Overriding adminConsumption from ${adminConsumption} to 0 (subscribersCount is 0)`);
+                    adminConsumption = 0;
                 }
                 
                 // IMPORTANT: Do NOT use totalConsumption as adminConsumption fallback
@@ -965,29 +988,45 @@ class InsightsManager {
                 }
                 
                 // Check if validity date is yesterday or earlier (expired)
-                // If expired, set total consumption and admin consumption to 0, and limits to 0
-                const isExpired = this.isValidityDateExpired(validityDate);
+                // NOTE: Validity date is a cycle date, not an expiration date. We should NOT reset consumption
+                // based on validity date alone. Only reset if admin is truly inactive or expired based on expiration field.
+                // The expiration field (in days) is the source of truth for whether the admin is expired.
+                // IMPORTANT: Only reset totalConsumption (not adminConsumption) when expired
+                const expirationDays = hasAlfaData && alfaData.expiration !== undefined 
+                    ? (typeof alfaData.expiration === 'number' ? alfaData.expiration : parseInt(alfaData.expiration) || 0)
+                    : 0;
+                
+                // Only consider expired if expiration is explicitly 0 or negative (not just validity date passed)
+                const isExpired = expirationDays <= 0 && expirationDays !== undefined;
+                
                 if (isExpired) {
+                    console.warn(`⚠️ [${doc.id}] Admin is expired (expiration: ${expirationDays} days), resetting totalConsumption from ${totalConsumption} to 0 (adminConsumption kept)`);
                     totalConsumption = 0;
                     totalLimit = 0;
-                    adminConsumption = 0;
-                    adminLimit = 0;
+                    // NOTE: Do NOT reset adminConsumption - it should remain even if expired
+                } else {
+                    console.log(`✅ [${doc.id}] Admin is NOT expired (expiration: ${expirationDays} days, validityDate: ${validityDate}), keeping totalConsumption: ${totalConsumption}`);
                 }
                 
                 // If admin is inactive, set consumption and date fields to empty
                 // IMPORTANT: Only set to empty if status is strictly 'inactive'
                 // NOTE: Keep pendingSubscribers even for inactive admins (they might become active later)
+                // IMPORTANT: Only reset totalConsumption for inactive admins, NOT adminConsumption
                 if (status === 'inactive') {
                     totalConsumption = 0;
                     totalLimit = 0;
                     subscriptionDate = '';
                     validityDate = '';
                     subscribersCount = 0;
-                    adminConsumption = 0;
-                    adminLimit = 0;
+                    // NOTE: Do NOT reset adminConsumption or adminLimit for inactive admins - keep them
                     // Don't clear pendingSubscribers - they should still be tracked
                 }
                 // For active admins, keep all original values (even if they're 0 or empty from data source)
+                
+                // DEBUG: Log final values before creating subscriber object
+                if (doc.id === 'C46uXuZKR4sOvChA9hsl') {
+                    console.log(`🔍 [${doc.id}] Creating subscriber object with: totalConsumption=${totalConsumption}, totalLimit=${totalLimit}, adminConsumption=${adminConsumption}, adminLimit=${adminLimit}, isExpired=${isExpired}, status=${status}`);
+                }
                 
                 return {
                     id: doc.id,
@@ -1006,7 +1045,7 @@ class InsightsManager {
                     pendingCount: pendingCount, // Store pending count (excluding removed) - for backward compatibility
                     removedSubscribers: removedSubscribers, // Store removed subscribers array
                     adminConsumption: adminConsumption,
-                    adminLimit: isExpired ? 0 : (adminLimit || 1), // If expired, set to 0; otherwise avoid division by zero
+                    adminLimit: adminLimit || 1, // Always keep adminLimit (not affected by expiration)
                     balance: balance,
                     expiration: expiration,
                     lastUpdate: (() => {
@@ -1684,7 +1723,12 @@ class InsightsManager {
         console.log(`📊 renderRow [${subscriber.id}]: Final values - totalConsumption: ${totalConsumption}, totalLimit: ${totalLimit}, adminLimit: ${adminLimit}`);
         
         // If values are missing, try to extract from primaryData (same logic as View Details)
-        if ((totalConsumption === 0 || adminConsumption === 0) && subscriber.alfaData && subscriber.alfaData.primaryData) {
+        // IMPORTANT: When expired, totalConsumption is intentionally set to 0, but adminConsumption should remain
+        // Only extract adminConsumption if it's truly missing (0), not if totalConsumption is 0 due to expiration
+        // Check if adminConsumption was already extracted (preserved, not missing)
+        const adminConsumptionWasExtracted = subscriber.adminConsumption !== undefined && subscriber.adminConsumption !== null && subscriber.adminConsumption > 0;
+        
+        if ((totalConsumption === 0 || (adminConsumption === 0 && !adminConsumptionWasExtracted)) && subscriber.alfaData && subscriber.alfaData.primaryData) {
             try {
                 const primaryData = subscriber.alfaData.primaryData;
                 
@@ -1725,7 +1769,8 @@ class InsightsManager {
                                 // Extract admin consumption if missing
                                 // IMPORTANT: Skip Mobile Internet service - that's total consumption, not admin consumption
                                 // Admin consumption should come from U-Share Main service
-                                if (adminConsumption === 0) {
+                                // CRITICAL: Only extract if adminConsumption is truly missing (0), not if it was preserved from expiration
+                                if (adminConsumption === 0 && !adminConsumptionWasExtracted) {
                                     const serviceName = (service.ServiceNameValue || '').toLowerCase();
                                     
                                     // Skip Mobile Internet - that's total consumption, not admin consumption
@@ -2513,6 +2558,12 @@ class InsightsManager {
                 </svg>
                 Edit
             </div>
+            <div class="dropdown-item" data-action="statement">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+                </svg>
+                Statement
+            </div>
         `;
         
         // Position menu
@@ -2551,7 +2602,177 @@ class InsightsManager {
             this.refreshSubscriber(id);
         } else if (action === 'edit') {
             this.editSubscriber(id);
+        } else if (action === 'statement') {
+            this.showStatement(id);
         }
+    }
+    
+    async showStatement(adminId) {
+        // Show modal immediately with loading state
+        this.createStatementModal(adminId, null); // null = loading state
+        
+        try {
+            // Fetch balance history from backend
+            const response = await fetch(`/api/admin/${adminId}/balance-history`);
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.error('❌ Error fetching balance history:', result.error);
+                this.updateStatementModal(adminId, [], 'error');
+                return;
+            }
+            
+            const balanceHistory = result.data || [];
+            
+            // Update modal with data
+            this.updateStatementModal(adminId, balanceHistory);
+        } catch (error) {
+            console.error('❌ Error showing statement:', error);
+            this.updateStatementModal(adminId, [], 'error');
+        }
+    }
+    
+    createStatementModal(adminId, balanceHistory) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('statementModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // Find admin name
+        const admin = this.subscribers.find(s => s.id === adminId);
+        const adminName = admin ? admin.name : 'Admin';
+        
+        // Determine content based on state
+        let content = '';
+        if (balanceHistory === null) {
+            // Loading state
+            content = `
+                <div class="statement-loading">
+                    <div class="statement-spinner"></div>
+                    <p>Loading balance history...</p>
+                </div>
+            `;
+        } else if (balanceHistory.length === 0) {
+            // Empty state
+            content = `
+                <div class="statement-empty">
+                    <p>No balance history available yet.</p>
+                    <p class="statement-empty-hint">Balance history will appear here after successful refreshes.</p>
+                </div>
+            `;
+        } else {
+            // Data state
+            content = `
+                <div class="statement-table">
+                    <div class="statement-table-header">
+                        <div class="statement-col-date">Date</div>
+                        <div class="statement-col-balance">Balance</div>
+                    </div>
+                    <div class="statement-table-body">
+                        ${balanceHistory.map(entry => {
+                            const dateTime = this.formatDateTime(new Date(entry.timestamp || entry.date));
+                            return `
+                                <div class="statement-table-row">
+                                    <div class="statement-col-date">${dateTime.date} ${dateTime.time}</div>
+                                    <div class="statement-col-balance">${this.escapeHtml(entry.balance || 'N/A')}</div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.id = 'statementModal';
+        modal.className = 'statement-modal-overlay';
+        modal.innerHTML = `
+            <div class="statement-modal-container">
+                <div class="statement-modal-header">
+                    <h3>Statement - ${this.escapeHtml(adminName)}</h3>
+                    <button class="statement-modal-close" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="statement-modal-content">
+                    ${content}
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Add event listeners
+        const closeBtn = modal.querySelector('.statement-modal-close');
+        closeBtn.addEventListener('click', () => {
+            modal.remove();
+        });
+        
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+        
+        // Close on Escape key
+        const escapeHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escapeHandler);
+            }
+        };
+        document.addEventListener('keydown', escapeHandler);
+    }
+    
+    updateStatementModal(adminId, balanceHistory, error = null) {
+        const modal = document.getElementById('statementModal');
+        if (!modal) return;
+        
+        const contentDiv = modal.querySelector('.statement-modal-content');
+        if (!contentDiv) return;
+        
+        let content = '';
+        if (error === 'error') {
+            content = `
+                <div class="statement-empty">
+                    <p>Failed to load balance history.</p>
+                    <p class="statement-empty-hint">Please try again later.</p>
+                </div>
+            `;
+        } else if (balanceHistory.length === 0) {
+            content = `
+                <div class="statement-empty">
+                    <p>No balance history available yet.</p>
+                    <p class="statement-empty-hint">Balance history will appear here after successful refreshes.</p>
+                </div>
+            `;
+        } else {
+            content = `
+                <div class="statement-table">
+                    <div class="statement-table-header">
+                        <div class="statement-col-date">Date</div>
+                        <div class="statement-col-balance">Balance</div>
+                    </div>
+                    <div class="statement-table-body">
+                        ${balanceHistory.map(entry => {
+                            const dateTime = this.formatDateTime(new Date(entry.timestamp || entry.date));
+                            return `
+                                <div class="statement-table-row">
+                                    <div class="statement-col-date">${dateTime.date} ${dateTime.time}</div>
+                                    <div class="statement-col-balance">${this.escapeHtml(entry.balance || 'N/A')}</div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        contentDiv.innerHTML = content;
     }
     
     async refreshSubscriber(id) {
@@ -2827,86 +3048,133 @@ class InsightsManager {
                 }, { merge: true });
                 
                 console.log('✅ Successfully saved lastRefreshTimestamp to Firebase');
+            } catch (updateError) {
+                // If Firebase save fails (e.g., permission errors), still update local data
+                console.warn('⚠️ Failed to save to Firebase (may have permission errors):', updateError.message);
+                console.log('📦 Will update local data directly from API response to ensure UI shows correct values');
+            }
+            
+            // CRITICAL: Immediately update the subscriber in our local data with API response - don't wait for Firebase
+            // This ensures the UI shows the correct data immediately, even if Firebase save fails
+            const subscriberIndex = this.subscribers.findIndex(s => s.id === id);
+            if (subscriberIndex !== -1) {
+                // Create new Date object from the refresh timestamp
+                const newLastUpdate = new Date(refreshTimestamp);
+                const now = Date.now();
                 
-                // Immediately update the subscriber in our local data - don't wait for Firebase
-                // This ensures the UI shows the correct timestamp immediately
-                const subscriberIndex = this.subscribers.findIndex(s => s.id === id);
-                if (subscriberIndex !== -1) {
-                    // Create new Date object from the refresh timestamp
-                    const newLastUpdate = new Date(refreshTimestamp);
-                    const now = Date.now();
+                // Store the old value for comparison
+                const oldLastUpdate = this.subscribers[subscriberIndex].lastUpdate;
+                
+                // CRITICAL: Store in persistent cache FIRST - this survives Firebase listener updates
+                // CRITICAL: Include adminId to prevent cross-admin contamination
+                this.recentManualUpdates.set(id, {
+                    timestamp: newLastUpdate,
+                    setAt: now,
+                    adminId: id // Store admin ID to verify ownership
+                });
+                console.log('💾 Stored manual lastUpdate in cache for:', id, newLastUpdate.toLocaleString(), `(adminId: ${id})`);
+                
+                // CRITICAL: Update subscriber with API response data immediately
+                // This ensures adminConsumption and other fields are updated even if Firebase save fails
+                // Process the alfaData to extract consumption values (same logic as processSubscribers)
+                const updatedSubscriber = { ...this.subscribers[subscriberIndex] };
+                updatedSubscriber.lastUpdate = newLastUpdate;
+                
+                // Update alfaData in subscriber object so it's available for extraction
+                if (alfaData) {
+                    updatedSubscriber.alfaData = alfaData;
                     
-                    // Store the old value for comparison
-                    const oldLastUpdate = this.subscribers[subscriberIndex].lastUpdate;
+                    // Extract totalConsumption and adminConsumption from alfaData (same as processSubscribers)
+                    if (alfaData.totalConsumption) {
+                        // Parse consumption string (e.g., "58.97 / 77")
+                        const consumptionStr = String(alfaData.totalConsumption).trim();
+                        const match = consumptionStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                        if (match) {
+                            const used = parseFloat(match[1]) || 0;
+                            const total = parseFloat(match[2]) || 0;
+                            if (used > 0) {
+                                updatedSubscriber.totalConsumption = used;
+                                updatedSubscriber.totalLimit = total || updatedSubscriber.totalLimit;
+                                console.log(`✅ [${id}] Updated totalConsumption from API response: ${used} / ${total}`);
+                            }
+                        }
+                    }
                     
-                    // CRITICAL: Store in persistent cache FIRST - this survives Firebase listener updates
-                    // CRITICAL: Include adminId to prevent cross-admin contamination
-                    this.recentManualUpdates.set(id, {
-                        timestamp: newLastUpdate,
-                        setAt: now,
-                        adminId: id // Store admin ID to verify ownership
-                    });
-                    console.log('💾 Stored manual lastUpdate in cache for:', id, newLastUpdate.toLocaleString(), `(adminId: ${id})`);
-                    
-                    // CRITICAL: Use immutable updates - create new objects instead of mutating
-                    // CRITICAL: This prevents cross-admin contamination
-                    // Update subscribers array with immutable update
-                    this.subscribers = this.subscribers.map((sub, idx) => {
-                        if (idx === subscriberIndex && sub.id === id) {
+                    if (alfaData.adminConsumption) {
+                        const adminConsumptionStr = String(alfaData.adminConsumption).trim();
+                        const matchWithoutLimit = adminConsumptionStr.match(/^([\d.]+)\s*(GB|MB)/i);
+                        if (matchWithoutLimit) {
+                            let adminConsumptionValue = parseFloat(matchWithoutLimit[1]) || 0;
+                            // Convert MB to GB if needed
+                            if (matchWithoutLimit[2].toUpperCase() === 'MB') {
+                                adminConsumptionValue = adminConsumptionValue / 1024;
+                            }
+                            updatedSubscriber.adminConsumption = adminConsumptionValue;
+                            console.log(`✅ [${id}] Updated adminConsumption from API response: ${adminConsumptionValue} GB`);
+                        }
+                    }
+                }
+                
+                // CRITICAL: Use immutable updates - create new objects instead of mutating
+                // CRITICAL: This prevents cross-admin contamination
+                // Update subscribers array with immutable update
+                this.subscribers = this.subscribers.map((sub, idx) => {
+                    if (idx === subscriberIndex && sub.id === id) {
+                        // CRITICAL: Only update if IDs match - prevent cross-admin contamination
+                        return updatedSubscriber;
+                    }
+                    return sub; // Return unchanged for all other admins
+                });
+                
+                // Update filteredSubscribers array with immutable update
+                const filteredIndex = this.filteredSubscribers.findIndex(s => s.id === id);
+                if (filteredIndex !== -1) {
+                    this.filteredSubscribers = this.filteredSubscribers.map((sub, idx) => {
+                        if (idx === filteredIndex && sub.id === id) {
                             // CRITICAL: Only update if IDs match - prevent cross-admin contamination
-                            return { ...sub, lastUpdate: newLastUpdate };
+                            return updatedSubscriber;
                         }
                         return sub; // Return unchanged for all other admins
                     });
-                    
-                    // Update filteredSubscribers array with immutable update
-                    const filteredIndex = this.filteredSubscribers.findIndex(s => s.id === id);
-                    if (filteredIndex !== -1) {
-                        this.filteredSubscribers = this.filteredSubscribers.map((sub, idx) => {
-                            if (idx === filteredIndex && sub.id === id) {
-                                // CRITICAL: Only update if IDs match - prevent cross-admin contamination
-                                return { ...sub, lastUpdate: newLastUpdate };
-                            }
-                            return sub; // Return unchanged for all other admins
-                        });
-                    }
-                    
-                    console.log('🔄 UPDATING lastUpdate:', {
-                        subscriberId: id,
-                        refreshTimestamp: refreshTimestamp,
-                        newDate: newLastUpdate.toISOString(),
-                        newLocal: newLastUpdate.toLocaleString(),
-                        oldLocal: oldLastUpdate instanceof Date ? oldLastUpdate.toLocaleString() : 'N/A',
-                        timestamp: newLastUpdate.getTime(),
-                        cached: true
-                    });
-                    
-                    // Re-render immediately to show the updated timestamp
-                    this.renderTable();
-                    
-                    // Verify it was updated correctly
-                    const verifyUpdate = this.subscribers.find(s => s.id === id);
-                    const verifyFiltered = this.filteredSubscribers.find(s => s.id === id);
-                    const verifyCache = this.recentManualUpdates.get(id);
-                    console.log('✅ VERIFIED update:', {
-                        subscriberId: id,
-                        subscribersArray: verifyUpdate?.lastUpdate instanceof Date ? verifyUpdate.lastUpdate.toLocaleString() : verifyUpdate?.lastUpdate,
-                        filteredArray: verifyFiltered?.lastUpdate instanceof Date ? verifyFiltered.lastUpdate.toLocaleString() : verifyFiltered?.lastUpdate,
-                        cache: verifyCache ? verifyCache.timestamp.toLocaleString() : 'N/A',
-                        formatted: this.formatDateTime(verifyUpdate?.lastUpdate),
-                        timestampsMatch: verifyUpdate?.lastUpdate?.getTime() === newLastUpdate.getTime(),
-                        cacheMatch: verifyCache && verifyCache.timestamp.getTime() === newLastUpdate.getTime()
-                    });
-                } else {
-                    console.warn('⚠️ Subscriber not found in subscribers array:', id);
                 }
-            } catch (updateError) {
-                // If update fails, log but don't fail the whole operation
-                console.warn('Failed to update Firestore (may be offline):', updateError);
-                // The data was fetched successfully, so we can still show it
+                
+                console.log('🔄 UPDATING lastUpdate:', {
+                    subscriberId: id,
+                    refreshTimestamp: refreshTimestamp,
+                    newDate: newLastUpdate.toISOString(),
+                    newLocal: newLastUpdate.toLocaleString(),
+                    oldLocal: oldLastUpdate instanceof Date ? oldLastUpdate.toLocaleString() : 'N/A',
+                    timestamp: newLastUpdate.getTime(),
+                    cached: true
+                });
+                
+                // Re-render immediately to show the updated timestamp
+                this.renderTable();
+                
+                // Verify it was updated correctly
+                const verifyUpdate = this.subscribers.find(s => s.id === id);
+                const verifyFiltered = this.filteredSubscribers.find(s => s.id === id);
+                const verifyCache = this.recentManualUpdates.get(id);
+                console.log('✅ VERIFIED update:', {
+                    subscriberId: id,
+                    subscribersArray: verifyUpdate?.lastUpdate instanceof Date ? verifyUpdate.lastUpdate.toLocaleString() : verifyUpdate?.lastUpdate,
+                    filteredArray: verifyFiltered?.lastUpdate instanceof Date ? verifyFiltered.lastUpdate.toLocaleString() : verifyFiltered?.lastUpdate,
+                    cache: verifyCache ? verifyCache.timestamp.toLocaleString() : 'N/A',
+                    formatted: this.formatDateTime(verifyUpdate?.lastUpdate),
+                    timestampsMatch: verifyUpdate?.lastUpdate?.getTime() === newLastUpdate.getTime(),
+                    cacheMatch: verifyCache && verifyCache.timestamp.getTime() === newLastUpdate.getTime()
+                });
+            } else {
+                console.warn('⚠️ Subscriber not found in subscribers array:', id);
             }
             
             console.log('Alfa data refreshed successfully');
+            
+            // Show success notification
+            if (typeof notification !== 'undefined') {
+                notification.set({ delay: 2000 });
+                notification.success('Refresh completed successfully');
+            }
             
             // Wait a bit for Firebase real-time listener to update the UI
             // This ensures the loader stays visible until data actually appears
@@ -2965,7 +3233,14 @@ class InsightsManager {
                 errorMessage = 'An error occurred. Please check the backend console (where you ran "node server.js") for details.';
             }
             
-            alert('Failed to refresh data: ' + errorMessage);
+            // Show error notification
+            if (typeof notification !== 'undefined') {
+                notification.set({ delay: 3000 });
+                notification.error('Refresh failed: ' + (errorMessage.length > 50 ? errorMessage.substring(0, 50) + '...' : errorMessage));
+            } else {
+                // Fallback to alert if notification system not loaded
+                alert('Failed to refresh data: ' + errorMessage);
+            }
             
             // Remove loading indicators and restore row
             const errorCheckbox = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
@@ -2985,7 +3260,7 @@ class InsightsManager {
         this.openEditSubscribersModal(id);
     }
     
-    openEditSubscribersModal(adminId) {
+    async openEditSubscribersModal(adminId) {
         const modal = document.getElementById('editSubscribersModal');
         if (!modal) {
             console.error('Edit Subscribers modal not found');
@@ -3001,13 +3276,121 @@ class InsightsManager {
         
         // Store current admin ID
         this.editingAdminId = adminId;
+        this.editingSessionId = null; // Will be set when session is prepared
         
-        // Show modal
+        // Show modal with loading state
         modal.classList.add('show');
         document.body.style.overflow = 'hidden';
         
-        // Initialize modal content
-        this.initEditSubscribersModal(subscriber);
+        // Show loading spinner
+        this.showEditModalLoading();
+        
+        try {
+            // Prepare edit session: Navigate to Ushare page and get subscriber data
+            console.log('🔄 Preparing edit session...');
+            const response = await fetch('/api/ushare/prepare-edit', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ adminId })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success && result.data) {
+                // Store session ID for later use
+                this.editingSessionId = result.sessionId;
+                
+                // Hide loading
+                this.hideEditModalLoading();
+                
+                // Initialize modal with fresh Ushare data
+                this.initEditSubscribersModalWithUshareData(subscriber, result.data);
+                
+                console.log('✅ Edit session prepared, modal ready');
+            } else {
+                throw new Error(result.error || 'Failed to prepare edit session');
+            }
+        } catch (error) {
+            console.error('❌ Error preparing edit session:', error);
+            this.hideEditModalLoading();
+            alert(`Failed to load subscriber data: ${error.message}`);
+            this.closeEditSubscribersModal();
+        }
+    }
+    
+    showEditModalLoading() {
+        const modal = document.getElementById('editSubscribersModal');
+        if (!modal) return;
+        
+        const modalContainer = modal.querySelector('.edit-subscribers-modal-container');
+        if (!modalContainer) return;
+        
+        // Create or show loading overlay
+        let loadingOverlay = modalContainer.querySelector('.edit-modal-loading');
+        if (!loadingOverlay) {
+            loadingOverlay = document.createElement('div');
+            loadingOverlay.className = 'edit-modal-loading';
+            loadingOverlay.innerHTML = `
+                <div class="edit-modal-loading-spinner">
+                    <div class="spinner"></div>
+                    <p>Loading subscriber data...</p>
+                </div>
+            `;
+            modalContainer.appendChild(loadingOverlay);
+        }
+        loadingOverlay.style.display = 'flex';
+    }
+    
+    hideEditModalLoading() {
+        const modal = document.getElementById('editSubscribersModal');
+        if (!modal) return;
+        
+        const modalContainer = modal.querySelector('.edit-subscribers-modal-container');
+        if (!modalContainer) return;
+        
+        const loadingOverlay = modalContainer.querySelector('.edit-modal-loading');
+        if (loadingOverlay) {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+    
+    initEditSubscribersModalWithUshareData(subscriber, ushareData) {
+        // Set admin info
+        const adminInfoEl = document.getElementById('editSubscribersAdminInfo');
+        if (adminInfoEl) {
+            adminInfoEl.innerHTML = `
+                <h6 class="edit-subscribers-admin-name">${this.escapeHtml(subscriber.name)} - ${this.escapeHtml(subscriber.phone)} (${subscriber.quota || 0} GB)</h6>
+            `;
+        }
+        
+        // Load subscribers from Ushare data
+        const itemsContainer = document.getElementById('editSubscribersItems');
+        if (!itemsContainer) return;
+        
+        itemsContainer.innerHTML = '';
+        
+        // Add subscribers from Ushare data
+        if (ushareData.subscribers && Array.isArray(ushareData.subscribers)) {
+            ushareData.subscribers.forEach((sub, index) => {
+                const isPending = sub.status === 'Requested';
+                const itemHtml = this.createEditSubscriberItem(
+                    sub.phoneNumber,
+                    sub.usedConsumption || 0,
+                    sub.totalQuota || 0,
+                    index,
+                    isPending
+                );
+                itemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+            });
+        }
+        
+        // Bind events
+        this.bindEditSubscribersEvents();
+        
+        // Update add button state
+        this.updateEditAddSubscriberButtonState();
     }
     
     closeEditSubscribersModal() {
@@ -3137,12 +3520,8 @@ class InsightsManager {
         const itemsContainer = document.getElementById('editSubscribersItems');
         if (!itemsContainer) return;
         
-        // Prevent removing all subscribers - at least 1 must remain
-        const existingItems = itemsContainer.querySelectorAll('.edit-subscriber-item');
-        if (existingItems.length <= 1) {
-            alert('At least one subscriber must remain. You cannot remove all subscribers.');
-            return;
-        }
+        // Allow removing all subscribers - user can remove all if needed
+        // Removed the check that prevented removing all subscribers
         
         const item = document.querySelector(`.edit-subscriber-item[data-index="${index}"]`);
         if (item) {
@@ -3420,17 +3799,9 @@ class InsightsManager {
                 }
             });
         
-            // Ensure at least 1 subscriber remains (existing + new additions)
+            // Allow removing all subscribers - user can remove all if needed
+            // Removed the check that prevented removing all subscribers
             const totalSubscribers = currentPhones.length + additions.length;
-            if (totalSubscribers === 0) {
-                alert('At least one subscriber must remain. You cannot remove all subscribers.');
-                this.isSubmittingEditForm = false;
-                if (submitButton) {
-                    submitButton.disabled = false;
-                    submitButton.textContent = originalButtonText;
-                }
-                return;
-            }
             
             // No need to ask for confirmation again - user already confirmed when clicking remove button
             
@@ -3443,6 +3814,7 @@ class InsightsManager {
                 },
                     body: JSON.stringify({
                         adminId: this.editingAdminId,
+                        sessionId: this.editingSessionId, // Pass session ID to use existing page
                         updates: updates,
                         removals: removals,
                         additions: additions

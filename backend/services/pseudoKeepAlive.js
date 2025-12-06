@@ -190,13 +190,22 @@ async function pseudoKeepAlive(userId, currentCookies) {
             const statusCode = res.statusCode;
             const headers = res.headers;
             
-            // Don't wait for body - just capture headers
-            res.on('data', () => {}); // Drain data
+            // Read response body to check if it contains "account"
+            let bodyChunks = [];
+            res.on('data', (chunk) => {
+                bodyChunks.push(chunk);
+                // Only read first 10KB to check for "account" keyword
+                if (bodyChunks.length > 0 && Buffer.concat(bodyChunks).length > 10240) {
+                    res.destroy(); // Stop reading if we have enough
+                }
+            });
             res.on('end', () => {
                 const duration = Date.now() - startTime;
+                const body = Buffer.concat(bodyChunks).toString('utf-8');
+                const containsAccount = body.toLowerCase().includes('account');
                 
                 // Check response status
-                if (statusCode === 200) {
+                if (statusCode === 200 && containsAccount) {
                     // 200 OK means cookies are valid - check for new cookies
                     const hasNewCookies = headers['set-cookie'] || headers['Set-Cookie'];
                     
@@ -236,6 +245,15 @@ async function pseudoKeepAlive(userId, currentCookies) {
                             error: null
                         });
                     }
+                } else if (statusCode === 200 && !containsAccount) {
+                    // 200 OK but page doesn't contain "account" - might be redirected or wrong page
+                    console.log(`⚠️ [Keep-Alive] ${userId}: 200 OK but page doesn't contain 'account', cookies may be invalid (${duration}ms)`);
+                    resolve({
+                        success: false,
+                        cookies: null,
+                        statusCode: 200,
+                        error: 'Page does not contain account keyword'
+                    });
                 } else if (statusCode === 401 || statusCode === 403) {
                     // Unauthorized - cookies expired
                     console.log(`⚠️ [Keep-Alive] ${userId}: Unauthorized (${statusCode}), cookies expired (${duration}ms)`);
@@ -308,7 +326,7 @@ async function refreshCookiesKeepAlive(userId) {
         const currentCookies = await getCookies(userId);
         
         if (!currentCookies || currentCookies.length === 0) {
-            console.log(`⚠️ [Keep-Alive] ${userId}: No cookies found, full login required`);
+            console.log(`❌ [Keep-Alive] ${userId}: FAILED - No cookies found, full login required`);
             return { success: false, needsRefresh: true };
         }
 
@@ -323,20 +341,21 @@ async function refreshCookiesKeepAlive(userId) {
             // Also save to session manager
             await saveSession(userId, result.cookies, {});
             
-            console.log(`✅ [Keep-Alive] ${userId}: Cookies refreshed successfully (refreshSchedule updated)`);
+            console.log(`✅ [Keep-Alive] ${userId}: SUCCESS - Cookies refreshed and saved to Redis`);
             return { success: true, needsRefresh: false };
         } else if (result.needsRefresh) {
             // 302 redirect or 401 - cookies expired
             // The caller (worker or manual refresh) will perform full login immediately
-            console.log(`⚠️ [Keep-Alive] ${userId}: Cookies expired (${result.statusCode}), triggering full login immediately`);
+            console.log(`❌ [Keep-Alive] ${userId}: FAILED - Cookies expired (HTTP ${result.statusCode}), needs full login`);
             return { success: false, needsRefresh: true };
         } else {
             // Keep-alive failed (timeout, network error, etc.) - may need full login
-            console.log(`⚠️ [Keep-Alive] ${userId}: Failed (${result.error}), may need full login`);
+            const errorMsg = result.error || 'Unknown error';
+            console.log(`❌ [Keep-Alive] ${userId}: FAILED - ${errorMsg}, may need full login`);
             return { success: false, needsRefresh: true };
         }
     } catch (error) {
-        console.error(`❌ [Keep-Alive] ${userId}: Error during keep-alive:`, error.message);
+        console.error(`❌ [Keep-Alive] ${userId}: FAILED - Exception: ${error.message}`);
         return { success: false, needsRefresh: true };
     }
 }

@@ -119,9 +119,20 @@ async function updateDashboardData(adminId, dashboardData) {
     // Clean data
     const cleanDashboardData = removeUndefined(dashboardData || {});
     
+    // CRITICAL: NEVER save expiration = 0 to Firebase - if it's 0 or invalid, remove it
+    if (cleanDashboardData.expiration === 0 || isNaN(cleanDashboardData.expiration) || (typeof cleanDashboardData.expiration === 'number' && cleanDashboardData.expiration <= 0)) {
+        delete cleanDashboardData.expiration;
+        console.log(`⚠️ [${adminId}] Removed invalid expiration (${dashboardData.expiration}) before saving to Firebase`);
+    }
+    
     // Force restore critical fields
-    if (totalConsumptionBackup) {
+    // CRITICAL: Always restore totalConsumption if it exists (even if it's an empty string, we want to preserve it)
+    // Check for null/undefined specifically, not just truthy (empty string is falsy but valid)
+    if (totalConsumptionBackup !== null && totalConsumptionBackup !== undefined) {
       cleanDashboardData.totalConsumption = totalConsumptionBackup;
+      console.log(`✅ [${adminId}] Restored totalConsumption to Firebase: "${totalConsumptionBackup}"`);
+    } else {
+      console.warn(`⚠️ [${adminId}] WARNING: totalConsumptionBackup is null/undefined! dashboardData.totalConsumption was: ${dashboardData.totalConsumption}`);
     }
     
     if (secondarySubscribersBackup && Array.isArray(secondarySubscribersBackup) && secondarySubscribersBackup.length > 0) {
@@ -172,6 +183,27 @@ async function updateDashboardData(adminId, dashboardData) {
       // Continue with empty currentData
     }
     
+    // Track balance history (last 5 successful refreshes)
+    if (balanceBackup && balanceBackup.trim()) {
+      let balanceHistory = currentData.balanceHistory || [];
+      
+      // Add new balance entry with timestamp
+      const balanceEntry = {
+        balance: String(balanceBackup).trim(),
+        timestamp: Date.now(),
+        date: new Date().toISOString()
+      };
+      
+      // Add to history (most recent first)
+      balanceHistory.unshift(balanceEntry);
+      
+      // Keep only last 5 entries
+      balanceHistory = balanceHistory.slice(0, 5);
+      
+      // Store in currentData for merging
+      currentData.balanceHistory = balanceHistory;
+    }
+    
     // Preserve critical fields that should not be overwritten
     const preservedFields = {
       name: currentData.name,
@@ -217,9 +249,16 @@ async function updateDashboardData(adminId, dashboardData) {
         lastDataFetch: new Date().toISOString()
       }, { merge: false });
       
-      // Log subscriber counts for debugging
+      // Log subscriber counts and totalConsumption for debugging
+      const logParts = [];
       if (cleanDashboardData.subscribersCount !== undefined || cleanDashboardData.subscribersActiveCount !== undefined) {
-        console.log(`✅ Dashboard data saved to database - subscribersCount: ${cleanDashboardData.subscribersCount}, activeCount: ${cleanDashboardData.subscribersActiveCount}, requestedCount: ${cleanDashboardData.subscribersRequestedCount}`);
+        logParts.push(`subscribersCount: ${cleanDashboardData.subscribersCount}, activeCount: ${cleanDashboardData.subscribersActiveCount}, requestedCount: ${cleanDashboardData.subscribersRequestedCount}`);
+      }
+      if (cleanDashboardData.totalConsumption !== undefined) {
+        logParts.push(`totalConsumption: "${cleanDashboardData.totalConsumption}"`);
+      }
+      if (logParts.length > 0) {
+        console.log(`✅ Dashboard data saved to database - ${logParts.join(', ')}`);
       } else {
         console.log('✅ Dashboard data saved to database');
       }
@@ -463,12 +502,50 @@ async function addRemovedSubscriber(adminId, subscriberPhone) {
   }
 }
 
+/**
+ * Get balance history for an admin (last 5 successful refreshes)
+ * @param {string} adminId - Admin document ID
+ * @returns {Promise<Array>} Balance history array
+ */
+async function getBalanceHistory(adminId) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    console.log('ℹ️ Firebase is disabled via DISABLE_FIREBASE env var');
+    return [];
+  }
+  
+  // Check if Firebase is initialized
+  if (!db || !app) {
+    console.warn('⚠️ Firebase not initialized, cannot get balance history');
+    return [];
+  }
+  
+  try {
+    const userDocRef = doc(db, COLLECTION_NAME, adminId);
+    const currentDoc = await getDoc(userDocRef);
+    
+    if (!currentDoc.exists()) {
+      return [];
+    }
+    
+    const data = currentDoc.data();
+    const balanceHistory = data.balanceHistory || [];
+    
+    // Return last 5 entries (they're already sorted most recent first)
+    return balanceHistory.slice(0, 5);
+  } catch (error) {
+    console.warn('⚠️ Could not get balance history:', error.message);
+    return [];
+  }
+}
+
 module.exports = {
   updateDashboardData,
   getAdminData,
   addPendingSubscriber,
   getPendingSubscribers,
   removePendingSubscriber,
-  addRemovedSubscriber
+  addRemovedSubscriber,
+  getBalanceHistory
 };
 

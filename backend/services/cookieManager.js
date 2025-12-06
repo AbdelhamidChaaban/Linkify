@@ -318,12 +318,14 @@ async function saveCookies(userId, cookies) {
         // Calculate actual cookie expiration from Alfa
         const actualExpiration = calculateMinCookieExpiration(cookies);
         
-        // Calculate cookie expiry timestamp (UTC)
-        let cookieExpiryTimestamp = null;
+        // Calculate cookie expiry timestamp in UTC (expiryUTC)
+        // All expiry calculations use UTC timestamps
+        let cookieExpiryTimestamp = null; // This is expiryUTC (UTC timestamp in milliseconds)
         let ttl = COOKIE_TTL;
         
         if (actualExpiration && actualExpiration > 0) {
-            // Calculate expiry timestamp: now + expiration seconds
+            // Calculate expiryUTC timestamp: now (UTC) + expiration seconds
+            // Date.now() returns UTC timestamp, so cookieExpiryTimestamp is in UTC
             cookieExpiryTimestamp = Date.now() + (actualExpiration * 1000);
             
             // Use actual expiration for Redis TTL (no minimum enforcement)
@@ -495,16 +497,38 @@ async function saveLastVerified(userId) {
 async function loginAndSaveCookies(phone, password, userId) {
     console.log(`🔐 Logging in to get fresh cookies for ${userId}...`);
     
+    const { loginViaHttp, loginToAlfa } = require('./alfaLogin');
     let context = null;
     let page = null;
 
     try {
-        // IMPROVEMENT: Use pre-warmed context if available for faster login
+        // OPTIMIZATION: Try fast HTTP login first (2-5s vs 10-20s with Puppeteer)
+        console.log(`⚡ [Fast Login] Attempting HTTP-based login first...`);
+        const httpResult = await loginViaHttp(phone, password, userId);
+        
+        if (httpResult.success && httpResult.cookies && httpResult.cookies.length > 0) {
+            // HTTP login succeeded!
+            console.log(`✅ [Fast Login] HTTP login successful! Saving ${httpResult.cookies.length} cookies...`);
+            
+            // Save all cookies to Redis
+            await saveCookies(userId, httpResult.cookies);
+            await saveLastVerified(userId);
+            
+            console.log(`✅ Login successful via HTTP, saved ${httpResult.cookies.length} cookies`);
+            return httpResult.cookies;
+        } else if (httpResult.fallback) {
+            // HTTP login failed or CAPTCHA detected, fallback to Puppeteer
+            console.log(`🔄 [Fast Login] HTTP login failed, falling back to Puppeteer...`);
+        } else {
+            throw new Error('HTTP login failed without fallback option');
+        }
+        
+        // Fallback to Puppeteer (for CAPTCHA or if HTTP fails)
         const contextData = await browserPool.getOrCreateContext();
         context = contextData.context;
         page = contextData.page;
 
-        // Perform login
+        // Perform login with Puppeteer
         const loginResult = await loginToAlfa(page, phone, password, userId);
         
         if (!loginResult.success) {
@@ -522,7 +546,7 @@ async function loginAndSaveCookies(phone, password, userId) {
         await saveCookies(userId, cookies);
         await saveLastVerified(userId);
 
-        console.log(`✅ Login successful, saved ${cookies.length} cookies`);
+        console.log(`✅ Login successful via Puppeteer, saved ${cookies.length} cookies`);
         return cookies;
     } catch (error) {
         console.error(`❌ Login failed for ${userId}:`, error.message);

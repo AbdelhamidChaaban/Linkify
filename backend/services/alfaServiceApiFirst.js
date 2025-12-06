@@ -94,6 +94,400 @@ async function trySilentCookieRenewal(userId) {
 }
 
 /**
+ * Fetch all four data sources in parallel (3 APIs + Ushare HTML)
+ * @param {string} phone - Admin phone number
+ * @param {Array} cookies - Cookie array
+ * @param {Object} cachedData - Cached data to use as fallback (optional)
+ * @returns {Promise<Object>} Unified data object with all sources
+ */
+async function fetchAllDataSources(phone, cookies, cachedData = null) {
+    const startTime = Date.now();
+    const results = {
+        expiry: null,
+        consumption: null,
+        services: null,
+        ushare: null,
+        _apiSuccess: {},
+        _apiErrors: {},
+        _ushareSuccess: false,
+        _ushareError: null
+    };
+    
+    // Start all 4 sources in parallel
+    const expiryPromise = apiRequest('/en/account/getexpirydate', cookies, { timeout: 5000, maxRetries: 0 })
+        .then(data => ({ success: true, data, error: null }))
+        .catch(error => ({ success: false, data: null, error }));
+    
+    const consumptionPromise = apiRequest('/en/account/getconsumption', cookies, { timeout: 15000, maxRetries: 1 })
+        .then(data => ({ success: true, data, error: null }))
+        .catch(error => ({ success: false, data: null, error }));
+    
+    // CRITICAL: Enforce strict 9-second timeout for getmyservices
+    // Use Promise.race to ensure it never takes more than 9 seconds
+    const servicesTimeoutPromise = new Promise((resolve) => {
+        setTimeout(() => {
+            resolve({ success: false, data: null, error: { type: 'Timeout', message: 'Request timeout after 9000ms - using cached data' }, _timedOut: true });
+        }, 9000);
+    });
+    
+    const servicesApiPromise = apiRequest('/en/account/manage-services/getmyservices', cookies, { timeout: 10000, maxRetries: 0 })
+        .then(data => ({ success: true, data, error: null, _timedOut: false }))
+        .catch(error => ({ success: false, data: null, error, _timedOut: false }));
+    
+    // Race between API call and 9-second timeout - timeout always wins if API takes >9s
+    const servicesPromise = Promise.race([servicesApiPromise, servicesTimeoutPromise]);
+    
+    // OPTIMIZATION: Use cache for Ushare HTML (avoids waiting ~20s)
+    // Cache is checked inside fetchUshareHtml, so we can start it in parallel
+    // NOTE: Set useCache = false for manual refreshes to ensure fresh data (subscribers can change quickly)
+    const usharePromise = fetchUshareHtml(phone, cookies, false) // useCache = false to get fresh data
+        .then(result => ({ success: result.success, data: result.data, error: result.error ? new Error(result.error) : null }))
+        .catch(error => ({ success: false, data: null, error }));
+    
+    // Wait for all 3 APIs to complete first (they're fast, ~1-5 seconds)
+    const [expiryResult, consumptionResult, servicesResult] = await Promise.allSettled([
+        expiryPromise,
+        consumptionPromise,
+        servicesPromise
+    ]);
+    
+    // Process API results to extract error types
+    const expiryError = expiryResult.status === 'fulfilled' ? expiryResult.value.error : expiryResult.reason;
+    const consumptionError = consumptionResult.status === 'fulfilled' ? consumptionResult.value.error : consumptionResult.reason;
+    const servicesError = servicesResult.status === 'fulfilled' ? servicesResult.value.error : servicesResult.reason;
+    
+    // CRITICAL: Check if all 3 APIs failed with 401 Unauthorized
+    // If so, skip Ushare HTML (don't wait for it) and return immediately to proceed to login
+    // Note: All promises are wrapped in .catch() so they always fulfill, never reject
+    const expiryFailed = expiryResult.status === 'fulfilled' && !expiryResult.value.success;
+    const consumptionFailed = consumptionResult.status === 'fulfilled' && !consumptionResult.value.success;
+    const servicesFailed = servicesResult.status === 'fulfilled' && !servicesResult.value.success;
+    
+    const expiryUnauthorized = expiryFailed && (expiryError?.type === 'Unauthorized' || expiryError?.type === 'Redirect');
+    const consumptionUnauthorized = consumptionFailed && (consumptionError?.type === 'Unauthorized' || consumptionError?.type === 'Redirect');
+    const servicesUnauthorized = servicesFailed && (servicesError?.type === 'Unauthorized' || servicesError?.type === 'Redirect');
+    
+    const allApisUnauthorized = expiryUnauthorized && consumptionUnauthorized && servicesUnauthorized;
+    
+    if (allApisUnauthorized) {
+        // All 3 APIs failed with 401 - skip Ushare HTML and return immediately
+        // This saves ~22 seconds (Ushare HTML timeout) and allows immediate login
+        console.log(`⚡ All 3 APIs returned 401 Unauthorized - skipping Ushare HTML fetch to proceed immediately to login`);
+        results._apiSuccess.expiry = false;
+        results._apiSuccess.consumption = false;
+        results._apiSuccess.services = false;
+        results._apiErrors.expiry = expiryError?.type || 'Unauthorized';
+        results._apiErrors.consumption = consumptionError?.type || 'Unauthorized';
+        results._apiErrors.services = servicesError?.type || 'Unauthorized';
+        results._ushareSuccess = false;
+        results._ushareError = 'Skipped - all APIs unauthorized';
+        
+        const totalDuration = Date.now() - startTime;
+        console.log(`📊 All sources fetched: 0/3 APIs (all 401), 0/1 HTML (skipped) in ${totalDuration}ms`);
+        return results;
+    }
+    
+    // Not all APIs failed with 401 - wait for Ushare HTML to complete (or timeout)
+    // Wrap in Promise.allSettled to get proper result structure
+    const [ushareResultSettled] = await Promise.allSettled([usharePromise]);
+    const ushareResult = ushareResultSettled;
+    
+    // Process getexpirydate
+    const expiryStartTime = Date.now();
+    if (expiryResult.status === 'fulfilled' && expiryResult.value.success) {
+        const duration = Date.now() - expiryStartTime;
+        if (duration > 5000) {
+            // Took more than 5 seconds - skip and use cached data
+            console.log(`⏱️ API getexpirydate took ${duration}ms (>5s), skipping and using cached data`);
+            results._apiSuccess.expiry = false;
+            results._apiErrors.expiry = 'Timeout';
+            // Use cached expiry if available
+            if (cachedData && cachedData.data && cachedData.data.expiration !== undefined && cachedData.data.expiration !== null) {
+                const cachedExpiration = cachedData.data.expiration;
+                if (typeof cachedExpiration === 'number' && !isNaN(cachedExpiration) && cachedExpiration > 0) {
+                    // Convert cached expiration (days) to API format (number)
+                    results.expiry = cachedExpiration;
+                    console.log(`✅ Using cached expiration: ${cachedExpiration} days`);
+                }
+            }
+        } else {
+            results.expiry = expiryResult.value.data;
+            results._apiSuccess.expiry = true;
+            results._apiErrors.expiry = null;
+            console.log(`✅ API getexpirydate succeeded (${duration}ms)`);
+        }
+    } else {
+        const error = expiryResult.status === 'fulfilled' ? expiryResult.value.error : expiryResult.reason;
+        results._apiSuccess.expiry = false;
+        results._apiErrors.expiry = error?.type || 'Unknown';
+        const duration = Date.now() - expiryStartTime;
+        
+        if (error?.type === 'Timeout' || duration > 5000) {
+            console.log(`⏱️ API getexpirydate timed out (>5s), using cached data`);
+        } else {
+            console.log(`❌ API getexpirydate failed: ${error?.type || 'Unknown'} (${duration}ms)`);
+        }
+        
+        // Use cached expiry if available (for timeout or other errors)
+        if (cachedData && cachedData.data && cachedData.data.expiration !== undefined && cachedData.data.expiration !== null) {
+            const cachedExpiration = cachedData.data.expiration;
+            if (typeof cachedExpiration === 'number' && !isNaN(cachedExpiration) && cachedExpiration > 0) {
+                results.expiry = cachedExpiration;
+                console.log(`✅ Using cached expiration after API failure: ${cachedExpiration} days`);
+            }
+        }
+    }
+    
+    // Process getconsumption
+    const consumptionStartTime = Date.now();
+    if (consumptionResult.status === 'fulfilled' && consumptionResult.value.success) {
+        results.consumption = consumptionResult.value.data;
+        results._apiSuccess.consumption = true;
+        results._apiErrors.consumption = null;
+        const duration = Date.now() - consumptionStartTime;
+        console.log(`✅ API getconsumption succeeded (${duration}ms)`);
+    } else {
+        const error = consumptionResult.status === 'fulfilled' ? consumptionResult.value.error : consumptionResult.reason;
+        results._apiSuccess.consumption = false;
+        results._apiErrors.consumption = error?.type || 'Unknown';
+        const duration = Date.now() - consumptionStartTime;
+        console.log(`❌ API getconsumption failed: ${error?.type || 'Unknown'} (${duration}ms)`);
+        
+        // Retry once if not Unauthorized
+        if (error?.type !== 'Unauthorized' && error?.type !== 'Redirect') {
+            try {
+                const retryStart = Date.now();
+                const retryData = await apiRequest('/en/account/getconsumption', cookies, { timeout: 15000, maxRetries: 0 });
+                results.consumption = retryData;
+                results._apiSuccess.consumption = true;
+                results._apiErrors.consumption = null;
+                const retryDuration = Date.now() - retryStart;
+                console.log(`✅ API getconsumption retry succeeded (${retryDuration}ms)`);
+            } catch (retryError) {
+                results._apiErrors.consumption = retryError?.type || 'Unknown';
+                console.log(`❌ API getconsumption retry failed: ${retryError?.type || 'Unknown'}`);
+            }
+        }
+    }
+    
+    // Process getmyservices
+    // CRITICAL: Check if Promise.race timeout won (9-second timeout)
+    if (servicesResult.status === 'fulfilled' && servicesResult.value._timedOut) {
+        // Timeout won - API took more than 9 seconds
+        const cacheAge = cachedData && cachedData.timestamp ? Math.round((Date.now() - cachedData.timestamp) / 60000) : 'unknown';
+        const cacheTime = cachedData && cachedData.timestamp ? new Date(cachedData.timestamp).toLocaleTimeString() : 'unknown';
+        console.log(`⏱️ API getmyservices timed out (>9s), using cached data from ${cacheTime} (${cacheAge}min ago)`);
+        results._apiSuccess.services = false;
+        results._apiErrors.services = 'Timeout';
+        // Use cached services if available (raw API response)
+        if (cachedData && cachedData.data && cachedData.data.services) {
+            results.services = cachedData.data.services;
+            console.log(`✅ Using cached services API response`);
+        } else {
+            // If no raw services, we'll use extracted dates from dashboardData later in data extraction
+            console.log(`⚠️ No cached services API response, will use extracted dates from dashboardData`);
+        }
+    } else if (servicesResult.status === 'fulfilled' && servicesResult.value.success) {
+        // API succeeded within 9 seconds - use the data
+        results.services = servicesResult.value.data;
+        results._apiSuccess.services = true;
+        results._apiErrors.services = null;
+        console.log(`✅ API getmyservices succeeded`);
+    } else {
+        // API failed (not timeout, but other error)
+        const error = servicesResult.status === 'fulfilled' ? servicesResult.value.error : servicesResult.reason;
+        results._apiSuccess.services = false;
+        results._apiErrors.services = error?.type || 'Unknown';
+        
+        const cacheAge = cachedData && cachedData.timestamp ? Math.round((Date.now() - cachedData.timestamp) / 60000) : 'unknown';
+        const cacheTime = cachedData && cachedData.timestamp ? new Date(cachedData.timestamp).toLocaleTimeString() : 'unknown';
+        console.log(`❌ API getmyservices failed: ${error?.type || 'Unknown'}, using cached data from ${cacheTime} (${cacheAge}min ago)`);
+        
+        // Use cached services if available (for timeout or other errors)
+        // Check for raw services API response in cache
+        if (cachedData && cachedData.data && cachedData.data.services) {
+            results.services = cachedData.data.services;
+            console.log(`✅ Using cached services API response after API failure`);
+        } else {
+            // If no raw services, we'll use extracted dates from dashboardData later in data extraction
+            console.log(`⚠️ No cached services API response, will use extracted dates from dashboardData`);
+        }
+    }
+    
+    // Process Ushare HTML
+    const ushareStartTime = Date.now();
+    // ushareResult is now from Promise.allSettled, so it has .status and .value/.reason
+    if (ushareResult.status === 'fulfilled' && ushareResult.value && ushareResult.value.success) {
+        results.ushare = ushareResult.value.data;
+        results._ushareSuccess = true;
+        results._ushareError = null;
+        const duration = Date.now() - ushareStartTime;
+        const subscriberCount = results.ushare?.totalCount || 0;
+        const activeCount = results.ushare?.activeCount || 0;
+        const requestedCount = results.ushare?.requestedCount || 0;
+        console.log(`✅ Ushare HTML parsed successfully: ${subscriberCount} subscribers (${activeCount} Active, ${requestedCount} Requested) (${duration}ms)`);
+    } else {
+        const error = ushareResult.status === 'fulfilled' ? (ushareResult.value?.error || ushareResult.value) : ushareResult.reason;
+        results._ushareSuccess = false;
+        results._ushareError = error?.message || error?.toString() || 'Unknown error';
+        const duration = Date.now() - ushareStartTime;
+        console.log(`❌ Ushare HTML fetch failed: ${results._ushareError} (${duration}ms)`);
+        
+        // Retry once if network error
+        // NOTE: Ushare HTML uses Puppeteer (browser automation) which is slow:
+        // - First attempt: 30s timeout (navigation timeout)
+        // - Retry: ~20-25s (actual page load + parsing)
+        // - Total: ~50-55s for Ushare HTML alone (this is the main bottleneck in refresh time)
+        if (error && (error.message?.includes('timeout') || error.message?.includes('network') || error.message?.includes('Navigation'))) {
+            console.log(`🔄 Retrying Ushare HTML fetch (Puppeteer navigation timeout - this is slow but necessary for accurate subscriber data)...`);
+            try {
+                const retryStart = Date.now();
+                const retryResult = await fetchUshareHtml(phone, cookies);
+                const retryDuration = Date.now() - retryStart;
+                if (retryResult.success && retryResult.data) {
+                    results.ushare = retryResult.data;
+                    results._ushareSuccess = true;
+                    results._ushareError = null;
+                    const subscriberCount = results.ushare?.totalCount || 0;
+                    const activeCount = results.ushare?.activeCount || 0;
+                    const requestedCount = results.ushare?.requestedCount || 0;
+                    const totalUshareTime = duration + retryDuration;
+                    console.log(`✅ Ushare HTML retry succeeded: ${subscriberCount} subscribers (${activeCount} Active, ${requestedCount} Requested) (${retryDuration}ms)`);
+                    console.log(`   ⏱️ Total Ushare HTML time: ${totalUshareTime}ms (first attempt: ${duration}ms timeout, retry: ${retryDuration}ms)`);
+                } else {
+                    console.log(`❌ Ushare HTML retry failed: ${retryResult.error || 'Unknown error'} (${retryDuration}ms)`);
+                }
+            } catch (retryError) {
+                const retryDuration = Date.now() - retryStart;
+                console.log(`❌ Ushare HTML retry failed: ${retryError.message || 'Unknown error'} (${retryDuration}ms)`);
+            }
+        }
+    }
+    
+    const totalDuration = Date.now() - startTime;
+    const successCount = [results._apiSuccess.expiry, results._apiSuccess.consumption, results._apiSuccess.services].filter(Boolean).length;
+    console.log(`📊 All sources fetched: ${successCount}/3 APIs, ${results._ushareSuccess ? '1' : '0'}/1 HTML in ${totalDuration}ms`);
+    
+    return results;
+}
+
+/**
+ * Retry failed APIs with longer timeout (20s)
+ * Only retries APIs that failed (not ones that succeeded or returned 401)
+ * @param {Array} cookies - Cookie array
+ * @param {Object} previousApiData - Previous API results with _apiErrors
+ * @returns {Promise<Object>} Updated API data with retried results
+ */
+async function retryFailedApisWithLongTimeout(cookies, previousApiData) {
+    const endpoints = [
+        { key: 'expiry', path: '/en/account/getexpirydate', timeout: 20000 },
+        { key: 'services', path: '/en/account/manage-services/getmyservices', timeout: 20000 },
+        { key: 'consumption', path: '/en/account/getconsumption', timeout: 20000 }
+    ];
+    
+    const retryPromises = [];
+    const apiErrors = previousApiData._apiErrors || {};
+    const apiSuccess = previousApiData._apiSuccess || {};
+    
+    // Only retry APIs that failed (not Unauthorized - those need login, not successful ones)
+    endpoints.forEach(endpoint => {
+        const error = apiErrors[endpoint.key];
+        const hasData = previousApiData[endpoint.key] && Object.keys(previousApiData[endpoint.key] || {}).length > 0;
+        
+        // Retry if failed and not Unauthorized (timeout/network errors)
+        if (!hasData && !apiSuccess[endpoint.key] && error && error !== 'Unauthorized' && error !== 'Redirect') {
+            retryPromises.push(
+                apiRequest(endpoint.path, cookies, { timeout: endpoint.timeout, maxRetries: 0 })
+                    .then(data => ({ key: endpoint.key, data, success: true }))
+                    .catch(error => ({ key: endpoint.key, error, success: false }))
+            );
+        }
+    });
+    
+    if (retryPromises.length === 0) {
+        return previousApiData; // Nothing to retry
+    }
+    
+    console.log(`🔄 Retrying ${retryPromises.length} failed API(s) with 20s timeout...`);
+    const retryResults = await Promise.allSettled(retryPromises);
+    
+    // Update previousApiData with retry results
+    const updatedApiData = { ...previousApiData };
+    updatedApiData._apiSuccess = { ...previousApiData._apiSuccess };
+    updatedApiData._apiErrors = { ...previousApiData._apiErrors };
+    
+    retryResults.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.success) {
+            updatedApiData[result.value.key] = result.value.data;
+            updatedApiData._apiSuccess[result.value.key] = true;
+            updatedApiData._apiErrors[result.value.key] = null;
+            console.log(`✅ API ${result.value.key} retry succeeded`);
+        } else {
+            const error = result.status === 'fulfilled' ? result.value.error : result.reason;
+            updatedApiData._apiErrors[result.value.key] = error?.type || 'Unknown';
+            console.log(`❌ API ${result.value.key} retry failed: ${error?.type || 'Unknown'}`);
+        }
+    });
+    
+    return updatedApiData;
+}
+
+/**
+ * Retry only failed APIs after login (don't re-run successful ones)
+ * @param {Array} cookies - Fresh cookies after login
+ * @param {Object} previousApiData - Previous API results
+ * @returns {Promise<Object>} Updated API data with retried results
+ */
+async function retryOnlyFailedApis(cookies, previousApiData) {
+    const endpoints = [
+        { key: 'expiry', path: '/en/account/getexpirydate', timeout: 6000 },
+        { key: 'services', path: '/en/account/manage-services/getmyservices', timeout: 20000 },
+        { key: 'consumption', path: '/en/account/getconsumption', timeout: 15000 }
+    ];
+    
+    const retryPromises = [];
+    const apiSuccess = previousApiData._apiSuccess || {};
+    
+    // Only retry APIs that failed (don't re-run successful ones)
+    endpoints.forEach(endpoint => {
+        if (!apiSuccess[endpoint.key]) {
+            retryPromises.push(
+                apiRequest(endpoint.path, cookies, { timeout: endpoint.timeout, maxRetries: 0 })
+                    .then(data => ({ key: endpoint.key, data, success: true }))
+                    .catch(error => ({ key: endpoint.key, error, success: false }))
+            );
+        }
+    });
+    
+    if (retryPromises.length === 0) {
+        return previousApiData; // All APIs already succeeded
+    }
+    
+    console.log(`🔄 Retrying ${retryPromises.length} failed API(s) after login...`);
+    const retryResults = await Promise.allSettled(retryPromises);
+    
+    // Update previousApiData with retry results
+    const updatedApiData = { ...previousApiData };
+    updatedApiData._apiSuccess = { ...previousApiData._apiSuccess };
+    updatedApiData._apiErrors = { ...previousApiData._apiErrors };
+    
+    retryResults.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.success) {
+            updatedApiData[result.value.key] = result.value.data;
+            updatedApiData._apiSuccess[result.value.key] = true;
+            updatedApiData._apiErrors[result.value.key] = null;
+            console.log(`✅ API ${result.value.key} succeeded after login`);
+        } else {
+            const error = result.status === 'fulfilled' ? result.value.error : result.reason;
+            updatedApiData._apiErrors[result.value.key] = error?.type || 'Unknown';
+            console.log(`❌ API ${result.value.key} still failed after login: ${error?.type || 'Unknown'}`);
+        }
+    });
+    
+    return updatedApiData;
+}
+
+/**
  * Fetch Alfa dashboard data using API-first approach (NO HTML scraping)
  * Optimized for high concurrency and speed
  * @param {string} phone - Phone number
@@ -266,123 +660,113 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             console.log(`🔄 MANUAL REFRESH STARTED for ${userId} at ${new Date().toISOString()}`);
             console.log(`${'='.repeat(80)}\n`);
             
-            // Step 1: Get cookies from Redis (don't check expiry yet - try APIs first)
+            // Step 1: Get cookies from Redis and check if they need proactive keep-alive
             let cookies = await getCookies(userId);
             const cookieExpiry = await getCookieExpiry(userId);
             const now = Date.now();
             
-            // Step 2: Try APIs immediately with current cookies (if available)
-            let apiCallStart = Date.now();
+            // PROACTIVE KEEP-ALIVE: If cookies are about to expire (within 30 minutes), extend them NOW
+            // This prevents the "cookies expired" scenario and ensures keep-alive does its job
+            // BUT: Skip keep-alive if cookies expire in < 5 minutes (too risky, just let APIs fail and do login)
+            if (cookieExpiry && cookies && cookies.length > 0) {
+                const timeUntilExpiry = cookieExpiry - now;
+                const thirtyMinutes = 30 * 60 * 1000; // 30 minutes in milliseconds
+                const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
+                
+                if (timeUntilExpiry > fiveMinutes && timeUntilExpiry <= thirtyMinutes) {
+                    // Cookies expire in 5-30 minutes - proactively extend them (but with short timeout)
+                    console.log(`🔔 [${userId}] Cookies expire in ${Math.round(timeUntilExpiry / 60000)} minutes - proactively extending via keep-alive...`);
+                    
+                    // Add short timeout to keep-alive (max 5 seconds) - don't let it block refresh
+                    const keepAlivePromise = trySilentCookieRenewal(userId);
+                    const timeoutPromise = new Promise((resolve) => {
+                        setTimeout(() => {
+                            resolve({ success: false, needsRefresh: false, timeout: true });
+                        }, 5000); // 5 second timeout (reduced from 10s)
+                    });
+                    
+                    const keepAliveResult = await Promise.race([keepAlivePromise, timeoutPromise]);
+                    
+                    if (keepAliveResult.timeout) {
+                        console.log(`⚠️ [${userId}] Proactive keep-alive timed out after 5s, continuing with refresh (won't block)`);
+                    } else if (keepAliveResult && keepAliveResult.success) {
+                        // Keep-alive succeeded - get fresh cookies and expiry
+                        cookies = await getCookies(userId);
+                        const newExpiry = await getCookieExpiry(userId);
+                        const newTimeUntilExpiry = newExpiry ? newExpiry - Date.now() : null;
+                        console.log(`✅ [${userId}] Proactive keep-alive succeeded, cookies extended${newTimeUntilExpiry ? ` (new expiry: ${Math.round(newTimeUntilExpiry / 60000)} minutes)` : ''}`);
+                    } else {
+                        // Keep-alive failed - cookies might be expired, but continue anyway
+                        // The API calls will fail and trigger login if needed
+                        console.log(`⚠️ [${userId}] Proactive keep-alive failed, but continuing with existing cookies (APIs will determine if login needed)`);
+                    }
+                } else if (timeUntilExpiry <= fiveMinutes) {
+                    // Cookies expire in < 5 minutes - skip keep-alive, let APIs fail and do login immediately
+                    console.log(`⚠️ [${userId}] Cookies expire in ${Math.round(timeUntilExpiry / 60000)} minutes (< 5 min), skipping keep-alive (will login if APIs fail)`);
+                } else if (timeUntilExpiry > thirtyMinutes) {
+                    // Cookies are still fresh (>30 minutes) - no need for keep-alive
+                    console.log(`✅ [${userId}] Cookies are fresh (expire in ${Math.round(timeUntilExpiry / 60000)} minutes), no keep-alive needed`);
+                }
+            }
+            
+            // Step 2: Fetch all four sources in parallel
+            let refreshStart = Date.now();
+            const hasAccountCookie = cookies && cookies.some(c => c.name === '__ACCOUNT');
             
             if (cookies && cookies.length > 0) {
                 // Check Redis expiry - if still valid, don't mark as expired prematurely
                 const expiryFromRedis = cookieExpiry && cookieExpiry <= now;
                 if (!expiryFromRedis) {
-                    console.log(`📡 [${userId}] Manual refresh: Using cached cookies (expiry: ${cookieExpiry ? new Date(cookieExpiry).toISOString() : 'N/A'}), fetching APIs...`);
+                    if (hasAccountCookie) {
+                        console.log(`📡 [${userId}] Using cached __ACCOUNT cookie, fetching all sources...`);
+                    } else {
+                        console.log(`📡 [${userId}] Using cached cookies, fetching all sources...`);
+                    }
                     
                     try {
-                        // Fetch all APIs in parallel, plus ushare HTML page (fast path - 2-3s)
-                        const [apiResults, ushareHtmlResult] = await Promise.allSettled([
-                            fetchAllApis(cookies, { maxRetries: 1 }), // 1 retry for speed
-                            fetchUshareHtml(phone, cookies).catch(err => ({ success: false, data: null, error: err.message }))
-                        ]);
+                        // Get cached data first to use as fallback for slow APIs
+                        const cachedDataForFallback = await getLastJson(userId, true);
                         
-                        // Extract API data
-                        if (apiResults.status === 'fulfilled') {
-                            apiData = apiResults.value;
+                        // Fetch all four sources in parallel (3 APIs + Ushare HTML)
+                        apiData = await fetchAllDataSources(phone, cookies, cachedDataForFallback);
+                        
+                        // Check if all three APIs returned 401/302 (need login)
+                        const apiErrors = apiData._apiErrors || {};
+                        const allUnauthorized = apiErrors.consumption === 'Unauthorized' && 
+                                               apiErrors.services === 'Unauthorized' && 
+                                               apiErrors.expiry === 'Unauthorized';
+                        
+                        if (allUnauthorized) {
+                            // All APIs returned 401 - cookies expired, will try keep-alive/login
+                            console.log(`⚠️ [${userId}] All APIs returned 401, will try keep-alive...`);
+                            // Fall through to keep-alive/login
                         } else {
-                            throw apiResults.reason;
-                        }
-                        
-                        // Extract ushare HTML data
-                        let ushareData = null;
-                        if (ushareHtmlResult.status === 'fulfilled' && ushareHtmlResult.value.success) {
-                            ushareData = ushareHtmlResult.value.data;
-                            console.log(`✅ [${userId}] Ushare HTML parsed: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
-                        } else {
-                            const error = ushareHtmlResult.status === 'fulfilled' ? ushareHtmlResult.value.error : ushareHtmlResult.reason?.message;
-                            console.log(`⚠️ [${userId}] Ushare HTML fetch failed: ${error || 'Unknown error'}`);
+                            // At least one API succeeded or failed with timeout/network error
+                            // Proceed with available data (some sources may have failed, but we have partial data)
+                            const refreshDuration = Date.now() - refreshStart;
+                            console.log(`✅ [${userId}] Manual refresh succeeded with cached __ACCOUNT (${refreshDuration}ms)`);
                             
-                            // CRITICAL: For manual refresh, retry Ushare HTML fetch (subscribers may have changed on Alfa website)
-                            console.log(`🔄 [${userId}] Retrying Ushare HTML fetch (manual refresh - need accurate subscriber data)...`);
-                            try {
-                                const retryResult = await fetchUshareHtml(phone, cookies);
-                                if (retryResult.success && retryResult.data) {
-                                    ushareData = retryResult.data;
-                                    console.log(`✅ [${userId}] Ushare HTML retry succeeded: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
-                                } else {
-                                    console.log(`⚠️ [${userId}] Ushare HTML retry also failed: ${retryResult.error || 'Unknown error'}`);
-                                }
-                            } catch (retryError) {
-                                console.log(`⚠️ [${userId}] Ushare HTML retry error: ${retryError.message || 'Unknown error'}`);
-                            }
-                        }
-                        
-                        // Store ushare data in apiData for later use
-                        apiData.ushare = ushareData;
-                        
-                        // Check if APIs succeeded
-                        const hasConsumption = apiData.consumption && Object.keys(apiData.consumption).length > 0;
-                        const hasServices = apiData.services && Object.keys(apiData.services).length > 0;
-                        const hasExpiry = apiData.expiry !== null && apiData.expiry !== undefined;
-                        
-                        if (hasConsumption || hasServices || hasExpiry) {
-                            // APIs succeeded - fast path (2-3s)
-                            const apiDuration = Date.now() - apiCallStart;
-                            const successCount = [hasConsumption, hasServices, hasExpiry].filter(Boolean).length;
-                            if (!background) {
-                                console.log(`✅ [${userId}] Manual refresh: APIs succeeded (${successCount}/3 in ${apiDuration}ms) - Manual refresh used cached cookies`);
-                            }
-                            
-                            // Release lock quickly (don't block scheduler)
+                            // Release lock quickly
                             if (refreshLockAcquired) {
                                 await releaseRefreshLock(userId).catch(() => {});
+                                refreshLockAcquired = false;
                             }
                             
-                            // Continue to data extraction (will be handled below)
-                            // Skip to Step 4 (data extraction)
-                        } else {
-                            // All APIs failed - check error type
-                            const hasUnauthorized = apiData._apiErrors && Object.values(apiData._apiErrors).some(err => err === 'Unauthorized');
-                            if (hasUnauthorized) {
-                                console.log(`⚠️ [${userId}] Manual refresh: APIs returned 401, trying keep-alive...`);
-                                // Fall through to keep-alive
-                            } else {
-                                // Timeout/network error - use cached data
-                                console.log(`⚠️ [${userId}] Manual refresh: API timeouts, using cached data`);
-                                const cachedData = await getLastJson(userId, true);
-                                if (cachedData && cachedData.data) {
-                                    // Release lock quickly
-                                    if (refreshLockAcquired) {
-                                        await releaseRefreshLock(userId).catch(() => {});
-                                    }
-                                    // Return cached data
-                                    return {
-                                        success: true,
-                                        incremental: false,
-                                        noChanges: false,
-                                        data: cachedData.data,
-                                        timestamp: Date.now(),
-                                        cached: true,
-                                        duration: Date.now() - startTime
-                                    };
-                                }
-                                // No cache - fall through to keep-alive
-                            }
+                            // Continue to data extraction
                         }
                     } catch (apiError) {
-                        // API call failed - check error type
+                        // fetchAllDataSources failed completely
                         if (apiError.type === 'Unauthorized' || apiError.response?.status === 401) {
-                            console.log(`⚠️ [${userId}] Manual refresh: APIs returned 401, trying keep-alive...`);
+                            console.log(`⚠️ [${userId}] All APIs returned 401, will try keep-alive...`);
                             // Fall through to keep-alive
                         } else {
                             // Other error - use cached data if available
-                            console.log(`⚠️ [${userId}] Manual refresh: API error (${apiError.type}), using cached data`);
+                            console.log(`⚠️ [${userId}] Error fetching sources (${apiError.type || apiError.message}), using cached data`);
                             const cachedData = await getLastJson(userId, true);
                             if (cachedData && cachedData.data) {
-                                // Release lock quickly
                                 if (refreshLockAcquired) {
                                     await releaseRefreshLock(userId).catch(() => {});
+                                    refreshLockAcquired = false;
                                 }
                                 return {
                                     success: true,
@@ -398,98 +782,144 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                         }
                     }
                 } else {
-                    // Redis expiry says expired - but try APIs first anyway (might still work)
-                    console.log(`⚠️ [${userId}] Manual refresh: Redis expiry indicates expired, but trying APIs first...`);
+                    // Redis expiry says expired - but try all sources first anyway (might still work)
+                    console.log(`⚠️ [${userId}] Redis expiry indicates expired, but trying all sources first...`);
                     try {
-                        apiData = await fetchAllApis(cookies, { maxRetries: 1 });
-                        const hasConsumption = apiData.consumption && Object.keys(apiData.consumption).length > 0;
-                        const hasServices = apiData.services && Object.keys(apiData.services).length > 0;
-                        if (hasConsumption || hasServices) {
-                            // APIs worked despite expiry - fast path
-                            const apiDuration = Date.now() - apiCallStart;
-                            console.log(`✅ [${userId}] Manual refresh: APIs succeeded despite expiry (${apiDuration}ms) - Manual refresh used cached cookies`);
+                        // Get cached data first to use as fallback for slow APIs
+                        const cachedDataForFallback = await getLastJson(userId, true);
+                        apiData = await fetchAllDataSources(phone, cookies, cachedDataForFallback);
+                        
+                        // Check if all three APIs returned 401
+                        const apiErrors = apiData._apiErrors || {};
+                        const allUnauthorized = apiErrors.consumption === 'Unauthorized' && 
+                                               apiErrors.services === 'Unauthorized' && 
+                                               apiErrors.expiry === 'Unauthorized';
+                        
+                        if (allUnauthorized) {
+                            console.log(`⚠️ [${userId}] All APIs returned 401, will try keep-alive...`);
+                        } else {
+                            // At least one source succeeded - proceed
+                            const refreshDuration = Date.now() - refreshStart;
+                            console.log(`✅ [${userId}] Manual refresh succeeded with cached __ACCOUNT (${refreshDuration}ms)`);
                             if (refreshLockAcquired) {
                                 await releaseRefreshLock(userId).catch(() => {});
+                                refreshLockAcquired = false;
                             }
                             // Continue to data extraction
-                        } else {
-                            // APIs failed - try keep-alive
-                            console.log(`⚠️ [${userId}] Manual refresh: APIs failed, trying keep-alive...`);
                         }
                     } catch (apiError) {
-                        // APIs failed - try keep-alive
-                        console.log(`⚠️ [${userId}] Manual refresh: APIs failed (${apiError.type}), trying keep-alive...`);
+                        console.log(`⚠️ [${userId}] Sources failed (${apiError.type || apiError.message}), will try keep-alive...`);
                     }
                 }
             } else {
                 // No cookies - must login
-                console.log(`⚠️ [${userId}] Manual refresh: No cookies found, performing login...`);
+                console.log(`⚠️ [${userId}] No cookies found, will perform login...`);
             }
             
-            // Step 3: If APIs failed with 401/302, try keep-alive (only for manual refresh)
-            if (!apiData || (!apiData.consumption && !apiData.services)) {
-                if (cookies && cookies.length > 0) {
-                    console.log(`🔄 [${userId}] Manual refresh: Trying keep-alive...`);
+            // Step 3: If all APIs returned 401/302, try keep-alive then login
+            const hasConsumption = apiData && apiData.consumption && Object.keys(apiData.consumption || {}).length > 0;
+            const hasServices = apiData && apiData.services && Object.keys(apiData.services || {}).length > 0;
+            const hasExpiry = apiData && apiData.expiry !== null && apiData.expiry !== undefined;
+            const hasAnyData = hasConsumption || hasServices || hasExpiry;
+            
+            if (!hasAnyData && cookies && cookies.length > 0) {
+                const apiErrors = apiData?._apiErrors || {};
+                const allUnauthorized = apiErrors.consumption === 'Unauthorized' && 
+                                       apiErrors.services === 'Unauthorized' && 
+                                       apiErrors.expiry === 'Unauthorized';
+                
+                if (allUnauthorized) {
+                    // All APIs returned 401 - try keep-alive first
+                    console.log(`🔄 [${userId}] Trying keep-alive...`);
                     const keepAliveResult = await trySilentCookieRenewal(userId);
                     
                     if (keepAliveResult && keepAliveResult.success) {
-                        // Keep-alive succeeded - retry APIs
-                        console.log(`✅ [${userId}] Manual refresh: Keep-alive succeeded, retrying APIs...`);
+                        // Keep-alive succeeded - retry all sources
+                        console.log(`✅ [${userId}] Keep-alive succeeded, retrying all sources...`);
                         cookies = await getCookies(userId);
-                        apiCallStart = Date.now();
+                        refreshStart = Date.now();
                         try {
-                            apiData = await fetchAllApis(cookies, { maxRetries: 1 });
-                            const apiDuration = Date.now() - apiCallStart;
-                            console.log(`✅ [${userId}] Manual refresh: APIs succeeded after keep-alive (${apiDuration}ms) - Manual refresh required keep-alive`);
+                            // Get cached data first to use as fallback for slow APIs
+                            const cachedDataForFallback = await getLastJson(userId, true);
+                            apiData = await fetchAllDataSources(phone, cookies, cachedDataForFallback);
                             
-                            // Release lock quickly
-                            if (refreshLockAcquired) {
-                                await releaseRefreshLock(userId).catch(() => {});
-                                refreshLockAcquired = false; // Mark as released
+                            // Check if still all 401
+                            const apiErrors = apiData._apiErrors || {};
+                            const stillAllUnauthorized = apiErrors.consumption === 'Unauthorized' && 
+                                                       apiErrors.services === 'Unauthorized' && 
+                                                       apiErrors.expiry === 'Unauthorized';
+                            
+                            if (!stillAllUnauthorized) {
+                                const refreshDuration = Date.now() - refreshStart;
+                                console.log(`✅ [${userId}] Manual refresh succeeded with cached __ACCOUNT (${refreshDuration}ms)`);
+                                
+                                if (refreshLockAcquired) {
+                                    await releaseRefreshLock(userId).catch(() => {});
+                                    refreshLockAcquired = false;
+                                }
+                            } else {
+                                // Still all 401 - fall through to login
+                                console.log(`⚠️ [${userId}] All APIs still returned 401 after keep-alive, will perform login...`);
                             }
-                            
-                            // Ensure apiData is initialized
-                            if (!apiData) {
-                                apiData = {};
-                            }
-                            
-                            // Continue to data extraction
                         } catch (retryError) {
-                            console.log(`⚠️ [${userId}] Manual refresh: APIs still failed after keep-alive, performing login...`);
-                            // Fall through to login
+                            console.log(`⚠️ [${userId}] Sources still failed after keep-alive, will perform login...`);
                         }
                     } else {
-                        // Keep-alive failed - perform full login
-                        console.log(`⚠️ [${userId}] Manual refresh: Keep-alive failed, performing login...`);
+                        // Keep-alive failed - fall through to login
+                        console.log(`⚠️ [${userId}] Keep-alive failed, will perform login...`);
                     }
                 }
             }
             
-            // Step 4: If still no data, perform full login (only when absolutely necessary)
-            if (!apiData || (!apiData.consumption && !apiData.services)) {
-                console.log(`🔐 [${userId}] Manual refresh: Performing full login (required login)`);
+            // Step 4: If still no data AND all APIs returned 401/302, perform full login
+            const stillHasConsumption = apiData && apiData.consumption && Object.keys(apiData.consumption || {}).length > 0;
+            const stillHasServices = apiData && apiData.services && Object.keys(apiData.services || {}).length > 0;
+            const stillHasExpiry = apiData && apiData.expiry !== null && apiData.expiry !== undefined;
+            const stillHasAnyData = stillHasConsumption || stillHasServices || stillHasExpiry;
+            
+            if (!stillHasAnyData) {
+                const apiErrors = apiData?._apiErrors || {};
+                const stillAllUnauthorized = apiErrors.consumption === 'Unauthorized' && 
+                                           apiErrors.services === 'Unauthorized' && 
+                                           apiErrors.expiry === 'Unauthorized';
                 
-                // Get admin credentials from Firebase
-                const adminData = await getAdminData(userId);
-                if (!adminData || !adminData.phone || !adminData.password) {
-                    throw new Error('Admin not found or missing credentials for auto-login');
-                }
-                
-                // Perform full login
-                await loginAndSaveCookies(adminData.phone, adminData.password, userId);
-                cookies = await getCookies(userId);
-                loginPerformed = true;
-                
-                // Fetch APIs with fresh cookies
-                apiCallStart = Date.now();
-                apiData = await fetchAllApis(cookies, { maxRetries: 1 });
-                const apiDuration = Date.now() - apiCallStart;
-                console.log(`✅ [${userId}] Manual refresh: APIs succeeded after login (${apiDuration}ms) - Manual refresh required login`);
-                
-                // Release lock quickly (don't block scheduler)
-                if (refreshLockAcquired) {
-                    await releaseRefreshLock(userId).catch(() => {});
-                    refreshLockAcquired = false; // Mark as released to prevent double release
+                if (stillAllUnauthorized) {
+                    console.log(`🔐 [${userId}] Manual refresh required login`);
+                    
+                    // Get admin credentials from Firebase
+                    const adminData = await getAdminData(userId);
+                    if (!adminData || !adminData.phone || !adminData.password) {
+                        throw new Error('Admin not found or missing credentials for auto-login');
+                    }
+                    
+                    // Perform full login
+                    await loginAndSaveCookies(adminData.phone, adminData.password, userId);
+                    cookies = await getCookies(userId);
+                    loginPerformed = true;
+                    
+                    // Retry all sources after login
+                    refreshStart = Date.now();
+                    // Get cached data first to use as fallback for slow APIs
+                    const cachedDataForFallback = await getLastJson(userId, true);
+                    apiData = await fetchAllDataSources(phone, cookies, cachedDataForFallback);
+                    const refreshDuration = Date.now() - refreshStart;
+                    
+                    const finalHasConsumption = apiData.consumption && Object.keys(apiData.consumption || {}).length > 0;
+                    const finalHasServices = apiData.services && Object.keys(apiData.services || {}).length > 0;
+                    const finalHasExpiry = apiData.expiry !== null && apiData.expiry !== undefined;
+                    const finalHasUshare = apiData.ushare && apiData.ushare.totalCount !== undefined;
+                    
+                    if (finalHasConsumption || finalHasServices || finalHasExpiry || finalHasUshare) {
+                        console.log(`✅ [${userId}] Login completed, sources succeeded (${refreshDuration}ms)`);
+                    } else {
+                        console.log(`⚠️ [${userId}] Login completed but sources still failed (${refreshDuration}ms)`);
+                    }
+                    
+                    // Release lock quickly
+                    if (refreshLockAcquired) {
+                        await releaseRefreshLock(userId).catch(() => {});
+                        refreshLockAcquired = false;
+                    }
                 }
             }
             
@@ -537,64 +967,18 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 }
             }
             
-            // Step 4: Fetch all APIs in parallel IMMEDIATELY (with fresh cookies if login was performed)
-            let apiCallStart = Date.now();
+            // Step 4: Fetch all four sources in parallel IMMEDIATELY (with fresh cookies if login was performed)
+            let refreshStart = Date.now();
             
             if (cookies && cookies.length > 0) {
-                console.log(`📡 [${userId}] Found ${cookies.length} cookies, fetching APIs in parallel...`);
+                console.log(`📡 [${userId}] Found ${cookies.length} cookies, fetching all sources in parallel...`);
                 
                 try {
-                    // Fetch all APIs in parallel, plus ushare HTML page
-                    const [apiResults, ushareHtmlResult] = await Promise.allSettled([
-                        fetchAllApis(cookies, {}),
-                        fetchUshareHtml(phone, cookies).catch(err => ({ success: false, data: null, error: err.message }))
-                    ]);
+                    // Get cached data first to use as fallback for slow APIs
+                    const cachedDataForFallback = await getLastJson(userId);
                     
-                    // Extract API data
-                    if (apiResults.status === 'fulfilled') {
-                        apiData = apiResults.value;
-                    } else {
-                        throw apiResults.reason;
-                    }
-                    
-                    // Extract ushare HTML data
-                    let ushareData = null;
-                    if (ushareHtmlResult.status === 'fulfilled' && ushareHtmlResult.value.success) {
-                        ushareData = ushareHtmlResult.value.data;
-                        if (!background) {
-                            console.log(`✅ [${userId}] Ushare HTML parsed: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
-                        }
-                    } else {
-                        const error = ushareHtmlResult.status === 'fulfilled' ? ushareHtmlResult.value.error : ushareHtmlResult.reason?.message;
-                        if (!background) {
-                            console.log(`⚠️ [${userId}] Ushare HTML fetch failed: ${error || 'Unknown error'}`);
-                        }
-                        
-                        // CRITICAL: Retry Ushare HTML fetch (subscribers may have changed on Alfa website)
-                        if (!background) {
-                            console.log(`🔄 [${userId}] Retrying Ushare HTML fetch (need accurate subscriber data)...`);
-                        }
-                        try {
-                            const retryResult = await fetchUshareHtml(phone, cookies);
-                            if (retryResult.success && retryResult.data) {
-                                ushareData = retryResult.data;
-                                if (!background) {
-                                    console.log(`✅ [${userId}] Ushare HTML retry succeeded: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
-                                }
-                            } else {
-                                if (!background) {
-                                    console.log(`⚠️ [${userId}] Ushare HTML retry also failed: ${retryResult.error || 'Unknown error'}`);
-                                }
-                            }
-                        } catch (retryError) {
-                            if (!background) {
-                                console.log(`⚠️ [${userId}] Ushare HTML retry error: ${retryError.message || 'Unknown error'}`);
-                            }
-                        }
-                    }
-                    
-                    // Store ushare data in apiData for later use
-                    apiData.ushare = ushareData;
+                    // Fetch all four sources in parallel (3 APIs + Ushare HTML)
+                    apiData = await fetchAllDataSources(phone, cookies, cachedDataForFallback);
                     
                     // CRITICAL: Check if getconsumption returned 401 (even if other APIs succeeded)
                     const consumptionFailed = !apiData.consumption || Object.keys(apiData.consumption || {}).length === 0;
@@ -702,11 +1086,13 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                     cookies = await getCookies(userId);
                     loginPerformed = true;
                     
-                    // Retry API calls with fresh cookies
-                    apiCallStart = Date.now();
-                    apiData = await fetchAllApis(cookies, { maxRetries: 1 });
-                    const apiDuration = Date.now() - apiCallStart;
-                    console.log(`✅ [${userId}] API calls successful after auto-login (${apiDuration}ms)`);
+                    // Retry all sources with fresh cookies
+                    refreshStart = Date.now();
+                    // Get cached data first to use as fallback for slow APIs
+                    const cachedDataForFallback = await getLastJson(userId);
+                    apiData = await fetchAllDataSources(phone, cookies, cachedDataForFallback);
+                    const refreshDuration = Date.now() - refreshStart;
+                    console.log(`✅ [${userId}] Sources successful after auto-login (${refreshDuration}ms)`);
                 } else if (apiError.type === 'Timeout' || apiError.message.includes('timeout') || apiError.message.includes('No API data received')) {
                     // Timeout error or all APIs failed - network is slow, but cookies might still be valid
                     // Try to use cached data instead of failing
@@ -777,30 +1163,20 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 const loginDuration = Date.now() - loginStart;
                 console.log(`✅ [${userId}] Login completed in ${loginDuration}ms`);
                 
-                // Now fetch APIs in parallel with fresh cookies, plus ushare HTML
-                apiCallStart = Date.now();
-                const apiOptions = background ? {} : { maxRetries: 1 }; // Manual refresh: fewer retries
+                // Now fetch all sources in parallel with fresh cookies
+                refreshStart = Date.now();
+                // Get cached data first to use as fallback for slow APIs
+                const cachedDataForFallback = await getLastJson(userId);
+                const apiCallStart = Date.now(); // Track API call start time for duration calculation
+                apiData = await fetchAllDataSources(phone, cookies, cachedDataForFallback);
                 
-                const [apiResults, ushareHtmlResult] = await Promise.allSettled([
-                    fetchAllApis(cookies, apiOptions),
-                    fetchUshareHtml(phone, cookies).catch(err => ({ success: false, data: null, error: err.message }))
-                ]);
+                // Extract ushare HTML data from apiData (fetchAllDataSources already includes it)
+                let ushareData = apiData.ushare || null;
                 
-                // Extract API data
-                if (apiResults.status === 'fulfilled') {
-                    apiData = apiResults.value;
-                } else {
-                    throw apiResults.reason;
-                }
-                
-                // Extract ushare HTML data
-                let ushareData = null;
-                if (ushareHtmlResult.status === 'fulfilled' && ushareHtmlResult.value.success) {
-                    ushareData = ushareHtmlResult.value.data;
-                    console.log(`✅ [${userId}] Ushare HTML parsed: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
-                } else {
-                    const error = ushareHtmlResult.status === 'fulfilled' ? ushareHtmlResult.value.error : ushareHtmlResult.reason?.message;
-                    console.log(`⚠️ [${userId}] Ushare HTML fetch failed: ${error || 'Unknown error'}`);
+                // If ushare data is missing or failed, retry
+                if (!ushareData || !apiData._ushareSuccess) {
+                    const error = apiData._ushareError || 'Unknown error';
+                    console.log(`⚠️ [${userId}] Ushare HTML fetch failed: ${error}`);
                     
                     // CRITICAL: Retry Ushare HTML fetch (subscribers may have changed on Alfa website)
                     console.log(`🔄 [${userId}] Retrying Ushare HTML fetch (need accurate subscriber data)...`);
@@ -808,6 +1184,7 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                         const retryResult = await fetchUshareHtml(phone, cookies);
                         if (retryResult.success && retryResult.data) {
                             ushareData = retryResult.data;
+                            apiData.ushare = ushareData; // Update apiData with retry result
                             console.log(`✅ [${userId}] Ushare HTML retry succeeded: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
                         } else {
                             console.log(`⚠️ [${userId}] Ushare HTML retry also failed: ${retryResult.error || 'Unknown error'}`);
@@ -815,10 +1192,9 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                     } catch (retryError) {
                         console.log(`⚠️ [${userId}] Ushare HTML retry error: ${retryError.message || 'Unknown error'}`);
                     }
+                } else {
+                    console.log(`✅ [${userId}] Ushare HTML parsed: ${ushareData.totalCount} subscribers (${ushareData.activeCount} Active, ${ushareData.requestedCount} Requested)`);
                 }
-                
-                // Store ushare data in apiData for later use
-                apiData.ushare = ushareData;
                 
                 const apiDuration = Date.now() - apiCallStart;
                 const successCount = [apiData.consumption, apiData.services, apiData.expiry].filter(Boolean).length;
@@ -835,7 +1211,58 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         // Step 4: Extract data from API responses (parallel processing)
         // CRITICAL: Start with cached data to preserve ALL fields (prevents admins becoming inactive)
         const cachedData = await getLastJson(userId, true); // allowStale for fallback
-        const dashboardData = cachedData && cachedData.data ? { ...cachedData.data } : {};
+        
+        // CRITICAL: Always try to get last known data from Firebase for expiration fallback
+        // This ensures we have expiration even if Redis cache is empty or expired
+        let firebaseData = null;
+        try {
+            firebaseData = await getAdminData(userId);
+            // CRITICAL: Only use Firebase expiration if it's valid (> 0, not 0)
+            if (firebaseData && firebaseData.expiration) {
+                if (firebaseData.expiration > 0 && !isNaN(firebaseData.expiration)) {
+                    console.log(`📦 [${userId}] Retrieved expiration from Firebase: ${firebaseData.expiration} days`);
+                } else {
+                    // Firebase has invalid expiration (0 or NaN) - ignore it
+                    console.log(`⚠️ [${userId}] Firebase has invalid expiration (${firebaseData.expiration}), ignoring it`);
+                    firebaseData.expiration = null; // Clear invalid expiration
+                }
+            }
+        } catch (error) {
+            console.warn(`⚠️ [${userId}] Failed to get Firebase data for expiration fallback:`, error.message);
+        }
+        
+        // CRITICAL: Initialize dashboardData from cache, but NEVER copy expiration if it's 0 or invalid
+        // This prevents expiration from being set to 0 in the first place
+        // Also ensure dates are preserved if they're valid
+        const dashboardData = {};
+        if (cachedData && cachedData.data) {
+            // Copy all fields EXCEPT expiration if it's invalid
+            for (const key in cachedData.data) {
+                if (key === 'expiration') {
+                    // Only copy expiration if it's valid (> 0, not NaN)
+                    const expiration = cachedData.data.expiration;
+                    if (typeof expiration === 'number' && !isNaN(expiration) && expiration > 0) {
+                        dashboardData.expiration = expiration;
+                    } else {
+                        console.log(`⚠️ [${userId}] Skipping invalid expiration (${expiration}) from cached data initialization`);
+                    }
+                } else {
+                    // Copy all other fields, including subscriptionDate and validityDate
+                    dashboardData[key] = cachedData.data[key];
+                }
+            }
+            
+            // Log what dates we have from cache
+            if (dashboardData.subscriptionDate || dashboardData.validityDate) {
+                console.log(`📦 [${userId}] Initialized dates from cache: subscriptionDate=${dashboardData.subscriptionDate || 'none'}, validityDate=${dashboardData.validityDate || 'none'}`);
+            }
+        }
+        
+        // CRITICAL: If no cached expiration but Firebase has one, use it
+        if ((!dashboardData.expiration || dashboardData.expiration === undefined || dashboardData.expiration === null) && firebaseData && firebaseData.expiration && firebaseData.expiration > 0) {
+            dashboardData.expiration = firebaseData.expiration;
+            console.log(`✅ [${userId}] Initialized expiration from Firebase: ${firebaseData.expiration} days`);
+        }
         
         // CRITICAL: Filter out invalid dates (NaN) immediately when initializing from cache
         // This prevents displaying NaN/NaN/NaN when API fails
@@ -848,15 +1275,35 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             delete dashboardData.validityDate;
         }
         
-        console.log(`📦 [${userId}] Starting with cached data: ${Object.keys(dashboardData).length} fields`);
+        const cachedFieldsCount = Object.keys(dashboardData).length;
+        console.log(`📦 [${userId}] Starting with cached data: ${cachedFieldsCount} fields`);
+        if (cachedFieldsCount === 0) {
+            console.log(`⚠️ [${userId}] WARNING: Cached data is empty (0 fields) - will rely on Firebase for expiration fallback`);
+        }
 
         // Extract from getconsumption (override cached data only if API succeeded)
         // CRITICAL: primaryData is required for status determination - must be preserved at all costs
         if (apiData.consumption) {
             const extracted = extractFromGetConsumption(apiData.consumption);
             // Merge extracted data (overrides cached data for these fields)
-            Object.assign(dashboardData, extracted);
+            // CRITICAL: Don't overwrite with null/undefined values - preserve existing if extracted is null
+            if (extracted.primaryData) {
+                dashboardData.primaryData = extracted.primaryData;
+            }
+            if (extracted.balance) {
+                dashboardData.balance = extracted.balance;
+            }
+            if (extracted.totalConsumption) {
+                dashboardData.totalConsumption = extracted.totalConsumption;
+                console.log(`✅ [${userId}] Set totalConsumption from API: ${extracted.totalConsumption}`);
+            } else {
+                console.warn(`⚠️ [${userId}] WARNING: extracted.totalConsumption is missing! extracted object keys:`, Object.keys(extracted));
+            }
+            if (extracted.adminConsumption) {
+                dashboardData.adminConsumption = extracted.adminConsumption;
+            }
             if (extracted.secondarySubscribers && extracted.secondarySubscribers.length > 0) {
+                dashboardData.secondarySubscribers = extracted.secondarySubscribers;
                 console.log(`✅ [${userId}] Extracted ${extracted.secondarySubscribers.length} secondary subscribers from API`);
             }
             // Also set subscribersCount if not already set from ushare HTML
@@ -970,70 +1417,95 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         }
 
         // Extract from getmyservices (CRITICAL: Subscription Date and Validity Date)
-        // Override cached data only if API succeeded with valid dates
-        if (apiData.services) {
+        // CRITICAL: If API failed or returned invalid data, ALWAYS use cached dates
+        let apiServicesFailed = !apiData.services || 
+                                  apiData.services === null || 
+                                  apiData.services === undefined ||
+                                  (typeof apiData.services === 'object' && Object.keys(apiData.services).length === 0);
+        
+        if (!apiServicesFailed) {
+            // API returned something - try to extract dates
+            console.log(`🔍 [${userId}] Extracting dates from getmyservices API response...`);
             const extracted = extractFromGetMyServices(apiData.services);
+            console.log(`🔍 [${userId}] Extraction result: subscriptionDate=${extracted.subscriptionDate || 'null'}, validityDate=${extracted.validityDate || 'null'}`);
+            
+            let hasValidDates = false;
+            
             // Only set dates if they are valid (not null, not undefined, not empty, not NaN)
             if (extracted.subscriptionDate && typeof extracted.subscriptionDate === 'string' && extracted.subscriptionDate.trim() && !extracted.subscriptionDate.includes('NaN')) {
                 dashboardData.subscriptionDate = extracted.subscriptionDate;
                 console.log(`✅ [${userId}] Extracted subscriptionDate from API: ${extracted.subscriptionDate}`);
-            } else if (extracted.subscriptionDate) {
-                console.log(`⚠️ [${userId}] Invalid subscriptionDate from API (${extracted.subscriptionDate}), preserving cached value`);
+                hasValidDates = true;
+            } else {
+                console.log(`⚠️ [${userId}] subscriptionDate extraction failed: ${extracted.subscriptionDate || 'null/empty'}`);
             }
+            
             if (extracted.validityDate && typeof extracted.validityDate === 'string' && extracted.validityDate.trim() && !extracted.validityDate.includes('NaN')) {
                 dashboardData.validityDate = extracted.validityDate;
                 console.log(`✅ [${userId}] Extracted validityDate from API: ${extracted.validityDate}`);
-            } else if (extracted.validityDate) {
-                console.log(`⚠️ [${userId}] Invalid validityDate from API (${extracted.validityDate}), preserving cached value`);
+                hasValidDates = true;
+            } else {
+                console.log(`⚠️ [${userId}] validityDate extraction failed: ${extracted.validityDate || 'null/empty'}`);
             }
-        } else {
-            // API failed - preserve dates from cached data (CRITICAL: prevent NaN/NaN/NaN in frontend)
-            console.log(`📦 [${userId}] getmyservices API failed, preserving cached dates`);
             
-            // CRITICAL: Always check cachedData.data for dates, even if dashboardData is empty
-            // This ensures dates are preserved even when cachedData.data has 0 fields initially
-            // IMPORTANT: Only preserve if dashboardData doesn't have valid dates already
-            if (cachedData && cachedData.data) {
-                // Preserve subscriptionDate from cache (only if valid and dashboardData doesn't have a valid one)
-                if (!dashboardData.subscriptionDate || dashboardData.subscriptionDate.includes('NaN')) {
-                    const cachedSubDate = cachedData.data.subscriptionDate;
-                    // Validate: must be a string in DD/MM/YYYY format, not null/undefined/NaN
-                    if (cachedSubDate && typeof cachedSubDate === 'string' && cachedSubDate.trim() && !cachedSubDate.includes('NaN')) {
-                        dashboardData.subscriptionDate = cachedSubDate;
-                        console.log(`✅ [${userId}] Preserved cached subscriptionDate: ${dashboardData.subscriptionDate}`);
-                    } else {
-                        // No valid cached date - remove invalid one from dashboardData
-                        if (dashboardData.subscriptionDate && dashboardData.subscriptionDate.includes('NaN')) {
-                            delete dashboardData.subscriptionDate;
-                            console.log(`⚠️ [${userId}] Removed invalid subscriptionDate (no valid cached value to restore)`);
-                        }
-                    }
+            // If API returned invalid dates, treat as failed and use cached
+            if (!hasValidDates) {
+                if (extracted.subscriptionDate || extracted.validityDate) {
+                    console.log(`⚠️ [${userId}] getmyservices API returned invalid dates (subscriptionDate: ${extracted.subscriptionDate || 'null'}, validityDate: ${extracted.validityDate || 'null'}), using cached dates`);
+                } else {
+                    console.log(`⚠️ [${userId}] getmyservices API returned no dates (both null), using cached dates`);
                 }
-                
-                // Preserve validityDate from cache (only if valid and dashboardData doesn't have a valid one)
-                if (!dashboardData.validityDate || dashboardData.validityDate.includes('NaN')) {
-                    const cachedValDate = cachedData.data.validityDate;
-                    // Validate: must be a string in DD/MM/YYYY format, not null/undefined/NaN
-                    if (cachedValDate && typeof cachedValDate === 'string' && cachedValDate.trim() && !cachedValDate.includes('NaN')) {
-                        dashboardData.validityDate = cachedValDate;
-                        console.log(`✅ [${userId}] Preserved cached validityDate: ${dashboardData.validityDate}`);
-                    } else {
-                        // No valid cached date - remove invalid one from dashboardData
-                        if (dashboardData.validityDate && dashboardData.validityDate.includes('NaN')) {
-                            delete dashboardData.validityDate;
-                            console.log(`⚠️ [${userId}] Removed invalid validityDate (no valid cached value to restore)`);
-                        }
-                    }
+                apiServicesFailed = true; // Treat as failed to use cached data
+            }
+        }
+        
+        // If API failed or returned invalid data, preserve existing dates (NEVER delete valid dates)
+        if (apiServicesFailed) {
+            console.log(`📦 [${userId}] getmyservices API failed or returned invalid data (timeout >9s or any failure), preserving existing dates`);
+            
+            // CRITICAL: When API fails, ALWAYS preserve existing dates from dashboardData
+            // dashboardData was already initialized from cachedData.data, so dates should already be there
+            // NEVER delete dates unless they're invalid (NaN or empty)
+            
+            // Check subscriptionDate - only remove if invalid, otherwise keep existing
+            if (dashboardData.subscriptionDate) {
+                if (dashboardData.subscriptionDate.includes('NaN') || !dashboardData.subscriptionDate.trim()) {
+                    // Invalid date - remove it
+                    delete dashboardData.subscriptionDate;
+                    console.log(`⚠️ [${userId}] Removed invalid subscriptionDate (NaN or empty)`);
+                } else {
+                    // Valid date - keep it
+                    console.log(`✅ [${userId}] Preserving existing subscriptionDate: ${dashboardData.subscriptionDate}`);
                 }
             } else {
-                // No cached data available - remove invalid dates from dashboardData
-                if (dashboardData.subscriptionDate && dashboardData.subscriptionDate.includes('NaN')) {
-                    delete dashboardData.subscriptionDate;
-                    console.log(`⚠️ [${userId}] Removed invalid subscriptionDate (no cached data available)`);
+                // No subscriptionDate in dashboardData - try to get from cache
+                if (cachedData && cachedData.data && cachedData.data.subscriptionDate) {
+                    const cachedSubDate = cachedData.data.subscriptionDate;
+                    if (typeof cachedSubDate === 'string' && cachedSubDate.trim() && !cachedSubDate.includes('NaN')) {
+                        dashboardData.subscriptionDate = cachedSubDate;
+                        console.log(`✅ [${userId}] Restored subscriptionDate from cache: ${dashboardData.subscriptionDate}`);
+                    }
                 }
-                if (dashboardData.validityDate && dashboardData.validityDate.includes('NaN')) {
+            }
+            
+            // Check validityDate - only remove if invalid, otherwise keep existing
+            if (dashboardData.validityDate) {
+                if (dashboardData.validityDate.includes('NaN') || !dashboardData.validityDate.trim()) {
+                    // Invalid date - remove it
                     delete dashboardData.validityDate;
-                    console.log(`⚠️ [${userId}] Removed invalid validityDate (no cached data available)`);
+                    console.log(`⚠️ [${userId}] Removed invalid validityDate (NaN or empty)`);
+                } else {
+                    // Valid date - keep it
+                    console.log(`✅ [${userId}] Preserving existing validityDate: ${dashboardData.validityDate}`);
+                }
+            } else {
+                // No validityDate in dashboardData - try to get from cache
+                if (cachedData && cachedData.data && cachedData.data.validityDate) {
+                    const cachedValDate = cachedData.data.validityDate;
+                    if (typeof cachedValDate === 'string' && cachedValDate.trim() && !cachedValDate.includes('NaN')) {
+                        dashboardData.validityDate = cachedValDate;
+                        console.log(`✅ [${userId}] Restored validityDate from cache: ${dashboardData.validityDate}`);
+                    }
                 }
             }
         }
@@ -1041,74 +1513,81 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         // Extract expiration (with fallback to cached data)
         // CRITICAL: Never display 0 - always preserve last valid expiration from cache
         // CRITICAL: getexpirydate API can return null (failed), 0 (invalid), or a number (valid)
-        if (apiData.expiry !== null && apiData.expiry !== undefined) {
-            // API returned something (could be 0, number, or object)
+        // CRITICAL: If API failed or returned invalid data, ALWAYS use cached expiration
+        let apiExpiryFailed = !apiData.expiry || 
+                                 apiData.expiry === null || 
+                                 apiData.expiry === undefined ||
+                                 (typeof apiData.expiry === 'number' && (apiData.expiry === 0 || isNaN(apiData.expiry))) ||
+                                 (typeof apiData.expiry === 'object' && Object.keys(apiData.expiry).length === 0);
+        
+        if (!apiExpiryFailed) {
+            // API returned something that might be valid - try to extract
             const extractedExpiration = extractExpiration(apiData.expiry);
             if (extractedExpiration !== null && extractedExpiration !== undefined && !isNaN(extractedExpiration) && extractedExpiration > 0) {
                 // Valid expiration from API
                 dashboardData.expiration = extractedExpiration;
                 console.log(`✅ [${userId}] Extracted expiration from API: ${extractedExpiration} days`);
             } else {
-                // API returned invalid data (0, null, NaN, or empty object)
-                console.log(`⚠️ [${userId}] getexpirydate API returned invalid data (${apiData.expiry}), preserving cached expiration`);
-                // CRITICAL: Always preserve cached expiration when API returns invalid data
-                // Check if we already have a valid expiration from cache (initialized in dashboardData)
-                if (dashboardData.expiration === undefined || dashboardData.expiration === null || dashboardData.expiration === 0 || isNaN(dashboardData.expiration)) {
-                    // Current expiration is invalid, try to restore from cache
-                    if (cachedData && cachedData.data && cachedData.data.expiration) {
-                        const cachedExpiration = cachedData.data.expiration;
-                        // Validate cached expiration is valid (> 0, not NaN)
-                        if (typeof cachedExpiration === 'number' && !isNaN(cachedExpiration) && cachedExpiration > 0) {
-                            dashboardData.expiration = cachedExpiration;
-                            console.log(`✅ [${userId}] Preserved cached expiration: ${cachedExpiration} days`);
-                        } else {
-                            console.log(`⚠️ [${userId}] Cached expiration is also invalid (${cachedExpiration}), keeping it but logging warning`);
-                            // Keep the invalid cached value rather than deleting (better than 0)
-                            dashboardData.expiration = cachedExpiration;
-                        }
-                    } else {
-                        console.log(`⚠️ [${userId}] No cached expiration available, expiration will be missing`);
-                        // Don't delete - let it be undefined rather than 0
-                    }
-                } else {
-                    // dashboardData.expiration is already valid (from cache initialization), keep it
-                    console.log(`✅ [${userId}] Keeping existing valid expiration from cache: ${dashboardData.expiration} days`);
-                }
-            }
-        } else {
-            // API failed completely (401, timeout, network error, etc.) - preserve cached expiration
-            console.log(`📦 [${userId}] getexpirydate API failed (returned null/undefined), preserving cached expiration`);
-            // CRITICAL: Always check cachedData.data for expiration, even if dashboardData is empty
-            // But first check if dashboardData already has a valid expiration (from initialization)
-            if (dashboardData.expiration === undefined || dashboardData.expiration === null || dashboardData.expiration === 0 || isNaN(dashboardData.expiration)) {
-                // Current expiration is invalid or missing, try to restore from cache
-                if (cachedData && cachedData.data && cachedData.data.expiration) {
-                    const cachedExpiration = cachedData.data.expiration;
-                    // Validate cached expiration is valid (> 0, not NaN)
-                    if (typeof cachedExpiration === 'number' && !isNaN(cachedExpiration) && cachedExpiration > 0) {
-                        dashboardData.expiration = cachedExpiration;
-                        console.log(`✅ [${userId}] Preserved cached expiration after API failure: ${cachedExpiration} days`);
-                    } else {
-                        console.log(`⚠️ [${userId}] Cached expiration is invalid (${cachedExpiration}), keeping it but logging warning`);
-                        // Keep the invalid cached value rather than deleting (better than 0)
-                        dashboardData.expiration = cachedExpiration;
-                    }
-                } else {
-                    console.log(`⚠️ [${userId}] No cached expiration available after API failure, expiration will be missing`);
-                    // Don't set to 0 - let it be undefined
-                }
-            } else {
-                // dashboardData.expiration is already valid (from cache initialization), keep it
-                console.log(`✅ [${userId}] Keeping existing valid expiration from cache after API failure: ${dashboardData.expiration} days`);
+                // API returned invalid data (0, null, NaN, or empty object) - use cached
+                console.log(`⚠️ [${userId}] getexpirydate API returned invalid data (${apiData.expiry}), using cached expiration`);
+                apiExpiryFailed = true; // Treat as failed to use cached data
             }
         }
         
-        // CRITICAL: Final validation - ensure expiration is never 0, null, undefined, or NaN
+        // If API failed or returned invalid data, use cached expiration
+        if (apiExpiryFailed) {
+            console.log(`📦 [${userId}] getexpirydate API failed or returned invalid data, using cached expiration`);
+            // CRITICAL: Always use cached expiration when API fails
+            // First try Redis cache
+            if (cachedData && cachedData.data && cachedData.data.expiration !== undefined && cachedData.data.expiration !== null) {
+                const cachedExpiration = cachedData.data.expiration;
+                // Validate cached expiration is valid (> 0, not NaN, not 0)
+                if (typeof cachedExpiration === 'number' && !isNaN(cachedExpiration) && cachedExpiration > 0) {
+                    dashboardData.expiration = cachedExpiration;
+                    console.log(`✅ [${userId}] Using cached expiration from Redis: ${cachedExpiration} days`);
+                } else {
+                    // Cached expiration is invalid (0, NaN, or <= 0) - try Firebase
+                    console.log(`⚠️ [${userId}] Cached expiration from Redis is invalid (${cachedExpiration}), trying Firebase...`);
+                    if (firebaseData && firebaseData.expiration && firebaseData.expiration > 0) {
+                        dashboardData.expiration = firebaseData.expiration;
+                        console.log(`✅ [${userId}] Using expiration from Firebase: ${firebaseData.expiration} days`);
+                    } else {
+                        // No valid expiration anywhere - ensure it's undefined, not 0
+                        console.log(`⚠️ [${userId}] No valid expiration available anywhere, expiration will be missing (not 0)`);
+                        delete dashboardData.expiration; // Always delete to ensure it's undefined, not 0
+                    }
+                }
+            } else if (firebaseData && firebaseData.expiration && firebaseData.expiration > 0) {
+                // No Redis cache, but Firebase has expiration
+                dashboardData.expiration = firebaseData.expiration;
+                console.log(`✅ [${userId}] Using expiration from Firebase (no Redis cache): ${firebaseData.expiration} days`);
+            } else {
+                // No Redis cache - try Firebase (we already fetched it earlier)
+                if (firebaseData && firebaseData.expiration && firebaseData.expiration > 0) {
+                    dashboardData.expiration = firebaseData.expiration;
+                    console.log(`✅ [${userId}] Using expiration from Firebase (no Redis cache): ${firebaseData.expiration} days`);
+                } else {
+                    // No cached data and dashboardData doesn't have valid expiration
+                    console.log(`⚠️ [${userId}] No cached expiration available (Redis empty, Firebase ${firebaseData && firebaseData.expiration ? `has invalid (${firebaseData.expiration})` : 'empty'}), expiration will be missing (not 0)`);
+                    // Always delete to ensure it's undefined, not 0
+                    delete dashboardData.expiration;
+                }
+            }
+        }
+        
+        // CRITICAL: Final validation - ensure expiration is NEVER 0, null, undefined, or NaN
+        // This is the last line of defense - if expiration is 0, delete it
         if (dashboardData.expiration !== undefined && dashboardData.expiration !== null) {
-            if (dashboardData.expiration === 0 || isNaN(dashboardData.expiration)) {
+            if (dashboardData.expiration === 0 || isNaN(dashboardData.expiration) || (typeof dashboardData.expiration === 'number' && dashboardData.expiration <= 0)) {
                 console.log(`⚠️ [${userId}] Final validation: Invalid expiration detected (${dashboardData.expiration}), removing it`);
                 delete dashboardData.expiration;
             }
+        }
+        
+        // CRITICAL: Double-check - if expiration is still 0 after all processing, force delete
+        if (dashboardData.expiration === 0) {
+            console.log(`❌ [${userId}] CRITICAL: Expiration is still 0 after all processing, forcing deletion`);
+            delete dashboardData.expiration;
         }
         
         // CRITICAL: Ensure all critical fields are preserved from cache to prevent status changes
@@ -1162,11 +1641,34 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             delete dashboardData.validityDate;
         }
         
-        // Step 5: Save to Redis cache (non-blocking)
-        await saveLastJson(userId, dashboardData);
+        // Step 5: Log unified summary of refresh
+        const expiryStatus = dashboardData.expiration !== undefined && dashboardData.expiration !== null ? `${dashboardData.expiration} days` : 'failed';
+        const consumptionStatus = dashboardData.totalConsumption !== undefined ? `${dashboardData.totalConsumption} GB` : 'failed';
+        const validityStatus = dashboardData.validityDate || 'failed';
+        const subscriptionStatus = dashboardData.subscriptionDate || 'failed';
+        const subscribersCount = dashboardData.subscribersCount !== undefined ? dashboardData.subscribersCount : 'failed';
+        console.log(`📊 Refresh completed: expiry=${expiryStatus}, consumption=${consumptionStatus}, validity=${validityStatus}, subscription=${subscriptionStatus}, subscribers=${subscribersCount}`);
+
+        // Step 6: Save to Redis cache (non-blocking)
+        // CRITICAL: Also store raw API responses for timeout fallback
+        // CRITICAL: NEVER save expiration = 0 to cache - if it's 0, don't include it
+        const dataToCache = { ...dashboardData };
+        
+        // Remove expiration if it's 0 or invalid before saving to cache
+        if (dataToCache.expiration === 0 || isNaN(dataToCache.expiration) || (typeof dataToCache.expiration === 'number' && dataToCache.expiration <= 0)) {
+            delete dataToCache.expiration;
+            console.log(`⚠️ [${userId}] Removed invalid expiration (${dataToCache.expiration}) before saving to cache`);
+        }
+        
+        // Store raw API responses if available (for timeout fallback)
+        dataToCache.services = apiData.services || (cachedData && cachedData.data && cachedData.data.services) || null;
+        dataToCache.expiry = apiData.expiry !== null && apiData.expiry !== undefined ? apiData.expiry : (cachedData && cachedData.data && cachedData.data.expiry !== undefined ? cachedData.data.expiry : null);
+        dataToCache.consumption = apiData.consumption || (cachedData && cachedData.data && cachedData.data.consumption) || null;
+        
+        await saveLastJson(userId, dataToCache);
         await saveLastVerified(userId);
 
-        // Step 6: Save to Firebase (non-blocking, fire-and-forget)
+        // Step 7: Save to Firebase (non-blocking, fire-and-forget)
         // CRITICAL: Only save to Firebase if we have valid primaryData (prevents admins becoming inactive)
         // For background refreshes, only save if APIs succeeded (don't overwrite good data with bad data)
         const hasValidPrimaryData = dashboardData.primaryData && typeof dashboardData.primaryData === 'object' && Object.keys(dashboardData.primaryData).length > 0;

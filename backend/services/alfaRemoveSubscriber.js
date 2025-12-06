@@ -16,9 +16,10 @@ function delay(ms) {
  * @param {string} adminPhone - Admin phone number (8 digits)
  * @param {string} adminPassword - Admin password (for login if cookies expired)
  * @param {string} subscriberPhone - Subscriber phone number (8 digits, with or without 961 prefix)
+ * @param {Object} sessionData - Optional session data with page and context (for faster removals)
  * @returns {Promise<{success: boolean, message: string}>} Result
  */
-async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPhone) {
+async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPhone, sessionData = null) {
     let context = null;
     let page = null;
     let refreshLockAcquired = false;
@@ -46,160 +47,188 @@ async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPh
             throw new Error(`Subscriber phone must be exactly 8 digits. Got: ${cleanSubscriberPhone.length} digits`);
         }
 
-        // Get a new isolated browser context from the pool
-        const contextData = await browserPool.createContext();
-        context = contextData.context;
-        page = contextData.page;
-
-        // Get admin's cookies from Redis
-        console.log(`🔑 Getting cookies for admin: ${adminId}`);
-        let cookies = await getCookies(adminId || adminPhone);
-        
-        // Fallback to sessionManager if cookieManager has no cookies
-        if (!cookies || cookies.length === 0) {
-            const savedSession = await getSession(adminId || adminPhone);
-            if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
-                cookies = savedSession.cookies;
-                console.log(`✅ Found ${cookies.length} cookies from sessionManager`);
-            }
-        } else {
-            console.log(`✅ Found ${cookies.length} cookies from cookieManager`);
-        }
-
-        // Check if cookies are valid using Redis expiry timestamp (more reliable than cookie expires field)
-        let cookiesExpired = true;
-        if (cookies && cookies.length > 0) {
-            // First check Redis cookie expiry timestamp (most reliable)
-            const cookieExpiry = await getCookieExpiry(adminId || adminPhone);
-            const now = Date.now();
+        // Use existing session if provided (faster - page already loaded)
+        let skipNavigation = false;
+        if (sessionData && sessionData.page && sessionData.context) {
+            console.log(`⚡ Using existing session for faster removal (page already loaded)`);
+            context = sessionData.context;
+            page = sessionData.page;
+            skipNavigation = true; // Skip all login/navigation logic
             
-            console.log(`🔍 [Cookie Validation] Checking cookie validity for ${adminId}`);
-            console.log(`   Cookies found: ${cookies.length}`);
-            console.log(`   Redis expiry: ${cookieExpiry ? new Date(cookieExpiry).toISOString() : 'null'}`);
-            console.log(`   Current time: ${new Date(now).toISOString()}`);
-            
-            if (cookieExpiry && typeof cookieExpiry === 'number' && !isNaN(cookieExpiry)) {
-                // Ensure cookieExpiry is in milliseconds (not seconds)
-                const expiryMs = cookieExpiry > 10000000000 ? cookieExpiry : cookieExpiry * 1000;
-                
-                if (expiryMs > now) {
-                    // Redis expiry timestamp says cookies are still valid
-                    cookiesExpired = false;
-                    const timeRemaining = Math.floor((expiryMs - now) / 1000 / 60);
-                    console.log(`✅ Cookies are valid (Redis expiry: ${new Date(expiryMs).toISOString()}, ${timeRemaining} minutes remaining)`);
-                } else {
-                    // Redis expiry timestamp says cookies are expired
-                    const timeExpired = Math.floor((now - expiryMs) / 1000 / 60);
-                    console.log(`⚠️ Cookies are expired (Redis expiry: ${new Date(expiryMs).toISOString()}, expired ${timeExpired} minutes ago)`);
-                    cookiesExpired = true;
-                }
-            } else {
-                // No Redis expiry timestamp - fall back to checking cookie expires field
-                console.log(`⚠️ No Redis expiry timestamp found, falling back to cookie expires field check`);
-                cookiesExpired = areCookiesExpired(cookies);
-                if (!cookiesExpired) {
-                    console.log(`✅ Cookies are valid (no Redis expiry, checked cookie expires field - not expired)`);
-                } else {
-                    console.log(`⚠️ Cookies appear expired (checked cookie expires field - found expired cookie)`);
-                }
-            }
-        } else {
-            console.log(`⚠️ [Cookie Validation] No cookies found`);
-        }
-
-        // If no cookies found OR cookies are expired, perform login
-        if (!cookies || cookies.length === 0 || cookiesExpired) {
-            if (cookiesExpired) {
-                console.log(`⚠️ Cookies expired, performing login for admin: ${adminId}`);
-            } else {
-                console.log(`⚠️ No cookies found, performing login for admin: ${adminId}`);
-            }
-            
-            if (!adminPassword) {
-                throw new Error('No valid cookies found and password not provided for login');
-            }
-            
-            const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
-            if (!loginResult.success) {
-                throw new Error('Login failed - cannot proceed with removing subscriber');
-            }
-            
-            // After login, navigate directly to ushare page
-            await delay(2000);
-            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
-            console.log(`🌐 Navigating directly to ushare page after login: ${ushareUrl}`);
-            await page.goto(ushareUrl, {
-                waitUntil: 'domcontentloaded',
-                timeout: 20000
-            });
-            await delay(3000);
-            
-            // Check if we're on login page (cookies might have expired)
+            // Just verify we're on the ushare page, refresh if needed
             const currentUrl = page.url();
-            if (currentUrl.includes('/login')) {
-                console.log(`⚠️ Redirected to login page, cookies expired. Performing login...`);
-                if (!adminPassword) {
-                    throw new Error('Cookies expired and password not provided for login');
-                }
-                
-                const retryLoginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
-                if (!retryLoginResult.success) {
-                    throw new Error('Login failed after cookie expiration');
-                }
-                
-                // After login, navigate directly to ushare page again
+            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+            
+            if (!currentUrl.includes('/ushare')) {
+                // Not on ushare page, navigate to it
+                console.log(`🌐 [Session] Navigating to Ushare page: ${ushareUrl}`);
+                await page.goto(ushareUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
                 await delay(2000);
-                console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
-                await page.goto(ushareUrl, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 20000
-                });
-                await delay(3000);
-            } else if (currentUrl.includes('/ushare')) {
-                console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
             } else {
-                console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
+                // Already on ushare page, just refresh to get latest data
+                console.log(`🔄 [Session] Refreshing Ushare page to get latest data...`);
+                await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+                await delay(2000);
             }
         } else {
-            // Inject cookies before navigation
-            console.log(`🔑 Injecting ${cookies.length} valid cookies...`);
-            await page.setCookie(...cookies);
-            console.log(`✅ Cookies injected`);
-            
-            // Navigate directly to ushare page (skip dashboard)
-            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
-            console.log(`🌐 Navigating directly to ushare page: ${ushareUrl}`);
-            await page.goto(ushareUrl, {
-                waitUntil: 'domcontentloaded',
-                timeout: 20000
-            });
-            await delay(3000);
+            // Get a new isolated browser context from the pool
+            const contextData = await browserPool.createContext();
+            context = contextData.context;
+            page = contextData.page;
+        }
 
-            // Check if we're on login page (cookies might have expired between check and navigation)
-            const currentUrl = page.url();
-            if (currentUrl.includes('/login')) {
-                console.log(`⚠️ Redirected to login page, cookies expired during navigation. Performing login...`);
+        // Skip all login/navigation logic if using existing session
+        if (!skipNavigation) {
+            // Get admin's cookies from Redis
+            console.log(`🔑 Getting cookies for admin: ${adminId}`);
+            let cookies = await getCookies(adminId || adminPhone);
+            
+            // Fallback to sessionManager if cookieManager has no cookies
+            if (!cookies || cookies.length === 0) {
+                const savedSession = await getSession(adminId || adminPhone);
+                if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
+                    cookies = savedSession.cookies;
+                    console.log(`✅ Found ${cookies.length} cookies from sessionManager`);
+                }
+            } else {
+                console.log(`✅ Found ${cookies.length} cookies from cookieManager`);
+            }
+
+            // Check if cookies are valid using Redis expiry timestamp (more reliable than cookie expires field)
+            let cookiesExpired = true;
+            if (cookies && cookies.length > 0) {
+                // First check Redis cookie expiry timestamp (most reliable)
+                const cookieExpiry = await getCookieExpiry(adminId || adminPhone);
+                const now = Date.now();
+                
+                console.log(`🔍 [Cookie Validation] Checking cookie validity for ${adminId}`);
+                console.log(`   Cookies found: ${cookies.length}`);
+                console.log(`   Redis expiry: ${cookieExpiry ? new Date(cookieExpiry).toISOString() : 'null'}`);
+                console.log(`   Current time: ${new Date(now).toISOString()}`);
+                
+                if (cookieExpiry && typeof cookieExpiry === 'number' && !isNaN(cookieExpiry)) {
+                    // Ensure cookieExpiry is in milliseconds (not seconds)
+                    const expiryMs = cookieExpiry > 10000000000 ? cookieExpiry : cookieExpiry * 1000;
+                    
+                    if (expiryMs > now) {
+                        // Redis expiry timestamp says cookies are still valid
+                        cookiesExpired = false;
+                        const timeRemaining = Math.floor((expiryMs - now) / 1000 / 60);
+                        console.log(`✅ Cookies are valid (Redis expiry: ${new Date(expiryMs).toISOString()}, ${timeRemaining} minutes remaining)`);
+                    } else {
+                        // Redis expiry timestamp says cookies are expired
+                        const timeExpired = Math.floor((now - expiryMs) / 1000 / 60);
+                        console.log(`⚠️ Cookies are expired (Redis expiry: ${new Date(expiryMs).toISOString()}, expired ${timeExpired} minutes ago)`);
+                        cookiesExpired = true;
+                    }
+                } else {
+                    // No Redis expiry timestamp - fall back to checking cookie expires field
+                    console.log(`⚠️ No Redis expiry timestamp found, falling back to cookie expires field check`);
+                    cookiesExpired = areCookiesExpired(cookies);
+                    if (!cookiesExpired) {
+                        console.log(`✅ Cookies are valid (no Redis expiry, checked cookie expires field - not expired)`);
+                    } else {
+                        console.log(`⚠️ Cookies appear expired (checked cookie expires field - found expired cookie)`);
+                    }
+                }
+            } else {
+                console.log(`⚠️ [Cookie Validation] No cookies found`);
+            }
+
+            // If no cookies found OR cookies are expired, perform login
+            if (!cookies || cookies.length === 0 || cookiesExpired) {
+                if (cookiesExpired) {
+                    console.log(`⚠️ Cookies expired, performing login for admin: ${adminId}`);
+                } else {
+                    console.log(`⚠️ No cookies found, performing login for admin: ${adminId}`);
+                }
+                
                 if (!adminPassword) {
-                    throw new Error('Cookies expired and password not provided for login');
+                    throw new Error('No valid cookies found and password not provided for login');
                 }
                 
                 const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
                 if (!loginResult.success) {
-                    throw new Error('Login failed after cookie expiration');
+                    throw new Error('Login failed - cannot proceed with removing subscriber');
                 }
                 
-                // After login, navigate directly to ushare page again
+                // After login, navigate directly to ushare page
                 await delay(2000);
-                console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
+                const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+                console.log(`🌐 Navigating directly to ushare page after login: ${ushareUrl}`);
                 await page.goto(ushareUrl, {
                     waitUntil: 'domcontentloaded',
                     timeout: 20000
                 });
                 await delay(3000);
-            } else if (currentUrl.includes('/ushare')) {
-                console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
+                
+                // Check if we're on login page (cookies might have expired)
+                const currentUrl = page.url();
+                if (currentUrl.includes('/login')) {
+                    console.log(`⚠️ Redirected to login page, cookies expired. Performing login...`);
+                    if (!adminPassword) {
+                        throw new Error('Cookies expired and password not provided for login');
+                    }
+                    
+                    const retryLoginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
+                    if (!retryLoginResult.success) {
+                        throw new Error('Login failed after cookie expiration');
+                    }
+                    
+                    // After login, navigate directly to ushare page again
+                    await delay(2000);
+                    console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
+                    await page.goto(ushareUrl, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 20000
+                    });
+                    await delay(3000);
+                } else if (currentUrl.includes('/ushare')) {
+                    console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
+                } else {
+                    console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
+                }
             } else {
-                console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
+                // Inject cookies before navigation
+                console.log(`🔑 Injecting ${cookies.length} valid cookies...`);
+                await page.setCookie(...cookies);
+                console.log(`✅ Cookies injected`);
+                
+                // Navigate directly to ushare page (skip dashboard)
+                const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+                console.log(`🌐 Navigating directly to ushare page: ${ushareUrl}`);
+                await page.goto(ushareUrl, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 20000
+                });
+                await delay(3000);
+
+                // Check if we're on login page (cookies might have expired between check and navigation)
+                const currentUrl = page.url();
+                if (currentUrl.includes('/login')) {
+                    console.log(`⚠️ Redirected to login page, cookies expired during navigation. Performing login...`);
+                    if (!adminPassword) {
+                        throw new Error('Cookies expired and password not provided for login');
+                    }
+                    
+                    const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
+                    if (!loginResult.success) {
+                        throw new Error('Login failed after cookie expiration');
+                    }
+                    
+                    // After login, navigate directly to ushare page again
+                    await delay(2000);
+                    console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
+                    await page.goto(ushareUrl, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 20000
+                    });
+                    await delay(3000);
+                } else if (currentUrl.includes('/ushare')) {
+                    console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
+                } else {
+                    console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
+                }
             }
         }
 
@@ -316,7 +345,129 @@ async function removeSubscriber(adminId, adminPhone, adminPassword, subscriberPh
             console.log(`ℹ️ No navigation detected (removal may be complete)`);
         }
         
-        await delay(2000);
+        await delay(3000); // Give page time to update
+
+        // Verify removal - if using existing session and already on ushare page, just reload instead of navigating
+        const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+        const currentUrl = page.url();
+        
+        if (sessionData && sessionData.page && currentUrl.includes('/ushare')) {
+            // Using existing session and already on ushare page - just reload to get latest data
+            console.log(`🔄 [Session] Reloading current Ushare page to verify removal...`);
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+            await delay(2000);
+        } else {
+            // Not using session or not on ushare page - navigate to it
+            console.log(`🔍 Navigating to ushare page to verify removal: ${ushareUrl}`);
+            await page.goto(ushareUrl, {
+                waitUntil: 'domcontentloaded',
+                timeout: 15000
+            });
+            await delay(2000);
+        }
+
+        // Scroll down to see all subscriber cards
+        await page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+        });
+        await delay(1000);
+
+        // Verify the subscriber is actually gone by checking the ushare page
+        // This is the ONLY reliable way to verify removal - ignore error messages if subscriber is gone
+        console.log(`🔍 Verifying subscriber removal - checking if ${subscriberPhoneWithPrefix} still exists...`);
+        const subscriberStillExists = await page.evaluate((phone) => {
+            const cards = document.querySelectorAll('.col-sm-4');
+            for (const card of cards) {
+                const h2 = card.querySelector('h2');
+                if (h2 && h2.textContent.trim() === phone) {
+                    return true;
+                }
+            }
+            return false;
+        }, subscriberPhoneWithPrefix);
+
+        // If subscriber is gone, removal succeeded - regardless of any error messages
+        if (!subscriberStillExists) {
+            console.log(`✅ Subscriber ${subscriberPhoneWithPrefix} successfully removed - no longer found on page`);
+            
+            // Release refresh lock before returning
+            if (refreshLockAcquired) {
+                await releaseRefreshLock(adminId).catch(() => {});
+            }
+            
+            return {
+                success: true,
+                message: `Subscriber ${subscriberPhoneWithPrefix} removed successfully.`
+            };
+        }
+
+        // Subscriber still exists - but do multiple retry checks to ensure it's really still there
+        // Page might need time to update after removal
+        console.log(`⚠️ Subscriber ${subscriberPhoneWithPrefix} found on first check - doing retry checks to verify...`);
+        
+        // CRITICAL: Always do multiple retry checks to ensure subscriber is really still there
+        // Don't trust the first check - page might need time to update
+        // COMPLETELY IGNORE error messages - only verify by checking if subscriber is gone
+        let subscriberStillExistsAfterRetries = true;
+        for (let retryAttempt = 1; retryAttempt <= 5; retryAttempt++) {
+            console.log(`🔄 Retry check ${retryAttempt}/5: Verifying if subscriber is actually removed...`);
+            
+            // Wait and reload page
+            await delay(2000);
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+            await delay(2000);
+            
+            // Scroll to see all subscribers
+            await page.evaluate(() => {
+                window.scrollTo(0, document.body.scrollHeight);
+            });
+            await delay(1000);
+            
+            // Check again if subscriber exists
+            subscriberStillExistsAfterRetries = await page.evaluate((phone) => {
+                const cards = document.querySelectorAll('.col-sm-4');
+                for (const card of cards) {
+                    const h2 = card.querySelector('h2');
+                    if (h2 && h2.textContent.trim() === phone) {
+                        return true;
+                    }
+                }
+                return false;
+            }, subscriberPhoneWithPrefix);
+            
+            if (!subscriberStillExistsAfterRetries) {
+                // Subscriber is actually gone - removal succeeded!
+                console.log(`✅ Subscriber ${subscriberPhoneWithPrefix} successfully removed (verified on retry ${retryAttempt})`);
+                
+                if (refreshLockAcquired) {
+                    await releaseRefreshLock(adminId).catch(() => {});
+                }
+                
+                return {
+                    success: true,
+                    message: `Subscriber ${subscriberPhoneWithPrefix} removed successfully.`
+                };
+            }
+        }
+        
+        // After all retries, subscriber still exists - removal really failed
+        console.log(`❌ Subscriber ${subscriberPhoneWithPrefix} still exists after all retries - removal failed`);
+        
+        // Return generic error - DO NOT return the "At least one subscriber" message
+        // User can remove all subscribers, so we should never block them with that message
+        const errorMessage = `Failed to remove subscriber ${subscriberPhoneWithPrefix}. The subscriber is still present on the page after multiple verification attempts.`;
+        
+        // Release refresh lock before returning
+        if (refreshLockAcquired) {
+            await releaseRefreshLock(adminId).catch(() => {});
+        }
+        
+        return {
+            success: false,
+            message: errorMessage
+        };
+
+        console.log(`✅ Subscriber ${subscriberPhoneWithPrefix} successfully removed - no longer found on page`);
 
         // Release refresh lock before returning
         if (refreshLockAcquired) {

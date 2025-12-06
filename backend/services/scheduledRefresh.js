@@ -56,6 +56,57 @@ function initializeFirebase() {
 }
 
 /**
+ * Get all admins from Firestore (regardless of status)
+ * @returns {Promise<Array>} Array of all admin objects with id, phone, password
+ */
+async function getAllAdmins() {
+    if (!db) {
+        console.warn('⚠️ Firebase not initialized, cannot query admins');
+        return [];
+    }
+
+    try {
+        const adminsCollection = collection(db, 'admins');
+        const snapshot = await getDocs(adminsCollection);
+        
+        const allAdmins = [];
+        
+        snapshot.forEach((doc) => {
+            const data = doc.data();
+            const adminId = doc.id;
+            
+            // Get phone and password
+            const phone = data.phone || '';
+            const password = data.password || '';
+            
+            if (phone && password) {
+                allAdmins.push({
+                    id: adminId,
+                    phone: phone,
+                    password: password,
+                    name: data.name || phone
+                });
+            } else {
+                console.warn(`⚠️ Admin ${adminId} (${data.name || 'unnamed'}) is missing phone or password`);
+            }
+        });
+        
+        // Only log if count changed (to avoid spam when called frequently)
+        // Store last count in module-level variable
+        if (typeof getAllAdmins.lastCount === 'undefined' || getAllAdmins.lastCount !== allAdmins.length) {
+            console.log(`📋 Found ${allAdmins.length} admin(s) total`);
+            getAllAdmins.lastCount = allAdmins.length;
+        }
+        
+        return allAdmins;
+    } catch (error) {
+        console.error('❌ Error querying all admins:', error.message);
+        console.error('Stack:', error.stack);
+        return [];
+    }
+}
+
+/**
  * Get all active admins from Firestore
  * Status is stored in alfaData.status or directly on the admin document
  */
@@ -281,6 +332,7 @@ module.exports = {
     startScheduledRefresh,
     refreshAllActiveAdmins,
     getActiveAdmins,
+    getAllAdmins,
     manualRefresh
 };
 

@@ -186,7 +186,7 @@ async function extractCsrfTokenAndMaxQuota(adminPhone, cookies) {
  * @param {number} quota - Quota in GB (e.g., 1.5)
  * @returns {Promise<{success: boolean, message: string}>} Result
  */
-async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone, quota) {
+async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone, quota, sessionData = null) {
     let context = null;
     let page = null;
     let refreshLockAcquired = false;
@@ -214,25 +214,56 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
             console.log(`⏸️ [${adminId}] Refresh lock exists, but proceeding with add subscriber...`);
         }
 
-        // Get admin's cookies from Redis (prefer cookieManager over sessionManager)
-        console.log(`🔑 Getting cookies for admin: ${adminId}`);
-        let cookies = await getCookies(adminId || adminPhone);
-        
-        // Fallback to sessionManager if cookieManager has no cookies
-        if (!cookies || cookies.length === 0) {
-            const savedSession = await getSession(adminId || adminPhone);
-            if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
-                cookies = savedSession.cookies;
-                console.log(`✅ Found ${cookies.length} cookies from sessionManager`);
+        // Check if we're using an existing session FIRST - if so, skip all cookie/API logic
+        let skipNavigation = false;
+        let context = null;
+        let page = null;
+        if (sessionData && sessionData.page && sessionData.context) {
+            console.log(`⚡ Using existing session for faster add (page already loaded)`);
+            context = sessionData.context;
+            page = sessionData.page;
+            skipNavigation = true; // Skip all cookie validation and API-first logic
+            
+            // Just refresh the page to get latest data
+            const currentUrl = page.url();
+            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+            
+            if (!currentUrl.includes('/ushare')) {
+                // Not on ushare page, navigate to it
+                console.log(`🌐 [Session] Navigating to Ushare page: ${ushareUrl}`);
+                await page.goto(ushareUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                await delay(2000);
+            } else {
+                // Already on ushare page, just refresh to get latest data
+                console.log(`🔄 [Session] Refreshing Ushare page to get latest data...`);
+                await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+                await delay(2000);
             }
-        } else {
-            console.log(`✅ Found ${cookies.length} cookies from cookieManager`);
+            console.log(`✅ [Session] skipNavigation set to true - will skip all cookie/API logic`);
         }
 
-        // Check if cookies are valid using Redis expiry timestamp (more reliable than cookie expires field)
+        // Skip all cookie validation and API-first logic if using existing session
+        let cookies = null;
         let cookiesValid = false;
-        if (cookies && cookies.length > 0) {
-            // First check Redis cookie expiry timestamp (most reliable)
+        if (!skipNavigation) {
+            // Get admin's cookies from Redis (prefer cookieManager over sessionManager)
+            console.log(`🔑 Getting cookies for admin: ${adminId}`);
+            cookies = await getCookies(adminId || adminPhone);
+            
+            // Fallback to sessionManager if cookieManager has no cookies
+            if (!cookies || cookies.length === 0) {
+                const savedSession = await getSession(adminId || adminPhone);
+                if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
+                    cookies = savedSession.cookies;
+                    console.log(`✅ Found ${cookies.length} cookies from sessionManager`);
+                }
+            } else {
+                console.log(`✅ Found ${cookies.length} cookies from cookieManager`);
+            }
+
+            // Check if cookies are valid using Redis expiry timestamp (more reliable than cookie expires field)
+            if (cookies && cookies.length > 0) {
+                // First check Redis cookie expiry timestamp (most reliable)
             const cookieExpiry = await getCookieExpiry(adminId || adminPhone);
             const now = Date.now();
             
@@ -267,43 +298,57 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
                     console.log(`⚠️ Cookies appear expired (checked cookie expires field - found expired cookie)`);
                 }
             }
-        } else {
-            console.log(`⚠️ [Cookie Validation] No cookies found`);
-        }
+            } else {
+                console.log(`⚠️ [Cookie Validation] No cookies found`);
+            }
 
-        // STEP 1: Try API-first approach if we have valid cookies
-        if (cookiesValid) {
+            // STEP 1: Try API-first approach if we have valid cookies
+            if (cookiesValid) {
             console.log(`🚀 [API-First] Attempting direct POST to Alfa endpoint...`);
             
-            // First, verify cookies are actually valid with a keep-alive check
-            console.log(`🔍 [API-First] Verifying cookies with keep-alive check...`);
-            const keepAliveResult = await pseudoKeepAlive(adminId, cookies);
+            // OPTIMIZATION: Check if cookies were recently kept alive by the scheduler
+            // If cookies are fresh (expiry > 30 minutes away), skip redundant keep-alive check
+            const cookieExpiry = await getCookieExpiry(adminId || adminPhone);
+            const now = Date.now();
+            const timeUntilExpiry = cookieExpiry ? (cookieExpiry - now) : 0;
+            const minutesUntilExpiry = Math.floor(timeUntilExpiry / 1000 / 60);
             
-            if (!keepAliveResult.success) {
-                // Check if it's a timeout/network error vs actual cookie expiration
-                const isTimeout = keepAliveResult.error && (
-                    keepAliveResult.error.includes('timeout') || 
-                    keepAliveResult.error.includes('Request timeout') ||
-                    keepAliveResult.error.includes('socket hang up') ||
-                    keepAliveResult.error.includes('Network error')
-                );
-                
-                if (isTimeout) {
-                    // Timeout = network issue, not necessarily expired cookies
-                    // Proceed with CSRF extraction anyway - if cookies are expired, CSRF extraction will fail
-                    console.log(`⚠️ [API-First] Keep-alive timeout (network issue), but cookies may still be valid. Proceeding with CSRF extraction...`);
-                    // Don't mark cookies as invalid - let CSRF extraction determine if they're expired
-                } else {
-                    // 302/401 = cookies actually expired
-                    console.log(`⚠️ [API-First] Keep-alive check failed (${keepAliveResult.error || 'unknown'}), cookies expired. Will perform login...`);
-                    cookiesValid = false;
-                }
+            // If cookies expire in more than 30 minutes, they're likely fresh (kept alive by scheduler)
+            // Skip the redundant keep-alive check and proceed directly to CSRF extraction
+            if (timeUntilExpiry > 30 * 60 * 1000) {
+                console.log(`✅ [API-First] Cookies are fresh (expire in ${minutesUntilExpiry} minutes), skipping redundant keep-alive check (scheduler maintains them)`);
+                // Cookies are fresh - proceed directly to CSRF extraction
             } else {
-                console.log(`✅ [API-First] Keep-alive check passed, cookies are actually valid. Proceeding with CSRF extraction...`);
-                // Update cookies if keep-alive returned new ones
-                if (keepAliveResult.cookies && keepAliveResult.cookies.length > 0) {
-                    cookies = keepAliveResult.cookies;
-                    console.log(`✅ [API-First] Updated cookies from keep-alive response`);
+                // Cookies are close to expiry (< 30 minutes) - verify with keep-alive check
+                console.log(`🔍 [API-First] Cookies expire in ${minutesUntilExpiry} minutes, verifying with keep-alive check...`);
+                const keepAliveResult = await pseudoKeepAlive(adminId, cookies);
+                
+                if (!keepAliveResult.success) {
+                    // Check if it's a timeout/network error vs actual cookie expiration
+                    const isTimeout = keepAliveResult.error && (
+                        keepAliveResult.error.includes('timeout') || 
+                        keepAliveResult.error.includes('Request timeout') ||
+                        keepAliveResult.error.includes('socket hang up') ||
+                        keepAliveResult.error.includes('Network error')
+                    );
+                    
+                    if (isTimeout) {
+                        // Timeout = network issue, not necessarily expired cookies
+                        // Proceed with CSRF extraction anyway - if cookies are expired, CSRF extraction will fail
+                        console.log(`⚠️ [API-First] Keep-alive timeout (network issue), but cookies may still be valid. Proceeding with CSRF extraction...`);
+                        // Don't mark cookies as invalid - let CSRF extraction determine if they're expired
+                    } else {
+                        // 302/401 = cookies actually expired
+                        console.log(`⚠️ [API-First] Keep-alive check failed (${keepAliveResult.error || 'unknown'}), cookies expired. Will perform login...`);
+                        cookiesValid = false;
+                    }
+                } else {
+                    console.log(`✅ [API-First] Keep-alive check passed, cookies are actually valid. Proceeding with CSRF extraction...`);
+                    // Update cookies if keep-alive returned new ones
+                    if (keepAliveResult.cookies && keepAliveResult.cookies.length > 0) {
+                        cookies = keepAliveResult.cookies;
+                        console.log(`✅ [API-First] Updated cookies from keep-alive response`);
+                    }
                 }
             }
         }
@@ -393,47 +438,67 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
                     // API-first failed for other reasons - fall back to Puppeteer
                     console.log(`⚠️ [API-First] Failed (${apiResult.error}), falling back to Puppeteer...`);
                 }
+                } else {
+                    // Could not extract CSRF token - cookies might be expired
+                    console.log(`⚠️ [API-First] Could not extract CSRF token, cookies may be expired`);
+                }
             } else {
-                // Could not extract CSRF token - cookies might be expired
-                console.log(`⚠️ [API-First] Could not extract CSRF token, cookies may be expired`);
+                console.log(`⚠️ [API-First] No valid cookies found, will use Puppeteer...`);
             }
-        } else {
-            console.log(`⚠️ [API-First] No valid cookies found, will use Puppeteer...`);
         }
 
         // STEP 2: Fallback to Puppeteer form automation
-        console.log(`🔄 [Puppeteer] Falling back to Puppeteer form automation...`);
-        
-        // Get a new isolated browser context from the pool
-        const contextData = await browserPool.createContext();
-        context = contextData.context;
-        page = contextData.page;
+        if (!skipNavigation) {
+            console.log(`🔄 [Puppeteer] Falling back to Puppeteer form automation...`);
+            
+            // Get a new isolated browser context from the pool
+            const contextData = await browserPool.createContext();
+            context = contextData.context;
+            page = contextData.page;
+            console.log(`🔄 [Navigation] Created new browser context - will proceed with login/navigation`);
+        } else {
+            console.log(`⚡ [Puppeteer] Using existing session - skipping browser context creation`);
+        }
 
-        // If no cookies or cookies expired, perform login
-        if (!cookies || cookies.length === 0 || areCookiesExpired(cookies)) {
-            console.log(`⚠️ Cookies expired or missing, performing login for admin: ${adminId}`);
-            
-            // Get admin credentials from Firebase if not provided
-            let phone = adminPhone;
-            let password = adminPassword;
-            if (!password) {
-                const adminData = await getAdminData(adminId);
-                if (!adminData || !adminData.phone || !adminData.password) {
-                    throw new Error('No valid cookies found and password not provided for login');
+        // Skip login/navigation if using existing session
+        if (!skipNavigation) {
+            console.log(`🔄 [Navigation] Not using existing session, proceeding with login/navigation logic`);
+            // Get cookies if not already available
+            if (!cookies || cookies.length === 0) {
+                cookies = await getCookies(adminId || adminPhone);
+                if (!cookies || cookies.length === 0) {
+                    const savedSession = await getSession(adminId || adminPhone);
+                    if (savedSession && savedSession.cookies && savedSession.cookies.length > 0) {
+                        cookies = savedSession.cookies;
+                    }
                 }
-                phone = adminData.phone;
-                password = adminData.password;
             }
             
-            const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
-            if (!loginResult.success) {
-                throw new Error('Login failed - cannot proceed with adding subscriber');
-            }
-            
-            // After login, navigate DIRECTLY to ushare page (skip dashboard completely)
-            await delay(2000);
-            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
-            console.log(`🌐 [DIRECT NAVIGATION] Navigating directly to ushare page after login: ${ushareUrl}`);
+            // If no cookies or cookies expired, perform login
+            if (!cookies || cookies.length === 0 || areCookiesExpired(cookies)) {
+                console.log(`⚠️ Cookies expired or missing, performing login for admin: ${adminId}`);
+                
+                // Get admin credentials from Firebase if not provided
+                let phone = adminPhone;
+                let password = adminPassword;
+                if (!password) {
+                    const adminData = await getAdminData(adminId);
+                    if (!adminData || !adminData.phone || !adminData.password) {
+                        throw new Error('No valid cookies found and password not provided for login');
+                    }
+                    phone = adminData.phone;
+                    password = adminData.password;
+                }
+                
+                const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
+                if (!loginResult.success) {
+                    throw new Error('Login failed - cannot proceed with adding subscriber');
+                }
+                
+                // After login, navigate DIRECTLY to ushare page (skip dashboard completely)
+                await delay(2000);
+                const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+                console.log(`🌐 [DIRECT NAVIGATION] Navigating directly to ushare page after login: ${ushareUrl}`);
             
             // Navigate directly - don't go through dashboard
             // Use retry logic for navigation timeout
@@ -555,17 +620,17 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
             } else {
                 console.log(`⚠️ [DIRECT NAVIGATION] Unexpected page after navigation: ${currentUrl}, continuing...`);
             }
-        } else {
-            // Inject cookies before navigation
-            console.log(`🔑 Injecting ${cookies.length} valid cookies...`);
-            await page.setCookie(...cookies);
-            console.log(`✅ Cookies injected`);
+            } else {
+                // Cookies are valid - inject them and navigate
+                console.log(`🔑 Injecting ${cookies.length} valid cookies...`);
+                await page.setCookie(...cookies);
+                console.log(`✅ Cookies injected`);
+                
+                // Navigate directly to ushare page (skip dashboard) with retry logic
+                const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+                console.log(`🌐 Navigating directly to ushare page: ${ushareUrl}`);
             
-            // Navigate directly to ushare page (skip dashboard) with retry logic
-            const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
-            console.log(`🌐 Navigating directly to ushare page: ${ushareUrl}`);
-            
-            let cookieNavSuccess = false;
+                let cookieNavSuccess = false;
             for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                     await page.goto(ushareUrl, {
@@ -602,33 +667,34 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
                         }
                     }
                 }
-            }
+                }
 
-            // Check if we're on login page (cookies might have expired between check and navigation)
-            const currentUrl = page.url();
-            if (currentUrl.includes('/login')) {
-                console.log(`⚠️ Redirected to login page, cookies expired during navigation. Performing login...`);
-                if (!adminPassword) {
-                    throw new Error('Cookies expired and password not provided for login');
+                // Check if we're on login page (cookies might have expired between check and navigation)
+                const currentUrl = page.url();
+                if (currentUrl.includes('/login')) {
+                    console.log(`⚠️ Redirected to login page, cookies expired during navigation. Performing login...`);
+                    if (!adminPassword) {
+                        throw new Error('Cookies expired and password not provided for login');
+                    }
+                    
+                    const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
+                    if (!loginResult.success) {
+                        throw new Error('Login failed after cookie expiration');
+                    }
+                    
+                    // After login, navigate directly to ushare page again
+                    await delay(2000);
+                    console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
+                    await page.goto(ushareUrl, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 20000
+                    });
+                    await delay(3000);
+                } else if (currentUrl.includes('/ushare')) {
+                    console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
+                } else {
+                    console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
                 }
-                
-                const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
-                if (!loginResult.success) {
-                    throw new Error('Login failed after cookie expiration');
-                }
-                
-                // After login, navigate directly to ushare page again
-                await delay(2000);
-                console.log(`🌐 Navigating to ushare page after login: ${ushareUrl}`);
-                await page.goto(ushareUrl, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 20000
-                });
-                await delay(3000);
-            } else if (currentUrl.includes('/ushare')) {
-                console.log(`✅ Successfully navigated to ushare page: ${currentUrl}`);
-            } else {
-                console.log(`⚠️ Unexpected page after navigation: ${currentUrl}, continuing...`);
             }
         }
 
@@ -790,7 +856,6 @@ async function addSubscriber(adminId, adminPhone, adminPassword, subscriberPhone
                 message: `Subscriber invitation sent successfully. SMS sent to ${cleanSubscriberPhone}. The subscriber will appear after accepting the invitation.`
             };
         }
-
     } catch (error) {
         // If we got to the point where we clicked submit, the SMS was sent
         // So even if there's an error reading the page, we should return success

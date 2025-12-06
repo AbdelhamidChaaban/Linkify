@@ -35,6 +35,7 @@ class ApiError extends Error {
 
 /**
  * Convert cookie array to cookie header string
+ * Ensures __ACCOUNT cookie is always included (long-lived authentication cookie)
  * @param {Array} cookies - Array of cookie objects from Puppeteer
  * @returns {string} Cookie header string
  */
@@ -43,13 +44,25 @@ function formatCookiesForHeader(cookies) {
         return '';
     }
     
-    return cookies
-        .map(cookie => {
-            const name = cookie.name || '';
-            const value = cookie.value || '';
-            return `${name}=${value}`;
-        })
-        .join('; ');
+    // Ensure __ACCOUNT cookie is included (critical for authentication)
+    // Include all cookies, but prioritize __ACCOUNT if present
+    const accountCookie = cookies.find(c => c.name === '__ACCOUNT');
+    const otherCookies = cookies.filter(c => c.name !== '__ACCOUNT');
+    
+    // Build cookie string: __ACCOUNT first (if present), then others
+    const cookieStrings = [];
+    if (accountCookie) {
+        cookieStrings.push(`${accountCookie.name}=${accountCookie.value}`);
+    }
+    otherCookies.forEach(cookie => {
+        const name = cookie.name || '';
+        const value = cookie.value || '';
+        if (name && value) {
+            cookieStrings.push(`${name}=${value}`);
+        }
+    });
+    
+    return cookieStrings.join('; ');
 }
 
 /**
@@ -251,11 +264,11 @@ function makeRequest(options, timeout) {
 async function fetchAllApis(cookies, options = {}) {
     const { maxRetries = 3 } = options;
     // Optimized timeouts per endpoint with dynamic adjustment capability
-    // getconsumption increased to 6.5s to reduce retries (was timing out at 5s)
+    // Increased timeouts to avoid false failures that force login
     const endpoints = [
         { key: 'expiry', path: '/en/account/getexpirydate', timeout: 6000 }, // 6s
-        { key: 'services', path: '/en/account/manage-services/getmyservices', timeout: 10000 }, // 10s
-        { key: 'consumption', path: '/en/account/getconsumption', timeout: 6500 } // 6.5s (increased from 5s to reduce retries)
+        { key: 'services', path: '/en/account/manage-services/getmyservices', timeout: 20000 }, // 20s (increased to avoid false failures)
+        { key: 'consumption', path: '/en/account/getconsumption', timeout: 15000 } // 15s (increased to avoid false failures)
     ];
     
     // Apply dynamic timeout adjustment based on historical performance

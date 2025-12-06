@@ -52,24 +52,58 @@ function extractFromGetConsumption(apiResponseData) {
             const firstServiceDetails = firstService.ServiceDetailsInformationValue[0];
             
             // Extract admin consumption from first service details
-            // Admin consumption is ConsumptionValue (in MB) and PackageValue (in GB)
-            // Format: "consumption / limit GB" (consumption converted from MB to GB)
-            const adminConsumptionValue = firstServiceDetails.ConsumptionValue || '';
-            const adminConsumptionUnit = firstServiceDetails.ConsumptionUnitValue || '';
-            const adminPackageValue = firstServiceDetails.PackageValue || '';
-            const adminPackageUnit = firstServiceDetails.PackageUnitValue || '';
+            // CRITICAL: PackageValue is the TOTAL BUNDLE SIZE (e.g., 77 GB), NOT the admin's quota
+            // The admin's quota is stored in Firebase (data.quota), not in the API response
+            // We need to extract admin consumption WITHOUT using PackageValue as the limit
+            // Instead, we'll extract it in a format that the frontend can parse and add the correct limit
             
-            if (adminConsumptionValue && adminPackageValue) {
-                // Convert MB to GB if needed
-                let displayConsumption = parseFloat(adminConsumptionValue);
-                if (adminConsumptionUnit === 'MB' && adminPackageUnit === 'GB') {
-                    displayConsumption = displayConsumption / 1024;
-                }
-                
-                // Format: "X / Y GB" (same format as total consumption)
-                extracted.adminConsumption = `${displayConsumption.toFixed(2)} / ${adminPackageValue} ${adminPackageUnit}`;
-                console.log(`✅ Extracted admin consumption: ${extracted.adminConsumption} (from ConsumptionValue: ${adminConsumptionValue} ${adminConsumptionUnit})`);
+            // First, check if there's a "U-Share Main" or similar bundle in SecondaryValue that represents admin consumption
+            // If not, use firstServiceDetails.ConsumptionValue (which is the admin's consumption)
+            let adminConsumptionValue = '';
+            let adminConsumptionUnit = '';
+            let adminQuotaFromApi = null; // Will be null if not found in API
+            
+            // Look for admin's individual bundle in SecondaryValue (not the total bundle)
+            if (firstServiceDetails.SecondaryValue && Array.isArray(firstServiceDetails.SecondaryValue)) {
+                // Find bundles that are NOT "U-Share Total Bundle" - these might be admin's individual consumption
+                // But actually, SecondaryValue items are for secondary subscribers, not admin
+                // So we should use firstServiceDetails.ConsumptionValue for admin consumption
+            }
+            
+            // CRITICAL: When there's no SecondaryValue array, ConsumptionValue is the TOTAL consumption, not admin consumption
+            // For admins with 0 subscribers, admin consumption should be 0
+            // We need to check if there are any secondary subscribers to determine admin consumption
+            
+            // Check if there are any secondary subscribers (not just the total bundle)
+            let hasSecondarySubscribers = false;
+            if (firstServiceDetails.SecondaryValue && Array.isArray(firstServiceDetails.SecondaryValue)) {
+                hasSecondarySubscribers = firstServiceDetails.SecondaryValue.some(secondary => {
+                    const bundleName = (secondary.BundleNameValue || '').toLowerCase();
+                    // Check if it's a secondary subscriber bundle (not the total bundle)
+                    return (bundleName.includes('u-share secondary') || bundleName.includes('secondary')) &&
+                           !bundleName.includes('total') && !bundleName.includes('bundle');
+                });
+            }
+            
+            if (hasSecondarySubscribers) {
+                // If there are secondary subscribers, we can't determine admin consumption from this API alone
+                // Admin consumption will be calculated as: total consumption - sum of secondary subscribers
+                // For now, set to null/empty - frontend will calculate it from the secondary subscribers
+                console.log(`⚠️ Found secondary subscribers, cannot determine admin consumption from ConsumptionValue (it's total consumption)`);
+                extracted.adminConsumption = null; // Will be calculated by frontend
             } else {
+                // No secondary subscribers - admin consumption should be 0
+                // ConsumptionValue is the total consumption, not admin consumption
+                // When there are 0 subscribers, the admin hasn't used their share yet
+                console.log(`✅ No secondary subscribers found, admin consumption should be 0 (ConsumptionValue ${firstServiceDetails.ConsumptionValue || 'N/A'} is total consumption, not admin consumption)`);
+                extracted.adminConsumption = '0 GB';
+            }
+            
+            // Old logic (commented out - was incorrectly using ConsumptionValue as admin consumption)
+            // adminConsumptionValue = firstServiceDetails.ConsumptionValue || '';
+            // adminConsumptionUnit = firstServiceDetails.ConsumptionUnitValue || '';
+            
+            if (false) { // Disabled - was using total consumption as admin consumption
                 // Fallback: Try to extract from any numeric fields if standard fields are missing
                 console.warn('⚠️ Standard admin consumption fields missing, trying fallback extraction...');
                 const numericFields = Object.keys(firstServiceDetails).filter(key => {
@@ -156,6 +190,25 @@ function extractFromGetConsumption(apiResponseData) {
                         extracted.totalConsumption = `${displayConsumption.toFixed(2)} / ${directQuota}`;
                         console.log(`✅ Extracted total consumption (direct fallback): ${extracted.totalConsumption}`);
                     }
+                }
+            } else {
+                // SecondaryValue array doesn't exist - try to extract from firstServiceDetails directly
+                // Use PackageValue as the quota (total bundle size) and ConsumptionValue as consumption
+                console.warn('⚠️ No SecondaryValue array found in getconsumption API response, trying direct extraction from firstServiceDetails...');
+                const directConsumption = firstServiceDetails.ConsumptionValue || '';
+                const directQuota = firstServiceDetails.PackageValue || firstServiceDetails.QuotaValue || '';
+                const consumptionUnit = firstServiceDetails.ConsumptionUnitValue || '';
+                const quotaUnit = firstServiceDetails.PackageUnitValue || firstServiceDetails.QuotaUnitValue || '';
+                
+                if (directConsumption && directQuota) {
+                    let displayConsumption = parseFloat(directConsumption);
+                    if (consumptionUnit === 'MB' && (quotaUnit === 'GB' || !quotaUnit)) {
+                        displayConsumption = displayConsumption / 1024;
+                    }
+                    extracted.totalConsumption = `${displayConsumption.toFixed(2)} / ${directQuota}`;
+                    console.log(`✅ Extracted total consumption (no SecondaryValue fallback): ${extracted.totalConsumption} (using PackageValue/QuotaValue: ${directQuota} ${quotaUnit || 'GB'})`);
+                } else {
+                    console.warn(`⚠️ Cannot extract total consumption - missing ConsumptionValue (${directConsumption}) or PackageValue/QuotaValue (${directQuota})`);
                 }
             }
             

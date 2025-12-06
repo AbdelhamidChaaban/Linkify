@@ -96,6 +96,9 @@ body {
     font-weight: 500;
     transition: all 0.3s ease;
     position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .nav-link:hover {
@@ -118,6 +121,17 @@ body {
     height: 2px;
     background: linear-gradient(90deg, #3a0a4e, #8b5cf6);
     border-radius: 2px;
+}
+
+/* SVG Icons in Navigation */
+.nav-link svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: inline-block !important;
+    vertical-align: middle;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 
 /* Theme Toggle (Gear Icon) */
@@ -481,6 +495,9 @@ body.light-mode .insights-section p {
     width: 20px;
     height: 20px;
     flex-shrink: 0;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
 }
 
 .mobile-sidebar-footer {
@@ -728,6 +745,30 @@ body.light-mode .mobile-sidebar-nav-link.logout:hover {
     
     .page-header h2 {
         font-size: 1.5rem;
+    }
+    
+    /* Ensure mobile sidebar icons are visible */
+    .mobile-sidebar-nav a svg {
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+        display: inline-block;
+        vertical-align: middle;
+        opacity: 1;
+        visibility: visible;
+    }
+}
+
+/* Ensure icons are visible on all screen sizes */
+@media (min-width: 769px) {
+    .nav-link svg {
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+        display: inline-block;
+        vertical-align: middle;
+        opacity: 1;
+        visibility: visible;
     }
 }
 

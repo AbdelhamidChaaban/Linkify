@@ -252,6 +252,7 @@ class HomeManager {
         const expiringToday = this.filterServicesToExpireToday(snapshot);
         const finishedServices = this.filterFinishedServices(snapshot);
         const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
+        const requestedServices = this.filterRequestedServices(snapshot);
         const inactiveNumbers = this.filterInactiveNumbers(snapshot);
 
         // Update card counts
@@ -260,6 +261,7 @@ class HomeManager {
         this.setCardCount('3', expiringToday.length); // Services To Expire Today
         this.setCardCount('6', finishedServices.length); // Finished Services
         this.setCardCount('7', highAdminConsumption.length); // High Admin Consumption
+        this.setCardCount('8', requestedServices.length); // Requested Services
         this.setCardCount('9', inactiveNumbers.length); // Inactive Numbers
 
         console.log(`📊 [Home] Card counts updated:`, {
@@ -268,6 +270,7 @@ class HomeManager {
             expiringToday: expiringToday.length,
             finishedServices: finishedServices.length,
             highAdminConsumption: highAdminConsumption.length,
+            requestedServices: requestedServices.length,
             inactiveNumbers: inactiveNumbers.length,
             totalAdmins: this.admins.length
         });
@@ -399,6 +402,10 @@ class HomeManager {
         // Handle "High Admin Consumption" card (card-id="7")
         else if (cardId === '7') {
             this.openHighAdminConsumptionModal();
+        }
+        // Handle "Requested Services" card (card-id="8")
+        else if (cardId === '8') {
+            this.openRequestedServicesModal();
         }
         // Handle "Inactive Numbers" card (card-id="9")
         else if (cardId === '9') {
@@ -1483,6 +1490,201 @@ class HomeManager {
         });
     }
 
+    // Requested Services Modal
+    async openRequestedServicesModal() {
+        try {
+            // Show loading state
+            this.showLoadingModal();
+
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                const firebaseSnapshot = await db.collection('admins').get();
+                snapshot = firebaseSnapshot;
+            }
+            
+            // Process and filter admins
+            const requestedServices = this.filterRequestedServices(snapshot);
+            
+            // Hide loading and show modal with data
+            this.hideLoadingModal();
+            this.showRequestedServicesModal(requestedServices);
+        } catch (error) {
+            console.error('Error opening Requested Services modal:', error);
+            this.hideLoadingModal();
+            alert('Error loading data: ' + error.message);
+        }
+    }
+
+    filterRequestedServices(snapshot) {
+        const requestedServices = [];
+        
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const alfaData = data.alfaData || {};
+            
+            // Get subscribers counts
+            let subscribersCount = 0;
+            let subscribersActiveCount = 0;
+            let subscribersRequestedCount = 0;
+            
+            if (alfaData.subscribersCount !== undefined) {
+                subscribersCount = typeof alfaData.subscribersCount === 'number' 
+                    ? alfaData.subscribersCount 
+                    : parseInt(alfaData.subscribersCount) || 0;
+            }
+            
+            if (alfaData.subscribersActiveCount !== undefined) {
+                subscribersActiveCount = typeof alfaData.subscribersActiveCount === 'number'
+                    ? alfaData.subscribersActiveCount
+                    : parseInt(alfaData.subscribersActiveCount) || 0;
+            }
+            
+            if (alfaData.subscribersRequestedCount !== undefined) {
+                subscribersRequestedCount = typeof alfaData.subscribersRequestedCount === 'number'
+                    ? alfaData.subscribersRequestedCount
+                    : parseInt(alfaData.subscribersRequestedCount) || 0;
+            }
+            
+            // Only include admins with requested subscribers (requestedCount > 0)
+            if (subscribersRequestedCount > 0) {
+                requestedServices.push({
+                    id: doc.id,
+                    name: data.name || 'N/A',
+                    phone: data.phone || 'N/A',
+                    subscribersCount: subscribersCount,
+                    subscribersActiveCount: subscribersActiveCount,
+                    subscribersRequestedCount: subscribersRequestedCount,
+                    alfaData: alfaData
+                });
+            }
+        });
+        
+        return requestedServices;
+    }
+
+    formatSubscribersCount(activeCount, requestedCount) {
+        // Format like insights table: "1 (1)" for active (requested)
+        if (activeCount === undefined && requestedCount === undefined) return '';
+        
+        const active = activeCount || 0;
+        const requested = requestedCount || 0;
+        
+        if (requested > 0) {
+            return `${active} (${requested})`;
+        }
+        return active.toString();
+    }
+
+    showRequestedServicesModal(services) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('requestedServicesModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // Build table rows
+        let tableRows = '';
+        if (services.length === 0) {
+            tableRows = `
+                <tr>
+                    <td colspan="3" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No admins with requested subscribers found
+                    </td>
+                </tr>
+            `;
+        } else {
+            services.forEach(service => {
+                const subscribersDisplay = this.formatSubscribersCount(
+                    service.subscribersActiveCount !== undefined ? service.subscribersActiveCount : service.subscribersCount,
+                    service.subscribersRequestedCount
+                );
+                
+                tableRows += `
+                    <tr>
+                        <td>
+                            <div>
+                                <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                            </div>
+                        </td>
+                        <td>${subscribersDisplay}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                    <img src="/assets/eye.png" alt="View Details" style="width: 20px; height: 20px; object-fit: contain;" />
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        const modal = document.createElement('div');
+        modal.id = 'requestedServicesModal';
+        modal.className = 'available-services-modal-overlay';
+        modal.innerHTML = `
+            <div class="available-services-modal">
+                <div class="available-services-modal-inner">
+                    <div class="available-services-modal-header">
+                        <h2>Requested Services</h2>
+                        <button class="modal-close-btn" onclick="this.closest('.available-services-modal-overlay').remove()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="available-services-modal-body">
+                        <div class="table-container">
+                            <table class="available-services-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Subscribers</th>
+                                        <th class="actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Bind view buttons - show view details modal
+        modal.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.subscriberId;
+                const service = services.find(s => s.id === id);
+                if (service) {
+                    this.viewSubscriberDetails(id, services);
+                }
+            });
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+    }
 
     // Finished Services Modal
     async openFinishedServicesModal() {
