@@ -61,21 +61,28 @@ class BrowserPool {
 
     /**
      * Launch the browser with optimized settings
+     * 
+     * NOTE: Uses puppeteer (not puppeteer-core) which automatically bundles Chromium.
+     * This ensures the backend works on Render.com without manual Chrome installation.
+     * Chromium is downloaded automatically during npm install.
+     * 
      * @private
      */
     async _launchBrowser() {
         console.log('🚀 Launching persistent browser instance...');
+        console.log('📦 Using bundled Chromium from puppeteer (no manual installation needed)');
         
         const browser = await puppeteer.launch({
             headless: true,
+            // Render.com-compatible args (no executablePath needed - Chromium is bundled)
             args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
+                '--no-sandbox',                    // Required for Render.com
+                '--disable-setuid-sandbox',        // Required for Render.com
+                '--disable-dev-shm-usage',         // Prevents /dev/shm issues on Render.com
                 '--disable-blink-features=AutomationControlled',
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--window-size=1920,1080',
-                '--disable-gpu',
+                '--disable-gpu',                   // Useful for server environments
                 '--disable-software-rasterizer',
                 '--disable-extensions',
                 '--disable-background-networking',
@@ -84,6 +91,7 @@ class BrowserPool {
                 '--disable-backgrounding-occluded-windows',
                 '--disable-ipc-flooding-protection'
             ]
+            // No executablePath - puppeteer uses bundled Chromium automatically
         });
 
         // Handle browser disconnection

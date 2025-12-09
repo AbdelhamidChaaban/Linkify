@@ -272,9 +272,13 @@ app.use(cors({
 - Verify Redis Cloud credentials
 
 **Problem: Puppeteer fails**
-- Render free tier has limited resources
-- Upgrade to Starter/Professional plan
+- ✅ **Chromium is automatically bundled** - No manual Chrome installation needed!
+- The project uses `puppeteer` (not `puppeteer-core`) which includes Chromium
+- Chromium downloads automatically during `npm install` on Render.com
+- Render free tier has limited resources (512MB RAM)
+- Upgrade to Starter/Professional plan for better performance
 - Check logs for memory/CPU errors
+- If you see "Could not find Chrome" errors, ensure you're using `puppeteer` (not `puppeteer-core`)
 
 ### Frontend Issues
 
