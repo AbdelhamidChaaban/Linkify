@@ -1,8 +1,14 @@
-const puppeteer = require('puppeteer-extra');
+// CRITICAL: Require puppeteer first to ensure it's loaded (bundles Chromium)
+// puppeteer-extra may use puppeteer-core internally, so we explicitly get executablePath from puppeteer
+const puppeteerBase = require('puppeteer');
+const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
 // Apply stealth plugin
-puppeteer.use(StealthPlugin());
+puppeteerExtra.use(StealthPlugin());
+
+// Export puppeteer-extra for use (we'll explicitly set executablePath in launch options)
+const puppeteer = puppeteerExtra;
 
 /**
  * Browser Pool Manager
@@ -70,11 +76,22 @@ class BrowserPool {
      */
     async _launchBrowser() {
         console.log('🚀 Launching persistent browser instance...');
-        console.log('📦 Using bundled Chromium from puppeteer (no manual installation needed)');
         
-        const browser = await puppeteer.launch({
+        // CRITICAL: Get executable path from bundled puppeteer
+        // This ensures we use the Chromium that comes with puppeteer (not puppeteer-core)
+        let executablePath = null;
+        try {
+            // Get the executable path from the bundled puppeteer
+            executablePath = await puppeteerBase.executablePath();
+            console.log(`📦 Found bundled Chromium: ${executablePath ? executablePath.substring(0, 80) + '...' : 'NOT FOUND'}`);
+        } catch (error) {
+            console.warn(`⚠️ Could not get bundled Chromium path: ${error.message}`);
+            console.warn(`   Puppeteer-extra will attempt to locate Chromium automatically`);
+        }
+        
+        const launchOptions = {
             headless: true,
-            // Render.com-compatible args (no executablePath needed - Chromium is bundled)
+            // Render.com-compatible args
             args: [
                 '--no-sandbox',                    // Required for Render.com
                 '--disable-setuid-sandbox',        // Required for Render.com
@@ -91,8 +108,17 @@ class BrowserPool {
                 '--disable-backgrounding-occluded-windows',
                 '--disable-ipc-flooding-protection'
             ]
-            // No executablePath - puppeteer uses bundled Chromium automatically
-        });
+        };
+        
+        // Explicitly set executablePath if we found it from bundled puppeteer
+        if (executablePath) {
+            launchOptions.executablePath = executablePath;
+            console.log(`✅ Using bundled Chromium from puppeteer`);
+        } else {
+            console.log(`⚠️ No bundled Chromium path found - puppeteer-extra will attempt to locate it`);
+        }
+        
+        const browser = await puppeteer.launch(launchOptions);
 
         // Handle browser disconnection
         browser.on('disconnected', () => {

@@ -36,6 +36,11 @@ This guide will help you deploy your Linkify application to production.
    - **Runtime:** `Node`
    - **Build Command:** `npm install`
    - **Start Command:** `npm start`
+   
+   **⚠️ Important:** 
+   - Chromium downloads automatically during `npm install` (postinstall script verifies it)
+   - First build takes 5-10 minutes due to Chromium download (~300MB)
+   - **CRITICAL:** Add `PUPPETEER_SKIP_DOWNLOAD=false` to environment variables (see Step 2)
 
    **⚠️ Important Settings:**
    - **Auto-Deploy:** `Yes` (deploys automatically on git push)
@@ -51,6 +56,9 @@ Click **"Environment"** tab and add these variables:
 # Server Configuration
 PORT=10000
 NODE_ENV=production
+
+# Puppeteer Configuration (CRITICAL - ensures Chromium downloads)
+PUPPETEER_SKIP_DOWNLOAD=false
 
 # Redis Cloud Configuration
 REDIS_HOST=redis-11585.c55.eu-central-1-1.ec2.cloud.redislabs.com
