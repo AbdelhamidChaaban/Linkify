@@ -1,5 +1,5 @@
-// CRITICAL: Require puppeteer first to ensure it's loaded (bundles Chromium)
-// puppeteer-extra may use puppeteer-core internally, so we explicitly get executablePath from puppeteer
+// Use puppeteer (full package with bundled Chromium)
+// puppeteer-extra wraps it to add stealth capabilities
 const puppeteerBase = require('puppeteer');
 const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
@@ -7,7 +7,8 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 // Apply stealth plugin
 puppeteerExtra.use(StealthPlugin());
 
-// Export puppeteer-extra for use (we'll explicitly set executablePath in launch options)
+// Export puppeteer-extra for use
+// Chromium is bundled with puppeteer and will be automatically available
 const puppeteer = puppeteerExtra;
 
 /**
@@ -68,52 +69,17 @@ class BrowserPool {
     /**
      * Launch the browser with optimized settings
      * 
-     * NOTE: Uses puppeteer (not puppeteer-core) which automatically bundles Chromium.
-     * This ensures the backend works on Render.com without manual Chrome installation.
+     * NOTE: Uses puppeteer (full package) which automatically bundles Chromium.
      * Chromium is downloaded automatically during npm install.
+     * puppeteer-extra will automatically detect and use the bundled Chromium.
      * 
      * @private
      */
     async _launchBrowser() {
         console.log('🚀 Launching persistent browser instance...');
+        console.log('📦 Using bundled Chromium from puppeteer (automatically available)');
         
-        // CRITICAL: Get executable path from bundled puppeteer
-        // This ensures we use the Chromium that comes with puppeteer (not puppeteer-core)
-        let executablePath = null;
-        const fs = require('fs');
-        
-        try {
-            // Get the executable path from the bundled puppeteer
-            executablePath = await puppeteerBase.executablePath();
-            console.log(`📦 Bundled Chromium path: ${executablePath ? executablePath.substring(0, 80) + '...' : 'NOT FOUND'}`);
-            
-            // CRITICAL: Verify the file actually exists before using it
-            // On Render.com, build and runtime environments may differ
-            if (executablePath) {
-                try {
-                    const exists = fs.existsSync(executablePath);
-                    if (exists) {
-                        // Verify it's executable
-                        fs.accessSync(executablePath, fs.constants.F_OK | fs.constants.X_OK);
-                        console.log(`✅ Chromium file exists and is executable`);
-                    } else {
-                        console.warn(`⚠️ Chromium path returned but file doesn't exist: ${executablePath}`);
-                        console.warn(`   This can happen on Render.com if build/runtime environments differ`);
-                        console.warn(`   Will let puppeteer-extra locate Chromium automatically`);
-                        executablePath = null; // Don't use invalid path
-                    }
-                } catch (accessError) {
-                    console.warn(`⚠️ Chromium file exists but may not be accessible: ${accessError.message}`);
-                    console.warn(`   Will let puppeteer-extra locate Chromium automatically`);
-                    executablePath = null; // Don't use invalid path
-                }
-            }
-        } catch (error) {
-            console.warn(`⚠️ Could not get bundled Chromium path: ${error.message}`);
-            console.warn(`   Puppeteer-extra will attempt to locate Chromium automatically`);
-        }
-        
-        const launchOptions = {
+        const browser = await puppeteer.launch({
             headless: true,
             // Render.com-compatible args
             args: [
@@ -132,33 +98,8 @@ class BrowserPool {
                 '--disable-backgrounding-occluded-windows',
                 '--disable-ipc-flooding-protection'
             ]
-        };
+        });
         
-        // Only set executablePath if file actually exists and is accessible
-        if (executablePath) {
-            launchOptions.executablePath = executablePath;
-            console.log(`✅ Using bundled Chromium from puppeteer`);
-        } else {
-            console.log(`⚠️ No valid Chromium path - puppeteer-extra will locate it automatically`);
-            console.log(`   Note: On Render.com, Chromium should be in node_modules/.cache/puppeteer`);
-            // Don't set executablePath - let puppeteer-extra find it automatically
-            // puppeteer-extra will use puppeteer's bundled Chromium if available
-        }
-        
-        try {
-            const browser = await puppeteer.launch(launchOptions);
-            return browser;
-        } catch (launchError) {
-            // If launch fails and we set executablePath, try without it
-            if (executablePath && launchError.message.includes('not found at the configured executablePath')) {
-                console.warn(`⚠️ Launch failed with configured path, retrying without executablePath...`);
-                delete launchOptions.executablePath;
-                console.log(`   Letting puppeteer-extra locate Chromium automatically...`);
-                return await puppeteer.launch(launchOptions);
-            }
-            throw launchError;
-        }
-
         // Handle browser disconnection
         browser.on('disconnected', () => {
             console.warn('⚠️ Browser disconnected unexpectedly');
