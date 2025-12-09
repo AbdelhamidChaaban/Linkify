@@ -50,14 +50,19 @@ const { prepareEditSession, getActiveSession, closeSession } = require('./servic
 
 const app = express();
 // Parse PORT as integer and validate range (0-65535)
+// Render.com automatically sets PORT environment variable
 const PORT = (() => {
     const envPort = process.env.PORT;
-    if (!envPort) return 3000;
+    if (!envPort) {
+        console.warn(`⚠️  PORT environment variable not set, using default 10000`);
+        return 10000; // Render.com default or set in environment
+    }
     const parsed = parseInt(envPort, 10);
     if (isNaN(parsed) || parsed < 0 || parsed > 65535) {
-        console.warn(`⚠️  Invalid PORT value "${envPort}", using default 3000`);
-        return 3000;
+        console.warn(`⚠️  Invalid PORT value "${envPort}", using default 10000`);
+        return 10000;
     }
+    console.log(`📡 Using PORT: ${parsed}`);
     return parsed;
 })();
 
@@ -681,21 +686,11 @@ app.use((req, res, next) => {
 // Initialize browser pool and start server
 async function startServer() {
     try {
-        // Initialize browser pool first
-        console.log('🔧 Initializing browser pool...');
-        await browserPool.initialize();
-        
-        // Start scheduled refresh service
-        console.log('🔧 Initializing scheduled refresh service...');
-        scheduledRefresh.startScheduledRefresh();
-        
-        // Start background cookie refresh worker (proactive cookie renewal)
-        console.log('🔧 Starting background cookie refresh worker...');
-        cookieRefreshWorker.startWorker();
-        
-        // Start server on available port
+        // CRITICAL: Start server FIRST (non-blocking) so Render.com detects the port
+        // Browser pool initialization will happen in background
         const actualPort = await findAvailablePort(PORT);
         
+        // Start server immediately (before browser pool initialization)
         app.listen(actualPort, () => {
             console.log(`🚀 Linkify backend server running on port ${actualPort}`);
             console.log(`📁 Serving static files from: ${frontendPath}`);
@@ -703,6 +698,25 @@ async function startServer() {
             console.log(`📄 Home page: http://localhost:${actualPort}/pages/home.html`);
             console.log(`\n⚠️  Note: If port ${PORT} was in use, server is running on port ${actualPort}`);
         });
+        
+        // Initialize browser pool in background (non-blocking)
+        // This allows server to start even if Chromium isn't ready yet
+        console.log('🔧 Initializing browser pool (non-blocking)...');
+        browserPool.initialize().then(() => {
+            console.log('✅ Browser pool initialized successfully');
+        }).catch((err) => {
+            console.error('⚠️ Browser pool initialization failed (server still running):', err.message);
+            console.error('   Browser-dependent features will not work until Chromium is available');
+        });
+        
+        // Start scheduled refresh service (non-blocking)
+        console.log('🔧 Initializing scheduled refresh service...');
+        scheduledRefresh.startScheduledRefresh();
+        
+        // Start background cookie refresh worker (proactive cookie renewal) - non-blocking
+        console.log('🔧 Starting background cookie refresh worker...');
+        cookieRefreshWorker.startWorker();
+        
     } catch (err) {
         console.error('❌ Failed to start server:', err);
         process.exit(1);
