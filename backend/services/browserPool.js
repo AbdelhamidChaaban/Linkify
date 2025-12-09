@@ -3,6 +3,14 @@
 const puppeteerBase = require('puppeteer');
 const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const path = require('path');
+
+// Set Puppeteer cache directory to node_modules/.cache/puppeteer
+// This ensures Chromium persists from build to runtime on Render.com
+if (!process.env.PUPPETEER_CACHE_DIR) {
+    const cacheDir = path.join(__dirname, '..', 'node_modules', '.cache', 'puppeteer');
+    process.env.PUPPETEER_CACHE_DIR = cacheDir;
+}
 
 // Apply stealth plugin
 puppeteerExtra.use(StealthPlugin());
@@ -78,12 +86,17 @@ class BrowserPool {
     async _launchBrowser() {
         console.log('🚀 Launching persistent browser instance...');
         
-        // Force use of bundled Chromium from puppeteer (not puppeteer-core cache)
-        const executablePath = puppeteerBase.executablePath();
-        console.log(`📦 Using bundled Chromium: ${executablePath ? executablePath.substring(0, 80) + '...' : 'NOT FOUND'}`);
+        // Try to get executablePath from bundled puppeteer
+        let executablePath = null;
+        try {
+            executablePath = puppeteerBase.executablePath();
+            console.log(`📦 Bundled Chromium path: ${executablePath ? executablePath.substring(0, 80) + '...' : 'NOT FOUND'}`);
+        } catch (error) {
+            console.warn(`⚠️ Could not get executable path: ${error.message}`);
+            console.warn(`   Will attempt launch without explicit path`);
+        }
         
-        const browser = await puppeteer.launch({
-            executablePath: executablePath, // 👈 Force bundled Chromium
+        const launchOptions = {
             headless: true,
             // Render.com-compatible args
             args: [
@@ -102,7 +115,14 @@ class BrowserPool {
                 '--disable-backgrounding-occluded-windows',
                 '--disable-ipc-flooding-protection'
             ]
-        });
+        };
+        
+        // Only set executablePath if we successfully got it
+        if (executablePath) {
+            launchOptions.executablePath = executablePath;
+        }
+        
+        const browser = await puppeteer.launch(launchOptions);
         
         // Handle browser disconnection
         browser.on('disconnected', () => {

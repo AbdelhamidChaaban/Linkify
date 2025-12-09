@@ -59,6 +59,7 @@ NODE_ENV=production
 
 # Puppeteer Configuration (CRITICAL - ensures Chromium downloads)
 PUPPETEER_SKIP_DOWNLOAD=false
+PUPPETEER_CACHE_DIR=/opt/render/project/src/backend/node_modules/.cache/puppeteer
 
 # Redis Cloud Configuration
 REDIS_HOST=redis-11585.c55.eu-central-1-1.ec2.cloud.redislabs.com
