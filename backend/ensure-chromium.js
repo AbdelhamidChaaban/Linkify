@@ -4,9 +4,26 @@
  * 
  * CRITICAL: This ensures Chromium is available for puppeteer-extra
  * which may use puppeteer-core internally.
+ * 
+ * On Render.com, we need Chromium in node_modules (not system cache)
+ * so it persists from build to runtime.
  */
 
 const puppeteer = require('puppeteer');
+const path = require('path');
+const fs = require('fs');
+
+// Set Puppeteer cache directory to node_modules/.cache/puppeteer
+// This ensures Chromium persists from build to runtime on Render.com
+const puppeteerCacheDir = path.join(__dirname, 'node_modules', '.cache', 'puppeteer');
+if (!process.env.PUPPETEER_CACHE_DIR) {
+    process.env.PUPPETEER_CACHE_DIR = puppeteerCacheDir;
+    // Ensure directory exists
+    if (!fs.existsSync(puppeteerCacheDir)) {
+        fs.mkdirSync(puppeteerCacheDir, { recursive: true });
+    }
+    console.log(`📁 Set PUPPETEER_CACHE_DIR to: ${puppeteerCacheDir}`);
+}
 
 async function ensureChromium() {
     console.log('🔍 Ensuring Chromium is downloaded for Puppeteer...');
