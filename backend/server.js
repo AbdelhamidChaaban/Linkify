@@ -49,47 +49,22 @@ const { getAdminData, getFullAdminData, getBalanceHistory } = require('./service
 const { prepareEditSession, getActiveSession, closeSession } = require('./services/ushareEditSession');
 
 const app = express();
-// Parse PORT as integer and validate range (0-65535)
-// Render.com automatically sets PORT environment variable
+// Parse PORT as integer - Render.com automatically sets PORT environment variable
+// Use it directly without port-finding logic
 const PORT = (() => {
     const envPort = process.env.PORT;
     if (!envPort) {
+        // Default fallback (should not happen on Render.com)
         console.warn(`⚠️  PORT environment variable not set, using default 10000`);
-        return 10000; // Render.com default or set in environment
+        return 10000;
     }
     const parsed = parseInt(envPort, 10);
     if (isNaN(parsed) || parsed < 0 || parsed > 65535) {
         console.warn(`⚠️  Invalid PORT value "${envPort}", using default 10000`);
         return 10000;
     }
-    console.log(`📡 Using PORT: ${parsed}`);
     return parsed;
 })();
-
-// Function to find available port
-function findAvailablePort(startPort) {
-    return new Promise((resolve, reject) => {
-        // Ensure startPort is a number
-        const port = typeof startPort === 'number' ? startPort : parseInt(startPort, 10) || 3000;
-        if (port < 0 || port > 65535) {
-            reject(new Error(`Invalid port number: ${port}. Must be between 0 and 65535.`));
-            return;
-        }
-        const server = require('net').createServer();
-        server.listen(port, () => {
-            const actualPort = server.address().port;
-            server.close(() => resolve(actualPort));
-        });
-        server.on('error', (err) => {
-            if (err.code === 'EADDRINUSE') {
-                // Try next port
-                findAvailablePort(port + 1).then(resolve).catch(reject);
-            } else {
-                reject(err);
-            }
-        });
-    });
-}
 
 // Middleware
 // CORS configuration - Allow requests from Vercel and localhost
@@ -688,15 +663,13 @@ async function startServer() {
     try {
         // CRITICAL: Start server FIRST (non-blocking) so Render.com detects the port
         // Browser pool initialization will happen in background
-        const actualPort = await findAvailablePort(PORT);
+        // Use PORT directly (Render.com sets this automatically)
         
         // Start server immediately (before browser pool initialization)
-        app.listen(actualPort, () => {
-            console.log(`🚀 Linkify backend server running on port ${actualPort}`);
+        app.listen(PORT, '0.0.0.0', () => {
+            console.log(`🚀 Linkify backend server running on port ${PORT}`);
             console.log(`📁 Serving static files from: ${frontendPath}`);
-            console.log(`🌐 Access frontend at: http://localhost:${actualPort}/`);
-            console.log(`📄 Home page: http://localhost:${actualPort}/pages/home.html`);
-            console.log(`\n⚠️  Note: If port ${PORT} was in use, server is running on port ${actualPort}`);
+            console.log(`🌐 Server is listening on 0.0.0.0:${PORT}`);
         });
         
         // Initialize browser pool in background (non-blocking)
