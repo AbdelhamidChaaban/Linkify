@@ -8,7 +8,7 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteerExtra.use(StealthPlugin());
 
 // Export puppeteer-extra for use
-// Chromium is bundled with puppeteer and will be automatically available
+// We'll explicitly set executablePath to force use of bundled Chromium
 const puppeteer = puppeteerExtra;
 
 /**
@@ -70,16 +70,20 @@ class BrowserPool {
      * Launch the browser with optimized settings
      * 
      * NOTE: Uses puppeteer (full package) which automatically bundles Chromium.
-     * Chromium is downloaded automatically during npm install.
-     * puppeteer-extra will automatically detect and use the bundled Chromium.
+     * We explicitly set executablePath to force use of bundled Chromium,
+     * preventing puppeteer-extra from using puppeteer-core cache paths.
      * 
      * @private
      */
     async _launchBrowser() {
         console.log('🚀 Launching persistent browser instance...');
-        console.log('📦 Using bundled Chromium from puppeteer (automatically available)');
+        
+        // Force use of bundled Chromium from puppeteer (not puppeteer-core cache)
+        const executablePath = puppeteerBase.executablePath();
+        console.log(`📦 Using bundled Chromium: ${executablePath ? executablePath.substring(0, 80) + '...' : 'NOT FOUND'}`);
         
         const browser = await puppeteer.launch({
+            executablePath: executablePath, // 👈 Force bundled Chromium
             headless: true,
             // Render.com-compatible args
             args: [
