@@ -1,16 +1,23 @@
+// CRITICAL: Set Puppeteer cache directory BEFORE requiring puppeteer
+// This ensures Chromium persists from build to runtime on Render.com
+const path = require('path');
+const cacheDir = path.join(__dirname, '..', 'node_modules', '.cache', 'puppeteer');
+if (!process.env.PUPPETEER_CACHE_DIR) {
+    process.env.PUPPETEER_CACHE_DIR = cacheDir;
+}
+// Also set PUPPETEER_DOWNLOAD_PATH to ensure consistent location
+if (!process.env.PUPPETEER_DOWNLOAD_PATH) {
+    process.env.PUPPETEER_DOWNLOAD_PATH = cacheDir;
+}
+console.log(`📁 [BrowserPool] Puppeteer cache directory: ${process.env.PUPPETEER_CACHE_DIR}`);
+console.log(`📁 [BrowserPool] Puppeteer download path: ${process.env.PUPPETEER_DOWNLOAD_PATH}`);
+
+// NOW require puppeteer (after setting cache directory)
 // Use puppeteer (full package with bundled Chromium)
 // puppeteer-extra wraps it to add stealth capabilities
 const puppeteerBase = require('puppeteer');
 const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const path = require('path');
-
-// Set Puppeteer cache directory to node_modules/.cache/puppeteer
-// This ensures Chromium persists from build to runtime on Render.com
-if (!process.env.PUPPETEER_CACHE_DIR) {
-    const cacheDir = path.join(__dirname, '..', 'node_modules', '.cache', 'puppeteer');
-    process.env.PUPPETEER_CACHE_DIR = cacheDir;
-}
 
 // Apply stealth plugin
 puppeteerExtra.use(StealthPlugin());

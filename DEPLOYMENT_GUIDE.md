@@ -38,7 +38,8 @@ This guide will help you deploy your Linkify application to production.
    - **Start Command:** `npm start`
    
    **⚠️ Important:** 
-   - Chromium downloads automatically during `npm install` (postinstall script verifies it)
+   - Chromium downloads automatically during `npm install` (postinstall script runs `npx puppeteer browsers install chrome`)
+   - Cache directory is configured in `.puppeteerrc.cjs` to `node_modules/.cache/puppeteer`
    - First build takes 5-10 minutes due to Chromium download (~300MB)
    - **CRITICAL:** Add `PUPPETEER_SKIP_DOWNLOAD=false` to environment variables (see Step 2)
 
