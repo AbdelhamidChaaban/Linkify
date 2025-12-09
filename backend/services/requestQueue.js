@@ -28,8 +28,9 @@ class RequestQueue {
     async execute(adminId, refreshFn) {
         const identifier = adminId || 'unknown';
         
+        // CRITICAL: Atomic check-and-set to prevent race conditions
         // Check if there's already an active request for this admin
-        const activeRequest = this.activeRequests.get(identifier);
+        let activeRequest = this.activeRequests.get(identifier);
         
         if (activeRequest) {
             // Check if the request has been stuck for more than 5 minutes (300 seconds)
@@ -38,11 +39,12 @@ class RequestQueue {
             const maxAge = 5 * 60 * 1000; // 5 minutes
             
             if (requestAge > maxAge) {
-                console.log(`⚠️ Request for ${identifier} has been stuck for ${Math.round(requestAge / 1000)}s, clearing and allowing new request...`);
+                console.log(`⚠️ [Queue] Request for ${identifier} has been stuck for ${Math.round(requestAge / 1000)}s, clearing and allowing new request...`);
                 this.activeRequests.delete(identifier);
                 this.currentConcurrent = Math.max(0, this.currentConcurrent - 1);
+                activeRequest = null; // Clear so we can proceed
             } else {
-                console.log(`⏳ Request for ${identifier} is already in progress, deduplicating (${this.activeRequests.size} active, ${this.currentConcurrent}/${this.maxConcurrent} concurrent)...`);
+                console.log(`⏳ [Queue] Request for ${identifier} is already in progress, deduplicating (${this.activeRequests.size} active, ${this.currentConcurrent}/${this.maxConcurrent} concurrent)...`);
                 
                 // Return the existing promise (deduplication)
                 // This means if multiple requests come for the same admin, they all wait for the same result
@@ -51,11 +53,28 @@ class RequestQueue {
                 } catch (error) {
                     // If the original request failed, allow a retry
                     // But only if it's still the same request (not a new one)
-                    if (this.activeRequests.get(identifier) === activeRequest) {
+                    const currentRequest = this.activeRequests.get(identifier);
+                    if (currentRequest === activeRequest) {
                         throw error;
                     }
                     // Otherwise, a new request has started, return that result
-                    return await this.activeRequests.get(identifier).promise;
+                    if (currentRequest) {
+                        return await currentRequest.promise;
+                    }
+                    // If no current request, fall through to create a new one
+                }
+            }
+        }
+        
+        // Double-check after potential async operations (defensive programming)
+        if (!activeRequest) {
+            activeRequest = this.activeRequests.get(identifier);
+            if (activeRequest) {
+                console.log(`⏳ [Queue] Another request started for ${identifier} while we were waiting, deduplicating...`);
+                try {
+                    return await activeRequest.promise;
+                } catch (error) {
+                    // Fall through to create new request if this one failed
                 }
             }
         }
@@ -68,6 +87,18 @@ class RequestQueue {
             await this.waitForSlot();
         }
 
+        // CRITICAL: Final check before creating new request (prevent race condition)
+        // Another request might have started while we were waiting for a slot
+        const finalCheck = this.activeRequests.get(identifier);
+        if (finalCheck) {
+            console.log(`⏳ [Queue] Another request started for ${identifier} while waiting for slot, deduplicating...`);
+            try {
+                return await finalCheck.promise;
+            } catch (error) {
+                // Fall through if that request failed
+            }
+        }
+        
         // Create a new request promise with timeout
         const requestWrapper = {
             promise: this._executeRequest(identifier, refreshFn),
@@ -83,9 +114,21 @@ class RequestQueue {
         
         const requestPromise = Promise.race([requestWrapper.promise, timeoutPromise]);
         
-        // Store it as active
+        // CRITICAL: Atomic set - check one more time before setting (defensive)
+        const lastCheck = this.activeRequests.get(identifier);
+        if (lastCheck) {
+            console.log(`⏳ [Queue] Another request started for ${identifier} at the last moment, deduplicating...`);
+            try {
+                return await lastCheck.promise;
+            } catch (error) {
+                // Fall through if that request failed
+            }
+        }
+        
+        // Store it as active (now we're sure no other request exists)
         this.activeRequests.set(identifier, requestWrapper);
         this.currentConcurrent++;
+        console.log(`🔄 [Queue] Starting new request for ${identifier} (${this.currentConcurrent}/${this.maxConcurrent} concurrent)`);
 
         try {
             const result = await requestPromise;

@@ -288,8 +288,7 @@ async function pseudoKeepAlive(userId, currentCookies) {
         });
 
         req.on('error', (error) => {
-            const duration = Date.now() - startTime;
-            console.log(`⚠️ [Keep-Alive] ${userId}: Network error (${error.message}, ${duration}ms)`);
+            // Network errors are logged in summary by caller - no individual log here
             resolve({
                 success: false,
                 cookies: null,
@@ -300,8 +299,7 @@ async function pseudoKeepAlive(userId, currentCookies) {
 
         req.on('timeout', () => {
             req.destroy();
-            const duration = Date.now() - startTime;
-            console.log(`⚠️ [Keep-Alive] ${userId}: Request timeout (${duration}ms)`);
+            // Timeout errors are logged in summary by caller - no individual log here
             resolve({
                 success: false,
                 cookies: null,
@@ -326,7 +324,7 @@ async function refreshCookiesKeepAlive(userId) {
         const currentCookies = await getCookies(userId);
         
         if (!currentCookies || currentCookies.length === 0) {
-            console.log(`❌ [Keep-Alive] ${userId}: FAILED - No cookies found, full login required`);
+            // Only log failures - success is logged in summary by caller
             return { success: false, needsRefresh: true };
         }
 
@@ -341,21 +339,21 @@ async function refreshCookiesKeepAlive(userId) {
             // Also save to session manager
             await saveSession(userId, result.cookies, {});
             
-            console.log(`✅ [Keep-Alive] ${userId}: SUCCESS - Cookies refreshed and saved to Redis`);
+            // Success is logged in summary by caller - no individual log here
             return { success: true, needsRefresh: false };
         } else if (result.needsRefresh) {
             // 302 redirect or 401 - cookies expired
             // The caller (worker or manual refresh) will perform full login immediately
-            console.log(`❌ [Keep-Alive] ${userId}: FAILED - Cookies expired (HTTP ${result.statusCode}), needs full login`);
+            // Only log failures - success is logged in summary by caller
             return { success: false, needsRefresh: true };
         } else {
             // Keep-alive failed (timeout, network error, etc.) - may need full login
-            const errorMsg = result.error || 'Unknown error';
-            console.log(`❌ [Keep-Alive] ${userId}: FAILED - ${errorMsg}, may need full login`);
+            // Only log failures - success is logged in summary by caller
             return { success: false, needsRefresh: true };
         }
     } catch (error) {
-        console.error(`❌ [Keep-Alive] ${userId}: FAILED - Exception: ${error.message}`);
+        // Only log exceptions - other failures are logged by caller
+        console.error(`❌ [Keep-Alive] ${userId}: Exception - ${error.message}`);
         return { success: false, needsRefresh: true };
     }
 }

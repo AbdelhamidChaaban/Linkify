@@ -23,8 +23,17 @@ class InsightsManager {
         // Flags to prevent duplicate form submissions
         this.isSubmittingEditForm = false;
         this.isSubmittingAddForm = false;
+        this.currentUserId = null; // Current authenticated user ID
         
         this.init();
+    }
+    
+    // Get current user ID from Firebase auth
+    getCurrentUserId() {
+        if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+            return auth.currentUser.uid;
+        }
+        return null;
     }
     
     loadSubscribers() {
@@ -40,9 +49,15 @@ class InsightsManager {
                 this.unsubscribe();
             }
             
-            // Set up real-time listener - this will automatically update when admins are added/updated
+            // Get current user ID - CRITICAL for data isolation
+            const currentUserId = this.getCurrentUserId();
+            if (!currentUserId) {
+                throw new Error('User not authenticated. Please log in.');
+            }
+            
+            // Set up real-time listener - CRITICAL: Filter by userId to ensure each user only sees their own admins
             // Note: Compat version doesn't support third parameter (options)
-            this.unsubscribe = db.collection('admins').onSnapshot(
+            this.unsubscribe = db.collection('admins').where('userId', '==', currentUserId).onSnapshot(
                 (snapshot) => {
                     console.log('🔄 Real-time listener triggered!', {
                         docCount: snapshot.docs.length,
@@ -477,43 +492,48 @@ class InsightsManager {
                             // Look for consumption data in ServiceInformationValue structure
                             if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue) && primaryData.ServiceInformationValue.length > 0) {
                                 console.log(`🔍 [${doc.id}] Found ${primaryData.ServiceInformationValue.length} service(s) in ServiceInformationValue`);
+                                
+                                // FIRST PASS: Collect all PackageValues (prioritize this for total bundle size)
+                                // PackageValue represents the total bundle size (e.g., 77 GB) and should ALWAYS be used
+                                let packageValues = [];
+                                for (const service of primaryData.ServiceInformationValue) {
+                                    if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                        for (const details of service.ServiceDetailsInformationValue) {
+                                            if (details.PackageValue) {
+                                                const packageStr = String(details.PackageValue).trim();
+                                                const packageMatch = packageStr.match(/^([\d.]+)/);
+                                                if (packageMatch) {
+                                                    const packageValue = parseFloat(packageMatch[1]) || 0;
+                                                    if (packageValue > 0) {
+                                                        packageValues.push(packageValue);
+                                                        console.log(`🔍 [${doc.id}] Found PackageValue: ${packageValue} GB in service: ${service.ServiceNameValue || 'unknown'}`);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Use the largest PackageValue as totalLimit (should be the total bundle)
+                                if (packageValues.length > 0) {
+                                    const maxPackageValue = Math.max(...packageValues);
+                                    const adminQuota = parseFloat(data.quota || 0);
+                                    
+                                    // Always use PackageValue if it's larger than admin quota (indicates total bundle)
+                                    // OR if totalLimit hasn't been set properly yet
+                                    if (maxPackageValue > adminQuota || totalLimit === 0 || totalLimit === adminQuota || totalLimit < maxPackageValue) {
+                                        totalLimit = maxPackageValue;
+                                        console.log(`✅ [${doc.id}] Extracted totalLimit from PackageValue (max of ${packageValues.length} found): ${totalLimit} GB (admin quota: ${adminQuota} GB, packageValues: [${packageValues.join(', ')}])`);
+                                    }
+                                }
+                                
+                                // SECOND PASS: Extract consumption and other values
                                 for (const service of primaryData.ServiceInformationValue) {
                                     const serviceName = service.ServiceNameValue || 'unknown';
                                     console.log(`🔍 [${doc.id}] Processing service: ${serviceName}`);
                                     if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
                                         for (const details of service.ServiceDetailsInformationValue) {
                                             console.log(`🔍 [${doc.id}] Service details - ConsumptionValue: ${details.ConsumptionValue}, ConsumptionUnit: ${details.ConsumptionUnitValue}, PackageValue: ${details.PackageValue}, PackageUnit: ${details.PackageUnitValue}`);
-                                            // First, try to get total consumption from SecondaryValue (U-Share Total Bundle)
-                                            if (details.SecondaryValue && Array.isArray(details.SecondaryValue)) {
-                                                // Find U-Share Total Bundle
-                                                const totalBundle = details.SecondaryValue.find(secondary => {
-                                                    const bundleName = (secondary.BundleNameValue || '').toLowerCase();
-                                                    return bundleName.includes('u-share total') || 
-                                                           bundleName.includes('total bundle');
-                                                }) || details.SecondaryValue[0]; // Fallback to first
-                                                
-                                                if (totalBundle) {
-                                                    const quotaValue = totalBundle.QuotaValue || '';
-                                                    const consumptionValue = totalBundle.ConsumptionValue || details.ConsumptionValue || '';
-                                                    const consumptionUnit = totalBundle.ConsumptionUnitValue || details.ConsumptionUnitValue || '';
-                                                    
-                                                    if (quotaValue) {
-                                                        const quotaStr = String(quotaValue).trim();
-                                                        const quotaMatch = quotaStr.match(/^([\d.]+)/);
-                                                        if (quotaMatch) {
-                                                            totalLimit = parseFloat(quotaMatch[1]) || totalLimit;
-                                                        }
-                                                    }
-                                                    
-                                                    if (consumptionValue && !totalConsumption) {
-                                                        let consumption = parseFloat(consumptionValue) || 0;
-                                                        if (consumptionUnit === 'MB' && consumption > 0) {
-                                                            consumption = consumption / 1024;
-                                                        }
-                                                        totalConsumption = consumption;
-                                                    }
-                                                }
-                                            }
                                             
                                             // Extract consumption from ConsumptionValue (for services like "Mobile Internet")
                                             if (details.ConsumptionValue) {
@@ -531,46 +551,65 @@ class InsightsManager {
                                                         console.log(`✅ [${doc.id}] Extracted totalConsumption from ConsumptionValue: ${totalConsumption} GB`);
                                                     }
                                                 }
+                                            }
+                                            
+                                            // First, try to get total consumption from SecondaryValue (U-Share Total Bundle)
+                                            if (details.SecondaryValue && Array.isArray(details.SecondaryValue)) {
+                                                // Find U-Share Total Bundle
+                                                const totalBundle = details.SecondaryValue.find(secondary => {
+                                                    const bundleName = (secondary.BundleNameValue || '').toLowerCase();
+                                                    return bundleName.includes('u-share total') || 
+                                                           bundleName.includes('total bundle');
+                                                }) || details.SecondaryValue[0]; // Fallback to first
                                                 
-                                                // Extract the limit from PackageValue (for "Mobile Internet" service)
-                                                // PackageValue represents the total bundle size (e.g., 77 GB)
-                                                // This should ALWAYS be used as totalLimit when available, regardless of admin quota
-                                                if (details.PackageValue) {
-                                                    const packageStr = String(details.PackageValue).trim();
-                                                    const packageMatch = packageStr.match(/^([\d.]+)/);
-                                                    if (packageMatch) {
-                                                        const packageValue = parseFloat(packageMatch[1]) || 0;
-                                                        const adminQuota = parseFloat(data.quota || 0);
-                                                        
-                                                        // Always use PackageValue as totalLimit if it exists and is valid
-                                                        // PackageValue is the total bundle size, which is what we want for total consumption limit
-                                                        if (packageValue > 0) {
-                                                            // Always set totalLimit to PackageValue if:
-                                                            // 1. PackageValue is larger than admin quota (indicates total bundle)
-                                                            // 2. OR totalLimit is still at default (admin quota or 0)
-                                                            // 3. OR totalLimit equals admin quota (hasn't been set from API yet)
-                                                            if (packageValue > adminQuota || totalLimit === adminQuota || totalLimit === 0 || totalLimit < packageValue) {
-                                                                totalLimit = packageValue;
-                                                                console.log(`✅ [${doc.id}] Extracted totalLimit from PackageValue: ${totalLimit} GB (admin quota: ${adminQuota} GB, service: ${service.ServiceNameValue || 'unknown'}, previous totalLimit: ${totalLimit})`);
+                                                if (totalBundle) {
+                                                    const consumptionValue = totalBundle.ConsumptionValue || details.ConsumptionValue || '';
+                                                    const consumptionUnit = totalBundle.ConsumptionUnitValue || details.ConsumptionUnitValue || '';
+                                                    
+                                                    if (consumptionValue && !totalConsumption) {
+                                                        let consumption = parseFloat(consumptionValue) || 0;
+                                                        if (consumptionUnit === 'MB' && consumption > 0) {
+                                                            consumption = consumption / 1024;
+                                                        }
+                                                        totalConsumption = consumption;
+                                                    }
+                                                    
+                                                    // Only use QuotaValue from SecondaryValue if PackageValue was not found
+                                                    // (PackageValue takes priority as it represents the total bundle)
+                                                    const quotaValue = totalBundle.QuotaValue || '';
+                                                    if (quotaValue && (!totalLimit || totalLimit === data.quota || totalLimit === 0)) {
+                                                        const quotaStr = String(quotaValue).trim();
+                                                        const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                                                        if (quotaMatch) {
+                                                            const quotaVal = parseFloat(quotaMatch[1]) || 0;
+                                                            // Only use if larger than current totalLimit (indicates it's the total bundle, not a sub-bundle)
+                                                            if (quotaVal > totalLimit) {
+                                                                totalLimit = quotaVal;
+                                                                console.log(`✅ [${doc.id}] Extracted totalLimit from SecondaryValue QuotaValue (fallback): ${totalLimit} GB`);
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
                                             
-                                            // Extract total limit from QuotaValue (for U-Share services)
-                                            if (details.QuotaValue && (!totalLimit || totalLimit === data.quota)) {
+                                            // Extract total limit from QuotaValue (for U-Share services) - ONLY as fallback if PackageValue not found
+                                            if (details.QuotaValue && (!totalLimit || totalLimit === data.quota || totalLimit === 0)) {
                                                 const quotaStr = String(details.QuotaValue).trim();
                                                 const quotaMatch = quotaStr.match(/^([\d.]+)/);
                                                 if (quotaMatch) {
-                                                    totalLimit = parseFloat(quotaMatch[1]) || totalLimit;
+                                                    const quotaVal = parseFloat(quotaMatch[1]) || 0;
+                                                    // Only use if larger than current totalLimit (indicates it's the total bundle, not a sub-bundle)
+                                                    if (quotaVal > totalLimit) {
+                                                        totalLimit = quotaVal;
+                                                        console.log(`✅ [${doc.id}] Extracted totalLimit from QuotaValue (fallback): ${totalLimit} GB`);
+                                                    }
                                                 }
                                             }
                                             
                                             // If we found both, break
-                                            if (totalConsumption > 0 && totalLimit > 0) break;
+                                            if (totalConsumption > 0 && totalLimit > 0 && totalLimit > (data.quota || 0)) break;
                                         }
-                                        if (totalConsumption > 0 && totalLimit > 0) break;
+                                        if (totalConsumption > 0 && totalLimit > 0 && totalLimit > (data.quota || 0)) break;
                                     }
                                 }
                             }
@@ -918,6 +957,7 @@ class InsightsManager {
                 // Get pending subscribers count from Firebase (for backward compatibility - only use if Ushare HTML not available)
                 const pendingSubscribers = data.pendingSubscribers || [];
                 const removedSubscribers = data.removedSubscribers || [];
+                const removedActiveSubscribers = data.removedActiveSubscribers || [];
                 
                 // Filter out removed pending subscribers from the count
                 const activePendingSubscribers = pendingSubscribers.filter(pending => {
@@ -1030,6 +1070,7 @@ class InsightsManager {
                 
                 return {
                     id: doc.id,
+                    userId: data.userId || null, // CRITICAL: Include userId for ownership validation
                     name: data.name || 'Unknown',
                     phone: data.phone || '',
                     type: type,
@@ -1043,7 +1084,8 @@ class InsightsManager {
                     subscribersRequestedCount: requestedCount,
                     pendingSubscribers: activePendingSubscribers, // Store active pending subscribers (excluding removed)
                     pendingCount: pendingCount, // Store pending count (excluding removed) - for backward compatibility
-                    removedSubscribers: removedSubscribers, // Store removed subscribers array
+                    removedSubscribers: removedSubscribers, // Store removed subscribers array (for backward compatibility)
+                    removedActiveSubscribers: data.removedActiveSubscribers || [], // Store removed Active subscribers with full data
                     adminConsumption: adminConsumption,
                     adminLimit: adminLimit || 1, // Always keep adminLimit (not affected by expiration)
                     balance: balance,
@@ -1165,8 +1207,10 @@ class InsightsManager {
         // Start periodic cleanup of stale manual updates (every 30 seconds)
         this.startCacheCleanup();
         
-        // Wait for Firebase to be ready
-        this.waitForFirebase().then(() => {
+        // Wait for Firebase Auth and Firestore to be ready
+        this.waitForAuth().then(() => {
+            return this.waitForFirebase();
+        }).then(() => {
             this.loadSubscribers();
         }).catch(error => {
             console.error('Firebase initialization error:', error);
@@ -1209,6 +1253,39 @@ class InsightsManager {
         
         // Clear the cache
         this.recentManualUpdates.clear();
+    }
+    
+    async waitForAuth() {
+        // Wait for Firebase auth to be available and user to be authenticated
+        let attempts = 0;
+        while (attempts < 50) {
+            if (typeof auth !== 'undefined' && auth) {
+                // Wait for auth state to be ready
+                return new Promise((resolve, reject) => {
+                    const unsubscribe = auth.onAuthStateChanged((user) => {
+                        unsubscribe(); // Stop listening after first state change
+                        if (user && user.uid) {
+                            this.currentUserId = user.uid;
+                            console.log('✅ User authenticated:', user.uid);
+                            resolve();
+                        } else {
+                            reject(new Error('User not authenticated. Please log in.'));
+                        }
+                    });
+                    
+                    // If user is already logged in, resolve immediately
+                    if (auth.currentUser && auth.currentUser.uid) {
+                        this.currentUserId = auth.currentUser.uid;
+                        console.log('✅ User already authenticated:', auth.currentUser.uid);
+                        unsubscribe();
+                        resolve();
+                    }
+                });
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+        throw new Error('Firebase auth timeout - user not authenticated');
     }
     
     async waitForFirebase() {
@@ -1451,9 +1528,54 @@ class InsightsManager {
                 }
             }
             
-            // Available Services filter (placeholder logic)
+            // Available Services filter - same logic as home page
             if (this.filters.availableServices) {
-                // Add your logic here
+                // TERM 1 & 2: Admin must have less than 3 total subscribers (active + removed "Out" subscribers)
+                // Count active subscribers
+                const activeSubscribersCount = sub.subscribersActiveCount || 0;
+                
+                // Count "Out" subscribers (removedActiveSubscribers) - these are counted in Alfa website logic
+                const removedActiveSubscribers = sub.removedActiveSubscribers || [];
+                const removedSubscribersCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
+                
+                // Total subscribers count (active + removed) must be < 3
+                // If admin has 2 active + 1 removed = 3 total, they should NOT be displayed
+                const totalSubscribersCount = activeSubscribersCount + removedSubscribersCount;
+                if (totalSubscribersCount >= 3) {
+                    return false; // Exclude this admin
+                }
+
+                // TERM 3: Admin must have minimum 20 days before validity date
+                const validityDateStr = sub.validityDate || '';
+                
+                // Helper function to parse DD/MM/YYYY date
+                const parseDDMMYYYY = (dateStr) => {
+                    if (!dateStr || dateStr === 'N/A' || dateStr.trim() === '') return null;
+                    const parts = String(dateStr).trim().split('/');
+                    if (parts.length !== 3) return null;
+                    const day = parseInt(parts[0], 10);
+                    const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+                    const year = parseInt(parts[2], 10);
+                    if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+                    return new Date(year, month, day);
+                };
+
+                // Helper function to calculate days until validity date
+                const daysUntilValidity = (dateStr) => {
+                    const validityDate = parseDDMMYYYY(dateStr);
+                    if (!validityDate) return null;
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0); // Set to start of day
+                    validityDate.setHours(0, 0, 0, 0);
+                    const diffTime = validityDate.getTime() - today.getTime();
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    return diffDays;
+                };
+
+                const daysUntil = daysUntilValidity(validityDateStr);
+                if (daysUntil === null || daysUntil < 20) {
+                    return false; // Exclude if validity date is invalid or less than 20 days away
+                }
             }
             
             return true;
@@ -1667,6 +1789,53 @@ class InsightsManager {
         console.log(`🔍 renderRow [${subscriber.id}]: subscriber.totalLimit=${subscriber.totalLimit}, subscriber.totalConsumption=${subscriber.totalConsumption}, initial totalLimit=${totalLimit}`);
         
         let adminConsumption = subscriber.adminConsumption || 0;
+        
+        // CRITICAL FIX: If adminConsumption is 0 but alfaData.adminConsumption exists, extract from it
+        // This ensures the table shows the same value as View Details (which uses alfaData.adminConsumption)
+        if (adminConsumption === 0 && subscriber.alfaData && subscriber.alfaData.adminConsumption) {
+            try {
+                const adminConsumptionValue = subscriber.alfaData.adminConsumption;
+                
+                if (typeof adminConsumptionValue === 'number') {
+                    adminConsumption = adminConsumptionValue;
+                    console.log(`✅ renderRow [${subscriber.id}]: Extracted adminConsumption from alfaData.adminConsumption (number): ${adminConsumption} GB`);
+                } else if (typeof adminConsumptionValue === 'string') {
+                    const adminConsumptionStr = adminConsumptionValue.trim();
+                    // Parse formats: "17.11 / 15 GB" or "17.11 GB" or just "17.11"
+                    const matchWithLimit = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
+                    const matchWithoutLimit = adminConsumptionStr.match(/^([\d.]+)\s*(GB|MB)/i);
+                    const matchNumber = adminConsumptionStr.match(/^([\d.]+)/);
+                    
+                    if (matchWithLimit) {
+                        adminConsumption = parseFloat(matchWithLimit[1]) || 0;
+                        // Convert MB to GB if needed
+                        if (matchWithLimit[2].toUpperCase() === 'MB') {
+                            adminConsumption = adminConsumption / 1024;
+                        }
+                        console.log(`✅ renderRow [${subscriber.id}]: Extracted adminConsumption from alfaData.adminConsumption (string with limit): ${adminConsumption} GB`);
+                    } else if (matchWithoutLimit) {
+                        adminConsumption = parseFloat(matchWithoutLimit[1]) || 0;
+                        // Convert MB to GB if needed
+                        if (matchWithoutLimit[2].toUpperCase() === 'MB') {
+                            adminConsumption = adminConsumption / 1024;
+                        }
+                        console.log(`✅ renderRow [${subscriber.id}]: Extracted adminConsumption from alfaData.adminConsumption (string without limit): ${adminConsumption} GB`);
+                    } else if (matchNumber) {
+                        adminConsumption = parseFloat(matchNumber[1]) || 0;
+                        // If value is large (>100), assume MB and convert
+                        if (adminConsumption > 100) {
+                            adminConsumption = adminConsumption / 1024;
+                            console.log(`✅ renderRow [${subscriber.id}]: Extracted adminConsumption from alfaData.adminConsumption (large number, assumed MB): ${adminConsumption} GB`);
+                        } else {
+                            console.log(`✅ renderRow [${subscriber.id}]: Extracted adminConsumption from alfaData.adminConsumption (number): ${adminConsumption} GB`);
+                        }
+                    }
+                }
+            } catch (parseError) {
+                console.warn(`⚠️ Error parsing alfaData.adminConsumption for ${subscriber.id}:`, parseError);
+            }
+        }
+        
         // Admin limit should always be the quota set when creating the admin (not from API)
         // Use subscriber.quota as the source of truth for admin limit
         // Parse quota if it's a string (e.g., "15 GB" or "15")
@@ -1691,26 +1860,33 @@ class InsightsManager {
             try {
                 const primaryData = subscriber.alfaData.primaryData;
                 if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue)) {
+                    // FIRST: Collect all PackageValues and use the largest one (total bundle)
+                    let packageValues = [];
                     for (const service of primaryData.ServiceInformationValue) {
                         if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
                             for (const details of service.ServiceDetailsInformationValue) {
-                                // Extract from PackageValue (for "Mobile Internet" service)
                                 if (details.PackageValue) {
                                     const packageStr = String(details.PackageValue).trim();
                                     const packageMatch = packageStr.match(/^([\d.]+)/);
                                     if (packageMatch) {
                                         const packageValue = parseFloat(packageMatch[1]) || 0;
-                                        // Always use PackageValue if it's larger than adminLimit (indicates total bundle)
-                                        if (packageValue > 0 && packageValue > adminLimit) {
-                                            const oldTotalLimit = totalLimit;
-                                            totalLimit = packageValue;
-                                            console.log(`✅ renderRow [${subscriber.id}]: Extracted totalLimit from PackageValue: ${totalLimit} GB (adminLimit: ${adminLimit} GB, was: ${oldTotalLimit}, totalConsumption: ${totalConsumption})`);
-                                            break;
+                                        if (packageValue > 0) {
+                                            packageValues.push(packageValue);
                                         }
                                     }
                                 }
                             }
-                            if (totalLimit > adminLimit) break;
+                        }
+                    }
+                    
+                    // Use the largest PackageValue as totalLimit (should be the total bundle)
+                    if (packageValues.length > 0) {
+                        const maxPackageValue = Math.max(...packageValues);
+                        // Always use PackageValue if it's larger than adminLimit or current totalLimit
+                        if (maxPackageValue > adminLimit && maxPackageValue > totalLimit) {
+                            const oldTotalLimit = totalLimit;
+                            totalLimit = maxPackageValue;
+                            console.log(`✅ renderRow [${subscriber.id}]: Extracted totalLimit from PackageValue (max of ${packageValues.length} found): ${totalLimit} GB (adminLimit: ${adminLimit} GB, was: ${oldTotalLimit}, packageValues: [${packageValues.join(', ')}])`);
                         }
                     }
                 }
@@ -1832,8 +2008,11 @@ class InsightsManager {
         let displayTotalConsumption = safeTotalConsumption;
         let displayTotalLimit = safeTotalLimit; // Always use the correct totalLimit (from PackageValue, e.g., 77 GB)
         
-        const displayAdminConsumption = bundleIsFullyUsed ? 0 : safeAdminConsumption;
-        const adminPercent = bundleIsFullyUsed ? 0 : (safeAdminLimit > 0 ? (safeAdminConsumption / safeAdminLimit) * 100 : 0);
+        // CRITICAL FIX: Always show admin consumption, even when bundle is fully used
+        // The admin consumption value is independent of whether the bundle is fully used
+        // View Details shows it correctly, so the table should too
+        const displayAdminConsumption = safeAdminConsumption;
+        const adminPercent = safeAdminLimit > 0 ? (safeAdminConsumption / safeAdminLimit) * 100 : 0;
         
         // Calculate total percent for progress bar
         const displayTotalPercent = displayTotalLimit > 0 ? (displayTotalConsumption / displayTotalLimit) * 100 : 0;
@@ -1848,14 +2027,17 @@ class InsightsManager {
             progressClass += ' warning';
         }
         
+        // Admin progress bar color: red if admin quota is reached, regardless of bundle status
         let adminProgressClass = 'progress-fill';
-        if (bundleIsFullyUsed) {
-            // When bundle is fully used, admin consumption should show 0% (no error class needed)
-            adminProgressClass = 'progress-fill';
-        } else {
-            if (adminPercent >= 100) adminProgressClass += ' error';
-            else if (adminPercent >= 90) adminProgressClass += ' error';
-            else if (adminPercent >= 70) adminProgressClass += ' warning';
+        if (isAdminFull || adminPercent >= 100) {
+            // Admin has used their full quota - show red
+            adminProgressClass += ' error';
+        } else if (adminPercent >= 90) {
+            // Admin is at 90%+ of quota - show red as warning
+            adminProgressClass += ' error';
+        } else if (adminPercent >= 70) {
+            // Admin is at 70%+ of quota - show yellow warning
+            adminProgressClass += ' warning';
         }
         
         const isSelected = this.selectedRows.has(subscriber.id);
@@ -2040,7 +2222,8 @@ class InsightsManager {
             adminLimit: adminLimit, // Use quota, not API limit
             subscribers: [],
             pendingSubscribers: [], // Will be set conditionally - only if Ushare HTML data not available
-            removedSubscribers: subscriber.removedSubscribers || [], // Include removed subscribers
+            removedSubscribers: subscriber.removedSubscribers || [], // Include removed subscribers (for backward compatibility)
+            removedActiveSubscribers: subscriber.removedActiveSubscribers || [], // Include removed Active subscribers with full data
             totalConsumption: subscriber.totalConsumption || 0, // Use exactly what the table shows
             totalLimit: subscriber.totalLimit || 0, // Use exactly what the table shows
             hasUshareHtmlData: false // Flag to track if Ushare HTML data was used
@@ -2390,7 +2573,7 @@ class InsightsManager {
         
         // Subscriber rows (confirmed subscribers from API)
         data.subscribers.forEach(sub => {
-            // Check if this subscriber was removed
+            // Check if this subscriber was removed (Active subscriber that was removed)
             const isRemoved = (data.removedSubscribers || []).includes(sub.phoneNumber);
             
             // Format phone number for WhatsApp (add 961 prefix if needed)
@@ -2400,13 +2583,13 @@ class InsightsManager {
             const uniqueId = `copy-btn-${sub.phoneNumber.replace(/\s/g, '-')}`;
             
             if (isRemoved) {
-                // Show removed subscriber as "Out" in red with hashed styling
+                // Show removed Active subscriber as "Out" in red with hashed styling
                 rows += `
                     <tr style="opacity: 0.5; text-decoration: line-through;">
                         <td>
                             <div style="display: flex; align-items: center; gap: 0.5rem;">
                                 <img src="/assets/wlogo.png" alt="WhatsApp" style="width: 18px; height: 18px; object-fit: contain;" />
-                                <span>${sub.phoneNumber}</span>
+                                <span style="color: #ef4444;">${sub.phoneNumber}</span>
                                 <span style="color: #ef4444; font-weight: bold;">Out</span>
                                 <button onclick="navigator.clipboard.writeText('${sub.phoneNumber}').then(() => { const btn = document.getElementById('${uniqueId}'); if (btn) { const img = btn.querySelector('img'); if (img) { img.style.opacity = '0.5'; setTimeout(() => { img.style.opacity = '1'; }, 2000); } } })" id="${uniqueId}" style="background: rgba(100, 116, 139, 0.1); border: none; padding: 0.375rem; border-radius: 50%; cursor: pointer; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; margin-left: 0.5rem; transition: all 0.2s ease;" title="Copy phone number" onmouseover="this.style.background='rgba(100, 116, 139, 0.2)'" onmouseout="this.style.background='rgba(100, 116, 139, 0.1)'"><img src="/assets/copy.png" alt="Copy" style="width: 16px; height: 16px; object-fit: contain; transition: opacity 0.2s ease;" /></button>
                             </div>
@@ -2457,6 +2640,46 @@ class InsightsManager {
                 `;
             }
         });
+        
+        // Removed Active subscribers (no longer in ushare HTML but should still be displayed as "Out")
+        // These are Active subscribers that were removed - they should appear with red color and "Out" label
+        const removedActiveSubscribers = data.removedActiveSubscribers || [];
+        if (removedActiveSubscribers.length > 0) {
+            removedActiveSubscribers.forEach(removedSub => {
+                // Check if this removed subscriber is already in data.subscribers (shouldn't happen, but check anyway)
+                const isAlreadyShown = data.subscribers.some(sub => {
+                    const subPhone = String(sub.phoneNumber || '').trim();
+                    const removedPhone = String(removedSub.phoneNumber || '').trim();
+                    return subPhone === removedPhone;
+                });
+                
+                // Only show if not already displayed in subscribers list
+                if (!isAlreadyShown) {
+                    const fullPhoneNumber = removedSub.fullPhoneNumber || removedSub.phoneNumber;
+                    const whatsappNumber = fullPhoneNumber.startsWith('961') ? fullPhoneNumber : `961${fullPhoneNumber}`;
+                    const uniqueId = `copy-btn-removed-${removedSub.phoneNumber.replace(/\s/g, '-')}`;
+                    
+                    // Show removed Active subscriber as "Out" in red with hashed styling
+                    rows += `
+                        <tr style="opacity: 0.5; text-decoration: line-through;">
+                            <td>
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <img src="/assets/wlogo.png" alt="WhatsApp" style="width: 18px; height: 18px; object-fit: contain;" />
+                                    <span style="color: #ef4444;">${removedSub.phoneNumber}</span>
+                                    <span style="color: #ef4444; font-weight: bold;">Out</span>
+                                    <button onclick="navigator.clipboard.writeText('${removedSub.phoneNumber}').then(() => { const btn = document.getElementById('${uniqueId}'); if (btn) { const img = btn.querySelector('img'); if (img) { img.style.opacity = '0.5'; setTimeout(() => { img.style.opacity = '1'; }, 2000); } } })" id="${uniqueId}" style="background: rgba(100, 116, 139, 0.1); border: none; padding: 0.375rem; border-radius: 50%; cursor: pointer; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; margin-left: 0.5rem; transition: all 0.2s ease;" title="Copy phone number" onmouseover="this.style.background='rgba(100, 116, 139, 0.2)'" onmouseout="this.style.background='rgba(100, 116, 139, 0.1)'"><img src="/assets/copy.png" alt="Copy" style="width: 16px; height: 16px; object-fit: contain; transition: opacity 0.2s ease;" /></button>
+                                </div>
+                            </td>
+                            <td>
+                                <div style="padding: 0.5rem 0; color: #64748b;">
+                                    ${(removedSub.consumption || 0).toFixed(2)} / ${removedSub.limit || 0} GB
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }
+            });
+        }
         
         // Pending subscriber rows (not yet accepted)
         // CRITICAL: Show pending subscribers that are NOT in Ushare HTML data
@@ -2776,19 +2999,32 @@ class InsightsManager {
     }
     
     async refreshSubscriber(id) {
+        // CRITICAL: Verify ownership before refreshing
+        const currentUserId = this.getCurrentUserId();
+        if (!currentUserId) {
+            alert('Error: You must be logged in to refresh admins.');
+            return;
+        }
+        
+        // Find the subscriber in our data
+        const subscriber = this.subscribers.find(s => s.id === id);
+        if (!subscriber) {
+            console.error('Subscriber not found:', id);
+            return;
+        }
+        
+        // CRITICAL: Verify ownership
+        if (subscriber.userId && subscriber.userId !== currentUserId) {
+            alert('Error: You do not have permission to refresh this admin.');
+            return;
+        }
+        
         // Capture the refresh timestamp when user initiates the refresh (client-side time)
         const refreshInitiatedAt = Date.now();
         console.log('🔄 Refresh initiated at:', new Date(refreshInitiatedAt).toLocaleString(), 'timestamp:', refreshInitiatedAt);
         
         try {
             console.log('Refreshing subscriber:', id);
-            
-            // Find the subscriber in our data
-            const subscriber = this.subscribers.find(s => s.id === id);
-            if (!subscriber) {
-                console.error('Subscriber not found:', id);
-                return;
-            }
             
             // Get admin data from Firestore to get phone and password
             // Use subscriber phone if available, but we need password from Firestore
@@ -3040,7 +3276,26 @@ class InsightsManager {
                     alfaDataKeys: Object.keys(alfaData || {})
                 });
                 
+                // CRITICAL: Ensure userId is preserved when updating (not overwritten)
+                // Get current document to preserve userId
+                const currentUserId = this.getCurrentUserId();
+                let currentDocData = {};
+                try {
+                    const currentDoc = await db.collection('admins').doc(id).get();
+                    if (currentDoc.exists()) {
+                        currentDocData = currentDoc.data();
+                        // Verify ownership one more time
+                        if (currentDocData.userId && currentDocData.userId !== currentUserId) {
+                            throw new Error('Permission denied: Admin does not belong to current user');
+                        }
+                    }
+                } catch (docError) {
+                    console.warn('⚠️ Could not verify ownership before update:', docError.message);
+                    // Continue anyway - merge: true will preserve existing userId
+                }
+                
                 await db.collection('admins').doc(id).set({
+                    userId: currentDocData.userId || currentUserId, // Preserve existing userId or use current
                     alfaData: alfaData,
                     alfaDataFetchedAt: firebase.firestore.FieldValue.serverTimestamp(),
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),

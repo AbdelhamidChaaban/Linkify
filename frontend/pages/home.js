@@ -4,26 +4,95 @@ class HomeManager {
         this.admins = [];
         this.unsubscribe = null;
         this.periodicRefreshInterval = null;
-        this.initCardListeners();
-        this.initRealTimeListener();
+        this.currentUserId = null; // Current authenticated user ID
         
-        // Also force a fresh fetch on initialization to ensure we have latest data
-        this.forceRefresh();
-        
-        // Refresh when page becomes visible (user switches back to tab)
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) {
-                console.log('👁️ [Home] Page became visible, refreshing data...');
-                this.forceRefresh();
-            }
-        });
-
-        // Set up periodic refresh every 30 seconds to ensure we're always in sync
-        // This acts as a safety net in case the real-time listener misses something
-        this.periodicRefreshInterval = setInterval(() => {
-            console.log('⏰ [Home] Periodic refresh triggered');
+        // Initialize after auth is ready
+        this.init();
+    }
+    
+    async init() {
+        // Wait for Firebase auth to be ready and user to be authenticated
+        try {
+            await this.waitForAuth();
+            await this.waitForFirebase();
+            
+            // Now initialize listeners and refresh
+            this.initCardListeners();
+            this.initRealTimeListener();
+            
+            // Also force a fresh fetch on initialization to ensure we have latest data
             this.forceRefresh();
-        }, 30000); // 30 seconds
+            
+            // Refresh when page becomes visible (user switches back to tab)
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                    console.log('👁️ [Home] Page became visible, refreshing data...');
+                    this.forceRefresh();
+                }
+            });
+
+            // Set up periodic refresh every 30 seconds to ensure we're always in sync
+            // This acts as a safety net in case the real-time listener misses something
+            this.periodicRefreshInterval = setInterval(() => {
+                console.log('⏰ [Home] Periodic refresh triggered');
+                this.forceRefresh();
+            }, 30000); // 30 seconds
+        } catch (error) {
+            console.error('❌ [Home] Initialization error:', error);
+        }
+    }
+    
+    async waitForAuth() {
+        // Wait for Firebase auth to be available and user to be authenticated
+        let attempts = 0;
+        while (attempts < 50) {
+            if (typeof auth !== 'undefined' && auth) {
+                // Wait for auth state to be ready
+                return new Promise((resolve, reject) => {
+                    const unsubscribe = auth.onAuthStateChanged((user) => {
+                        unsubscribe(); // Stop listening after first state change
+                        if (user && user.uid) {
+                            this.currentUserId = user.uid;
+                            console.log('✅ [Home] User authenticated:', user.uid);
+                            resolve();
+                        } else {
+                            reject(new Error('User not authenticated. Please log in.'));
+                        }
+                    });
+                    
+                    // If user is already logged in, resolve immediately
+                    if (auth.currentUser && auth.currentUser.uid) {
+                        this.currentUserId = auth.currentUser.uid;
+                        console.log('✅ [Home] User already authenticated:', auth.currentUser.uid);
+                        unsubscribe();
+                        resolve();
+                    }
+                });
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+        throw new Error('Firebase auth timeout - user not authenticated');
+    }
+    
+    async waitForFirebase() {
+        // Wait for db to be available
+        let attempts = 0;
+        while (typeof db === 'undefined' && attempts < 50) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            attempts++;
+        }
+        if (typeof db === 'undefined') {
+            throw new Error('Firebase Firestore (db) is not initialized');
+        }
+    }
+
+    // Get current user ID from Firebase auth
+    getCurrentUserId() {
+        if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+            return auth.currentUser.uid;
+        }
+        return null;
     }
 
     async forceRefresh() {
@@ -34,9 +103,17 @@ class HomeManager {
         }
 
         try {
+            // Get current user ID - CRITICAL for data isolation
+            const currentUserId = this.getCurrentUserId();
+            if (!currentUserId) {
+                console.warn('⚠️ [Home] No authenticated user found. Cannot refresh data.');
+                return;
+            }
+            
             console.log('🔄 [Home] Force refreshing data from server...');
+            // CRITICAL: Filter admins by userId to ensure each user only sees their own admins
             // Note: Compat version may not support source option, but get() should still work
-            const snapshot = await db.collection('admins').get();
+            const snapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
             
             // Update admins array from fresh server data
             const previousCount = this.admins.length;
@@ -89,9 +166,16 @@ class HomeManager {
             return;
         }
 
-        // Set up real-time listener for admins collection
+        // Get current user ID - CRITICAL for data isolation
+        const currentUserId = this.getCurrentUserId();
+        if (!currentUserId) {
+            console.error('⚠️ [Home] No authenticated user found. Real-time updates disabled.');
+            return;
+        }
+        
+        // Set up real-time listener for admins collection - CRITICAL: Filter by userId
         // Note: Compat version doesn't support includeMetadataChanges option
-        this.unsubscribe = db.collection('admins').onSnapshot(
+        this.unsubscribe = db.collection('admins').where('userId', '==', currentUserId).onSnapshot(
             (snapshot) => {
                 // Check if this is from cache (offline mode)
                 const source = snapshot.metadata && snapshot.metadata.fromCache ? 'cache' : 'server';
@@ -434,7 +518,12 @@ class HomeManager {
                 if (typeof db === 'undefined') {
                     throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
                 }
-                const firebaseSnapshot = await db.collection('admins').get();
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
                 snapshot = firebaseSnapshot;
             }
             
@@ -469,7 +558,12 @@ class HomeManager {
                 if (typeof db === 'undefined') {
                     throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
                 }
-                const firebaseSnapshot = await db.collection('admins').get();
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
                 snapshot = firebaseSnapshot;
             }
             
@@ -489,9 +583,9 @@ class HomeManager {
     filterAvailableServices(snapshot) {
         const availableServices = [];
         
-        // Get today's date in DD/MM/YYYY format
+        // Get today's date
         const today = new Date();
-        const todayFormatted = this.formatDateDDMMYYYY(today);
+        today.setHours(0, 0, 0, 0); // Set to start of day for accurate day calculation
         
         // First, get all admins that would appear in other cards to exclude them
         const excludedIds = new Set();
@@ -546,6 +640,7 @@ class HomeManager {
             }
             
             // Check if admin is in "Services To Expire Today"
+            const todayFormatted = this.formatDateDDMMYYYY(today);
             let validityDate = '';
             if (alfaData.validityDate) {
                 validityDate = alfaData.validityDate;
@@ -564,6 +659,28 @@ class HomeManager {
             }
         });
 
+        // Helper function to parse DD/MM/YYYY date
+        const parseDDMMYYYY = (dateStr) => {
+            if (!dateStr || dateStr === 'N/A') return null;
+            const parts = String(dateStr).trim().split('/');
+            if (parts.length !== 3) return null;
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+            const year = parseInt(parts[2], 10);
+            if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+            return new Date(year, month, day);
+        };
+
+        // Helper function to calculate days until validity date
+        const daysUntilValidity = (validityDateStr) => {
+            const validityDate = parseDDMMYYYY(validityDateStr);
+            if (!validityDate) return null;
+            validityDate.setHours(0, 0, 0, 0);
+            const diffTime = validityDate.getTime() - today.getTime();
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            return diffDays;
+        };
+
         // Now filter for Available Services, excluding those in other cards
         snapshot.docs.forEach(doc => {
             // Skip if this admin is in Finished Services or Services To Expire Today
@@ -579,59 +696,64 @@ class HomeManager {
                 return;
             }
 
-            // Parse total consumption
+            // TERM 1: Admin must have less than 3 subscribers
+            // Count active subscribers (secondarySubscribers)
+            const activeSubscribers = alfaData.secondarySubscribers || [];
+            const activeSubscribersCount = Array.isArray(activeSubscribers) ? activeSubscribers.length : 0;
+            
+            // TERM 2: Count "Out" subscribers (removedActiveSubscribers) - these are counted in Alfa website logic
+            const removedActiveSubscribers = data.removedActiveSubscribers || [];
+            const removedSubscribersCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
+            
+            // Total subscribers count (active + removed) must be < 3
+            // If admin has 2 active + 1 removed = 3 total, they should NOT be displayed
+            const totalSubscribersCount = activeSubscribersCount + removedSubscribersCount;
+            if (totalSubscribersCount >= 3) {
+                return; // Skip this admin
+            }
+
+            // TERM 3: Admin must have minimum 20 days before validity date
+            let validityDateStr = '';
+            if (alfaData.validityDate) {
+                validityDateStr = alfaData.validityDate;
+            } else {
+                // Fallback: calculate from createdAt + 30 days
+                let createdAt = new Date();
+                if (data.createdAt) {
+                    createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
+                }
+                validityDateStr = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+            }
+
+            const daysUntil = daysUntilValidity(validityDateStr);
+            if (daysUntil === null || daysUntil < 20) {
+                return; // Skip if validity date is invalid or less than 20 days away
+            }
+
+            // All terms passed - add to available services
+            // Parse total consumption for display
             let totalConsumption = 0;
             let totalLimit = data.quota || 0;
-
             if (alfaData.totalConsumption) {
                 const parsed = this.parseConsumption(alfaData.totalConsumption);
                 totalConsumption = parsed.used;
                 totalLimit = parsed.total || totalLimit;
             }
 
-            // Calculate usage percentage
-            const usagePercent = totalLimit > 0 ? (totalConsumption / totalLimit) * 100 : 0;
+            // Calculate free space
+            const freeSpace = Math.max(0, totalLimit - totalConsumption);
 
-            // Filter: only show admins with less than 5% usage
-            if (usagePercent < 5) {
-                // Get admin consumption
-                let adminConsumption = 0;
-                if (alfaData.adminConsumption) {
-                    const adminConsumptionStr = String(alfaData.adminConsumption).trim();
-                    const match = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
-                    if (match) {
-                        adminConsumption = parseFloat(match[1]) || 0;
-                    }
-                }
-
-                // Calculate free space: totalLimit - totalConsumption
-                // Note: totalConsumption already includes admin consumption, so we don't subtract it again
-                const freeSpace = Math.max(0, totalLimit - totalConsumption);
-
-                // Get validity date
-                let validityDate = 'N/A';
-                if (alfaData.validityDate) {
-                    validityDate = alfaData.validityDate;
-                }
-
-                // Get subscribers count
-                let subscribersCount = 0;
-                if (alfaData.secondarySubscribers && Array.isArray(alfaData.secondarySubscribers)) {
-                    subscribersCount = alfaData.secondarySubscribers.length;
-                }
-
-                availableServices.push({
-                    id: doc.id,
-                    name: data.name || 'N/A',
-                    phone: data.phone || 'N/A',
-                    usage: totalConsumption,
-                    usageLimit: totalLimit,
-                    subscribersCount: subscribersCount,
-                    freeSpace: freeSpace,
-                    validityDate: validityDate,
-                    alfaData: alfaData
-                });
-            }
+            availableServices.push({
+                id: doc.id,
+                name: data.name || 'N/A',
+                phone: data.phone || 'N/A',
+                usage: totalConsumption,
+                usageLimit: totalLimit,
+                subscribersCount: activeSubscribersCount, // Show only active subscribers count
+                freeSpace: freeSpace,
+                validityDate: validityDateStr,
+                alfaData: alfaData
+            });
         });
 
         return availableServices;
@@ -1149,7 +1271,12 @@ class HomeManager {
                 if (typeof db === 'undefined') {
                     throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
                 }
-                const firebaseSnapshot = await db.collection('admins').get();
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
                 snapshot = firebaseSnapshot;
             }
             
@@ -1509,7 +1636,12 @@ class HomeManager {
                 if (typeof db === 'undefined') {
                     throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
                 }
-                const firebaseSnapshot = await db.collection('admins').get();
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
                 snapshot = firebaseSnapshot;
             }
             
@@ -1705,7 +1837,12 @@ class HomeManager {
                 if (typeof db === 'undefined') {
                     throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
                 }
-                const firebaseSnapshot = await db.collection('admins').get();
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
                 snapshot = firebaseSnapshot;
             }
             
@@ -1848,7 +1985,12 @@ class HomeManager {
                 if (typeof db === 'undefined') {
                     throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
                 }
-                const firebaseSnapshot = await db.collection('admins').get();
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
                 snapshot = firebaseSnapshot;
             }
             
@@ -2243,8 +2385,14 @@ class HomeManager {
                 throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
             }
 
+            // CRITICAL: Filter by userId for data isolation
+            const currentUserId = this.getCurrentUserId();
+            if (!currentUserId) {
+                throw new Error('User not authenticated. Please log in.');
+            }
+
             console.log('🔄 [Home] Fetching fresh data for inactive numbers modal...');
-            const firebaseSnapshot = await db.collection('admins').get();
+            const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
             
             // Update this.admins with fresh data
             const previousCount = this.admins.length;

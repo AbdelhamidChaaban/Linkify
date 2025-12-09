@@ -279,30 +279,230 @@ async function loginToAlfa(page, phone, password, adminId) {
             await page.type('#Username', cleanPhone);
             await page.type('#Password', password);
 
-            // ✅ Automatically click the Sign In button - EXACTLY like goToCaptchaStealth.txt
-            await page.click('button[type="submit"]');
-
-            console.log('⏸️ Login submitted. Waiting for login to complete...');
+            // Set up error listeners BEFORE clicking submit
+            let navigationError = null;
+            let pageError = null;
             
-            // Wait for navigation after login (either dashboard or still on login if CAPTCHA) - EXACTLY like goToCaptchaStealth.txt
-            try {
-                await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
-            } catch (navError) {
-                console.log('⚠️ Navigation wait timed out, checking page state...');
+            const errorHandler = (error) => {
+                console.log(`⚠️ Page error detected: ${error.message}`);
+                pageError = error;
+            };
+            
+            const requestFailedHandler = (request) => {
+                const url = request.url();
+                // Ignore analytics, ads, tracking, and other non-critical requests
+                if (url.includes('google-analytics') || 
+                    url.includes('googleads') || 
+                    url.includes('doubleclick') || 
+                    url.includes('analytics') ||
+                    url.includes('facebook') ||
+                    url.includes('googletagmanager') ||
+                    url.includes('.jpg') || url.includes('.png') || url.includes('.gif') ||
+                    url.includes('.css') || url.includes('.js') && !url.includes('alfa.com.lb')) {
+                    return; // Ignore these requests - they're not critical for login
+                }
+                
+                // Only care about actual login/account page requests
+                if (url.includes('alfa.com.lb') && (url.includes('/login') || url.includes('/account'))) {
+                    const failure = request.failure();
+                    if (failure && failure.errorText !== 'net::ERR_ABORTED') { // ERR_ABORTED is often intentional (cancelled requests)
+                        console.log(`⚠️ Critical request failed: ${url} - ${failure.errorText}`);
+                        navigationError = new Error(`Critical request failed: ${failure.errorText}`);
+                    }
+                }
+            };
+            
+            page.on('error', errorHandler);
+            page.on('pageerror', errorHandler);
+            page.on('requestfailed', requestFailedHandler);
+            
+            // Retry logic for form submission
+            let submitSuccess = false;
+            const maxSubmitRetries = 3;
+            
+            for (let submitAttempt = 1; submitAttempt <= maxSubmitRetries; submitAttempt++) {
+                try {
+                    // Reset error tracking
+                    navigationError = null;
+                    pageError = null;
+                    
+                    console.log(`🔄 Form submission attempt ${submitAttempt}/${maxSubmitRetries}...`);
+                    
+                    // ✅ Automatically click the Sign In button - EXACTLY like goToCaptchaStealth.txt
+                    const navigationPromise = page.waitForNavigation({ 
+                        waitUntil: 'domcontentloaded', 
+                        timeout: 30000 
+                    }).catch(err => {
+                        // Don't throw here, we'll check URL manually
+                        return null;
+                    });
+                    
+                    await page.click('button[type="submit"]');
+                    console.log('⏸️ Login submitted. Waiting for navigation...');
+                    
+                    // Wait for navigation OR timeout
+                    await Promise.race([
+                        navigationPromise,
+                        new Promise(resolve => setTimeout(resolve, 30000)) // Max 30s wait
+                    ]);
+                    
+                    // Small delay to let page settle
+                    await delay(2000);
+                    
+                    // Check current URL FIRST - this is the most reliable indicator of success/failure
+                    const currentUrl = page.url();
+                    console.log(`📍 URL after navigation: ${currentUrl}`);
+                    
+                    // CRITICAL: Check for Chrome error pages or other error URLs
+                    const isChromeError = currentUrl.startsWith('chrome-error://') || 
+                                         currentUrl.startsWith('chrome://') ||
+                                         currentUrl.includes('chromewebdata');
+                    const isNetworkError = currentUrl.startsWith('about:') && 
+                                          (currentUrl.includes('error') || currentUrl.includes('blank'));
+                    
+                    if (isChromeError || isNetworkError) {
+                        if (submitAttempt < maxSubmitRetries) {
+                            console.log(`⚠️ Browser error page detected on attempt ${submitAttempt} (${currentUrl}), retrying...`);
+                            // Navigate back to login page before retry
+                            try {
+                                await page.goto(AEFA_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                                await delay(2000);
+                                // Re-enter credentials
+                                await page.waitForSelector('#Username', { timeout: 15000 });
+                                await page.evaluate(() => {
+                                    const username = document.querySelector('#Username');
+                                    const password = document.querySelector('#Password');
+                                    if (username) username.value = '';
+                                    if (password) password.value = '';
+                                });
+                                await page.type('#Username', cleanPhone);
+                                await page.type('#Password', password);
+                            } catch (retryNavError) {
+                                console.log(`⚠️ Failed to navigate back to login page: ${retryNavError.message}`);
+                            }
+                            await delay(3000 * submitAttempt);
+                            continue;
+                        } else {
+                            throw new Error(`Navigation failed - browser error page detected: ${currentUrl}. This may indicate a network issue, DNS problem, or the website is unreachable.`);
+                        }
+                    }
+                    
+                    // Check if we're on a valid Alfa page (either login or account page)
+                    if (currentUrl.includes('alfa.com.lb')) {
+                        // We're on an Alfa page - check if we're still on login (CAPTCHA/failure) or moved to account (success)
+                        if (!currentUrl.includes('/login')) {
+                            // Successfully navigated to account/dashboard - login succeeded!
+                            submitSuccess = true;
+                            break;
+                        }
+                        // Still on login page - might be CAPTCHA or invalid credentials
+                        // Don't retry if we're still on login - let the main flow handle it
+                        submitSuccess = true; // Mark as "success" to break the retry loop, but we'll check for CAPTCHA later
+                        break;
+                    }
+                    
+                    // Not on an Alfa page and not an error page - might be a redirect or other issue
+                    // Only retry if we have a navigationError indicating actual failure
+                    if (navigationError) {
+                        if (submitAttempt < maxSubmitRetries) {
+                            console.log(`⚠️ Navigation error on attempt ${submitAttempt} (URL: ${currentUrl}), retrying...`);
+                            await delay(3000 * submitAttempt);
+                            continue;
+                        } else {
+                            throw navigationError;
+                        }
+                    }
+                    
+                    // Check for page errors as a fallback
+                    if (pageError) {
+                        throw new Error(`Page error during navigation: ${pageError.message}`);
+                    }
+                    
+                    // If we get here, we're in an unexpected state - treat as success and let main flow handle it
+                    submitSuccess = true;
+                    break;
+                    
+                } catch (submitError) {
+                    console.log(`⚠️ Form submission attempt ${submitAttempt} failed: ${submitError.message}`);
+                    
+                    if (submitAttempt < maxSubmitRetries) {
+                        console.log(`⏳ Waiting before retry...`);
+                        await delay(3000 * submitAttempt);
+                        // Try to navigate back to login page
+                        try {
+                            await page.goto(AEFA_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                            await delay(2000);
+                            await page.waitForSelector('#Username', { timeout: 15000 });
+                            await page.evaluate(() => {
+                                const username = document.querySelector('#Username');
+                                const password = document.querySelector('#Password');
+                                if (username) username.value = '';
+                                if (password) password.value = '';
+                            });
+                            await page.type('#Username', cleanPhone);
+                            await page.type('#Password', password);
+                        } catch (retryNavError) {
+                            console.log(`⚠️ Failed to navigate back to login page: ${retryNavError.message}`);
+                        }
+                    } else {
+                        // Remove error listeners
+                        page.off('error', errorHandler);
+                        page.off('pageerror', errorHandler);
+                        page.off('requestfailed', requestFailedHandler);
+                        throw submitError;
+                    }
+                }
             }
             
-            // Always check URL after waiting
-            await delay(2000);
+            // Remove error listeners
+            page.off('error', errorHandler);
+            page.off('pageerror', errorHandler);
+            page.off('requestfailed', requestFailedHandler);
+            
+            if (!submitSuccess) {
+                throw new Error('Form submission failed after multiple attempts');
+            }
+            
+            // Final URL check
             const currentUrl = page.url();
-            console.log(`📍 URL after navigation: ${currentUrl}`);
+            console.log(`📍 Final URL: ${currentUrl}`);
+            
+            // CRITICAL: Check for Chrome error pages one more time
+            const isChromeError = currentUrl.startsWith('chrome-error://') || 
+                                 currentUrl.startsWith('chrome://') ||
+                                 currentUrl.includes('chromewebdata');
+            const isNetworkError = currentUrl.startsWith('about:') && 
+                                  (currentUrl.includes('error') || currentUrl.includes('blank'));
+            
+            if (isChromeError || isNetworkError) {
+                throw new Error(`Navigation failed - browser error page detected: ${currentUrl}. This may indicate a network issue, DNS problem, or the website is unreachable.`);
+            }
             
             if (!currentUrl.includes('/login')) {
+                // Check if we're actually on an Alfa page (not an error page)
+                if (!currentUrl.includes('alfa.com.lb')) {
+                    throw new Error(`Login navigation failed - URL is not an Alfa page: ${currentUrl}`);
+                }
+                
                 // Successfully logged in!
                 console.log('✅ Login successful! Saving session to Redis...');
                 const cookies = await page.cookies();
+                
+                // CRITICAL: Validate that we actually got cookies
+                if (!cookies || cookies.length === 0) {
+                    throw new Error(`Login appeared successful but no cookies received. URL: ${currentUrl}`);
+                }
+                
                 // Save session immediately after successful login
                 // This ensures session persists even if later operations fail
                 await saveSession(adminId || phone, cookies, {});
+                
+                // CRITICAL: Verify session was actually saved (saveSession may reject invalid cookies)
+                const savedSession = await getSession(adminId || phone);
+                if (!savedSession || !savedSession.cookies || savedSession.cookies.length === 0) {
+                    throw new Error(`Session save failed - cookies were rejected or not persisted. Received ${cookies.length} cookies but session is empty.`);
+                }
+                
                 console.log(`✅ Session saved successfully! (${cookies.length} cookies)`);
             } else {
                 // Still on login page - check for CAPTCHA
@@ -320,11 +520,41 @@ async function loginToAlfa(page, phone, password, adminId) {
                         await delay(2000);
                         const newUrl = page.url();
                         console.log(`📍 URL after CAPTCHA submit: ${newUrl}`);
+                        
+                        // CRITICAL: Check for Chrome error pages or other error URLs
+                        const isChromeErrorAfterCaptcha = newUrl.startsWith('chrome-error://') || 
+                                                         newUrl.startsWith('chrome://') ||
+                                                         newUrl.includes('chromewebdata');
+                        const isNetworkErrorAfterCaptcha = newUrl.startsWith('about:') && 
+                                                          (newUrl.includes('error') || newUrl.includes('blank'));
+                        
+                        if (isChromeErrorAfterCaptcha || isNetworkErrorAfterCaptcha) {
+                            throw new Error(`Navigation failed after CAPTCHA - browser error page detected: ${newUrl}`);
+                        }
+                        
                         if (!newUrl.includes('/login')) {
+                            // Check if we're actually on an Alfa page
+                            if (!newUrl.includes('alfa.com.lb')) {
+                                throw new Error(`Login navigation failed after CAPTCHA - URL is not an Alfa page: ${newUrl}`);
+                            }
+                            
                             console.log('✅ Login successful after CAPTCHA! Saving session to Redis...');
                             const cookies = await page.cookies();
+                            
+                            // CRITICAL: Validate that we actually got cookies
+                            if (!cookies || cookies.length === 0) {
+                                throw new Error(`Login appeared successful after CAPTCHA but no cookies received. URL: ${newUrl}`);
+                            }
+                            
                             // Save session immediately after successful login
                             await saveSession(adminId || phone, cookies, {});
+                            
+                            // CRITICAL: Verify session was actually saved
+                            const savedSession = await getSession(adminId || phone);
+                            if (!savedSession || !savedSession.cookies || savedSession.cookies.length === 0) {
+                                throw new Error(`Session save failed after CAPTCHA - cookies were rejected or not persisted. Received ${cookies.length} cookies but session is empty.`);
+                            }
+                            
                             console.log(`✅ Session saved successfully! (${cookies.length} cookies)`);
                         } else {
                             throw new Error('Login failed after CAPTCHA solve');
@@ -333,27 +563,101 @@ async function loginToAlfa(page, phone, password, adminId) {
                         throw new Error(`CAPTCHA solving failed: ${captchaError.message}`);
                     }
                 } else {
-                    // Check for error messages
-                    const errorMsg = await page.evaluate(() => {
-                        const bodyText = document.body.textContent || '';
-                        if (bodyText.toLowerCase().includes('invalid') || bodyText.toLowerCase().includes('incorrect')) {
-                            return 'Invalid credentials';
-                        }
-                        // Check for common error messages
-                        const errorSelectors = ['.error', '.alert', '[class*="error"]', '[class*="alert"]'];
-                        for (const selector of errorSelectors) {
-                            const el = document.querySelector(selector);
-                            if (el && el.textContent) {
-                                return el.textContent.trim();
+                    // Wait a bit longer for JavaScript-driven error messages to appear
+                    await delay(3000);
+                    
+                    // Check for error messages more thoroughly
+                    const errorInfo = await page.evaluate(() => {
+                        const bodyText = (document.body.textContent || '').toLowerCase();
+                        const bodyHTML = document.body.innerHTML || '';
+                        
+                        // Check for common error keywords in page content
+                        const errorKeywords = [
+                            'invalid', 'incorrect', 'wrong', 'error', 'failed', 
+                            'username', 'password', 'credentials', 'authentication',
+                            'try again', 'please check', 'not found'
+                        ];
+                        
+                        let foundError = null;
+                        for (const keyword of errorKeywords) {
+                            if (bodyText.includes(keyword)) {
+                                // Try to find the error message in context
+                                const contextStart = Math.max(0, bodyText.indexOf(keyword) - 50);
+                                const contextEnd = Math.min(bodyText.length, bodyText.indexOf(keyword) + 100);
+                                const context = bodyText.substring(contextStart, contextEnd);
+                                if (context.length < 200) { // Only use short contexts (likely error messages)
+                                    foundError = context.trim();
+                                    break;
+                                }
                             }
                         }
-                        return null;
+                        
+                        // Check for visible error elements
+                        const errorSelectors = [
+                            '.error', '.alert', '.alert-danger', '.alert-error',
+                            '[class*="error"]', '[class*="alert"]', 
+                            '[class*="validation"]', '[class*="warning"]',
+                            '#error', '#alert', '.field-validation-error',
+                            '[role="alert"]', '.help-block'
+                        ];
+                        
+                        for (const selector of errorSelectors) {
+                            try {
+                                const elements = document.querySelectorAll(selector);
+                                for (const el of elements) {
+                                    // Check if element is visible
+                                    const style = window.getComputedStyle(el);
+                                    if (style.display !== 'none' && style.visibility !== 'hidden' && el.textContent) {
+                                        const text = el.textContent.trim();
+                                        if (text.length > 0 && text.length < 500) { // Reasonable error message length
+                                            foundError = foundError || text;
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                // Ignore selector errors
+                            }
+                        }
+                        
+                        // Check input field validation messages
+                        const usernameInput = document.querySelector('#Username');
+                        const passwordInput = document.querySelector('#Password');
+                        
+                        if (usernameInput) {
+                            const usernameValidation = usernameInput.getAttribute('data-valmsg-for') || 
+                                                      usernameInput.parentElement?.querySelector('[class*="validation"]');
+                            if (usernameValidation && usernameValidation.textContent) {
+                                foundError = foundError || usernameValidation.textContent.trim();
+                            }
+                        }
+                        
+                        if (passwordInput) {
+                            const passwordValidation = passwordInput.getAttribute('data-valmsg-for') || 
+                                                      passwordInput.parentElement?.querySelector('[class*="validation"]');
+                            if (passwordValidation && passwordValidation.textContent) {
+                                foundError = foundError || passwordValidation.textContent.trim();
+                            }
+                        }
+                        
+                        // Check if form fields still have values (might indicate form didn't submit)
+                        const formSubmitted = !usernameInput?.value && !passwordInput?.value;
+                        
+                        return {
+                            error: foundError || null,
+                            formSubmitted: formSubmitted,
+                            usernameHasValue: !!usernameInput?.value,
+                            passwordHasValue: !!passwordInput?.value
+                        };
                     });
                     
-                    if (errorMsg) {
-                        throw new Error(`Login failed: ${errorMsg}`);
+                    if (errorInfo.error) {
+                        throw new Error(`Login failed: ${errorInfo.error}`);
+                    } else if (!errorInfo.formSubmitted && (errorInfo.usernameHasValue || errorInfo.passwordHasValue)) {
+                        // Form fields still have values - might indicate form didn't submit or was blocked
+                        throw new Error('Login failed - form submission may have been blocked or prevented. Form fields still contain values.');
                     } else {
-                        throw new Error('Login failed - still on login page. No CAPTCHA or error message detected.');
+                        // No clear error message, but still on login page
+                        throw new Error('Login failed - still on login page. No CAPTCHA or error message detected. This may indicate invalid credentials or a form submission issue.');
                     }
                 }
             }
@@ -508,6 +812,9 @@ async function loginViaHttp(phone, password, adminId) {
                 
                 console.log(`⚡ [HTTP Login] Submitting login form...`);
                 const postReq = https.request(postOptions, (postRes) => {
+                    console.log(`🔍🔍🔍 [HTTP Login] POST RESPONSE HANDLER CALLED! Status: ${postRes.statusCode}`);
+                    console.log(`🔍 [HTTP Login] POST response received: status=${postRes.statusCode}`);
+                    
                     // Collect cookies from login response
                     if (postRes.headers['set-cookie']) {
                         const newCookies = parseCookiesFromHeaders(postRes.headers['set-cookie']);
@@ -515,17 +822,105 @@ async function loginViaHttp(phone, password, adminId) {
                         const cookieMap = new Map();
                         [...cookies, ...newCookies].forEach(c => cookieMap.set(c.name, c));
                         cookies = Array.from(cookieMap.values());
+                        console.log(`🔍 [HTTP Login] Collected ${newCookies.length} new cookies from POST response (total: ${cookies.length})`);
                     }
                     
-                    // Check if login was successful (redirect to dashboard or 302/301)
+                    // Check if login was successful (redirect to dashboard or 302/301/200)
                     const location = postRes.headers.location || '';
-                    const isSuccess = postRes.statusCode === 302 || postRes.statusCode === 301 || 
-                                     location.includes('/account') || 
-                                     !location.includes('/login');
+                    const isSuccess = postRes.statusCode === 302 || postRes.statusCode === 301 || postRes.statusCode === 200;
                     
-                    if (isSuccess && cookies.length > 0) {
-                        console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
-                        resolve({ success: true, cookies, needsCaptcha: false });
+                    console.log(`🔍 [HTTP Login] POST response: status=${postRes.statusCode}, location="${location}", cookies=${cookies.length}, isSuccess=${isSuccess}`);
+                    
+                    // For redirects or 200, we need to consume the response body
+                    if (postRes.statusCode === 302 || postRes.statusCode === 301 || postRes.statusCode === 200) {
+                        postRes.resume(); // Consume the response body
+                    }
+                    
+                    if (isSuccess) {
+                        // Follow redirect to get __ACCOUNT cookie (set on redirect target)
+                        // Also handle 200 responses - we should still visit /en/account to get __ACCOUNT cookie
+                        const shouldFollowRedirect = location && (postRes.statusCode === 302 || postRes.statusCode === 301);
+                        const shouldFollowDashboard = postRes.statusCode === 200; // Always try to visit dashboard for 200 responses
+                        
+                        if (shouldFollowRedirect || shouldFollowDashboard) {
+                            // Use location header if present, otherwise go to dashboard
+                            const redirectPath = location || '/en/account';
+                            console.log(`🔄 [HTTP Login] Following ${shouldFollowRedirect ? 'redirect' : 'dashboard request'} to: ${redirectPath}`);
+                            const redirectUrl = new URL(redirectPath, 'https://www.alfa.com.lb');
+                            const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+                            
+                            const redirectOptions = {
+                                hostname: redirectUrl.hostname,
+                                path: redirectUrl.pathname + (redirectUrl.search || ''),
+                                method: 'GET',
+                                headers: {
+                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                                    'Accept-Language': 'en-US,en;q=0.9',
+                                    'Referer': AEFA_LOGIN_URL,
+                                    'Cookie': cookieHeader
+                                },
+                                agent: httpsAgent
+                            };
+                            
+                            const redirectReq = https.request(redirectOptions, (redirectRes) => {
+                                // Collect cookies from redirect target (where __ACCOUNT is typically set)
+                                if (redirectRes.headers['set-cookie']) {
+                                    const redirectCookies = parseCookiesFromHeaders(redirectRes.headers['set-cookie']);
+                                    // Merge cookies, keeping latest values
+                                    const finalCookieMap = new Map();
+                                    [...cookies, ...redirectCookies].forEach(c => finalCookieMap.set(c.name, c));
+                                    cookies = Array.from(finalCookieMap.values());
+                                }
+                                
+                                // Check if we got __ACCOUNT cookie
+                                const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+                                
+                                if (cookies.length > 0) {
+                                    console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
+                                    resolve({ success: true, cookies, needsCaptcha: false });
+                                } else {
+                                    console.log(`⚠️ [HTTP Login] Login redirect succeeded but no cookies received, falling back to Puppeteer`);
+                                    resolve({ success: false, needsCaptcha: false, fallback: true });
+                                }
+                            });
+                            
+                            redirectReq.on('error', () => {
+                                // Even if redirect fails, use cookies we have
+                                if (cookies.length > 0) {
+                                    const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+                                    console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}, redirect failed but using available cookies) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
+                                    resolve({ success: true, cookies, needsCaptcha: false });
+                                } else {
+                                    resolve({ success: false, needsCaptcha: false, fallback: true });
+                                }
+                            });
+                            
+                            redirectReq.setTimeout(5000, () => {
+                                redirectReq.destroy();
+                                // Use cookies we have even if redirect times out
+                                if (cookies.length > 0) {
+                                    const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+                                    console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}, redirect timeout but using available cookies) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
+                                    resolve({ success: true, cookies, needsCaptcha: false });
+                                } else {
+                                    resolve({ success: false, needsCaptcha: false, fallback: true });
+                                }
+                            });
+                            
+                            redirectReq.end();
+                            return; // Don't continue with original response handling
+                        }
+                        
+                        // No redirect but success
+                        if (cookies.length > 0) {
+                            const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+                            console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
+                            resolve({ success: true, cookies, needsCaptcha: false });
+                        } else {
+                            console.log(`⚠️ [HTTP Login] Login succeeded but no cookies received, falling back to Puppeteer`);
+                            resolve({ success: false, needsCaptcha: false, fallback: true });
+                        }
                     } else {
                         // Check response body for errors or CAPTCHA
                         let responseData = '';

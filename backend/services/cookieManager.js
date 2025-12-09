@@ -507,16 +507,26 @@ async function loginAndSaveCookies(phone, password, userId) {
         const httpResult = await loginViaHttp(phone, password, userId);
         
         if (httpResult.success && httpResult.cookies && httpResult.cookies.length > 0) {
-            // HTTP login succeeded!
-            console.log(`✅ [Fast Login] HTTP login successful! Saving ${httpResult.cookies.length} cookies...`);
+            // Check if __ACCOUNT cookie is present (critical for long-lived sessions)
+            const hasAccountCookie = httpResult.cookies.some(c => c.name === '__ACCOUNT');
             
-            // Save all cookies to Redis
-            await saveCookies(userId, httpResult.cookies);
-            await saveLastVerified(userId);
-            
-            console.log(`✅ Login successful via HTTP, saved ${httpResult.cookies.length} cookies`);
-            return httpResult.cookies;
-        } else if (httpResult.fallback) {
+            if (!hasAccountCookie) {
+                console.log(`⚠️ [Fast Login] HTTP login got ${httpResult.cookies.length} cookies but missing __ACCOUNT cookie, falling back to Puppeteer for complete session...`);
+                httpResult.fallback = true; // Force fallback
+            } else {
+                // HTTP login succeeded and has __ACCOUNT cookie!
+                console.log(`✅ [Fast Login] HTTP login successful! Saving ${httpResult.cookies.length} cookies (including __ACCOUNT)...`);
+                
+                // Save all cookies to Redis
+                await saveCookies(userId, httpResult.cookies);
+                await saveLastVerified(userId);
+                
+                console.log(`✅ Login successful via HTTP, saved ${httpResult.cookies.length} cookies`);
+                return httpResult.cookies;
+            }
+        }
+        
+        if (httpResult.fallback) {
             // HTTP login failed or CAPTCHA detected, fallback to Puppeteer
             console.log(`🔄 [Fast Login] HTTP login failed, falling back to Puppeteer...`);
         } else {

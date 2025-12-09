@@ -36,6 +36,107 @@ body.light-mode .admins-container-inner {
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(240, 245, 255, 0.6) 43%, rgba(255, 255, 255, 0.98) 100%);
 }
 
+/* Search Container */
+.search-container {
+    margin-bottom: 1.5rem;
+}
+
+.search-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    max-width: 500px;
+}
+
+.search-icon {
+    position: absolute;
+    left: 1rem;
+    width: 20px;
+    height: 20px;
+    color: #94a3b8;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.search-input {
+    width: 100%;
+    padding: 0.75rem 1rem 0.75rem 3rem;
+    background: rgba(58, 10, 78, 0.2);
+    border: 1px solid rgba(58, 10, 78, 0.3);
+    border-radius: 0.75rem;
+    color: #f8fafc;
+    font-size: 0.9375rem;
+    transition: all 0.2s ease;
+    outline: none;
+}
+
+.search-input::placeholder {
+    color: #64748b;
+}
+
+.search-input:focus {
+    background: rgba(58, 10, 78, 0.3);
+    border-color: rgba(139, 92, 246, 0.5);
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+}
+
+body.light-mode .search-input {
+    background: rgba(255, 255, 255, 0.6);
+    border-color: rgba(90, 33, 182, 0.2);
+    color: #1e293b;
+}
+
+body.light-mode .search-input::placeholder {
+    color: #94a3b8;
+}
+
+body.light-mode .search-input:focus {
+    background: rgba(255, 255, 255, 0.9);
+    border-color: rgba(90, 33, 182, 0.4);
+    box-shadow: 0 0 0 3px rgba(90, 33, 182, 0.1);
+}
+
+body.light-mode .search-icon {
+    color: #64748b;
+}
+
+.search-clear {
+    position: absolute;
+    right: 0.75rem;
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 0.375rem;
+    transition: all 0.2s ease;
+    z-index: 1;
+}
+
+.search-clear:hover {
+    background: rgba(58, 10, 78, 0.2);
+    color: #f8fafc;
+}
+
+.search-clear svg {
+    width: 16px;
+    height: 16px;
+}
+
+body.light-mode .search-clear {
+    color: #64748b;
+}
+
+body.light-mode .search-clear:hover {
+    background: rgba(90, 33, 182, 0.1);
+    color: #1e293b;
+}
+
 /* Table Container */
 .table-wrapper {
     overflow-x: auto;

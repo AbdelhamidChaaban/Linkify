@@ -45,24 +45,40 @@ const cookieRefreshWorker = require('./services/cookieRefreshWorker');
 const { addSubscriber } = require('./services/alfaAddSubscriber');
 const { editSubscriber } = require('./services/alfaEditSubscriber');
 const { removeSubscriber } = require('./services/alfaRemoveSubscriber');
-const { getAdminData, getBalanceHistory } = require('./services/firebaseDbService');
+const { getAdminData, getFullAdminData, getBalanceHistory } = require('./services/firebaseDbService');
 const { prepareEditSession, getActiveSession, closeSession } = require('./services/ushareEditSession');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+// Parse PORT as integer and validate range (0-65535)
+const PORT = (() => {
+    const envPort = process.env.PORT;
+    if (!envPort) return 3000;
+    const parsed = parseInt(envPort, 10);
+    if (isNaN(parsed) || parsed < 0 || parsed > 65535) {
+        console.warn(`⚠️  Invalid PORT value "${envPort}", using default 3000`);
+        return 3000;
+    }
+    return parsed;
+})();
 
 // Function to find available port
 function findAvailablePort(startPort) {
     return new Promise((resolve, reject) => {
+        // Ensure startPort is a number
+        const port = typeof startPort === 'number' ? startPort : parseInt(startPort, 10) || 3000;
+        if (port < 0 || port > 65535) {
+            reject(new Error(`Invalid port number: ${port}. Must be between 0 and 65535.`));
+            return;
+        }
         const server = require('net').createServer();
-        server.listen(startPort, () => {
-            const port = server.address().port;
-            server.close(() => resolve(port));
+        server.listen(port, () => {
+            const actualPort = server.address().port;
+            server.close(() => resolve(actualPort));
         });
         server.on('error', (err) => {
             if (err.code === 'EADDRINUSE') {
                 // Try next port
-                findAvailablePort(startPort + 1).then(resolve).catch(reject);
+                findAvailablePort(port + 1).then(resolve).catch(reject);
             } else {
                 reject(err);
             }
@@ -71,7 +87,20 @@ function findAvailablePort(startPort) {
 }
 
 // Middleware
-app.use(cors());
+// CORS configuration - Allow requests from Vercel and localhost
+app.use(cors({
+    origin: [
+        /\.vercel\.app$/,  // All Vercel deployments
+        /\.onrender\.com$/,  // All Render deployments (for testing)
+        'http://localhost:3000',
+        'http://localhost:8080',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:8080'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // Import request queue for handling concurrent requests
@@ -129,9 +158,15 @@ app.get('/api/cache/:identifier/stats', async (req, res) => {
 // Fetch Alfa dashboard data (with incremental scraping support)
 app.post('/api/alfa/fetch', async (req, res) => {
     try {
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`🔵 [API] /api/alfa/fetch request received at ${new Date().toISOString()}`);
+        console.log(`   Body keys: ${Object.keys(req.body).join(', ')}`);
+        console.log(`${'='.repeat(80)}\n`);
+        
         const { phone, password, adminId } = req.body;
 
         if (!phone || !password) {
+            console.log(`⚠️ [API] Missing phone or password in request`);
             return res.status(400).json({
                 success: false,
                 error: 'Phone and password are required'
@@ -139,7 +174,33 @@ app.post('/api/alfa/fetch', async (req, res) => {
         }
 
         const identifier = adminId || phone;
-        console.log(`[${new Date().toISOString()}] Fetching Alfa data for admin: ${identifier}`);
+        console.log(`[${new Date().toISOString()}] 🔵 [API] Fetching Alfa data for admin: ${identifier}`);
+
+        // CRITICAL: Check for existing refresh lock BEFORE processing to prevent concurrent logins
+        const { hasRefreshLock, getLastJson } = require('./services/cookieManager');
+        const existingLock = await hasRefreshLock(identifier);
+        
+        if (existingLock) {
+            console.log(`⏸️ [API] Refresh already in progress for ${identifier}, returning cached data...`);
+            const cachedData = await getLastJson(identifier, true); // allowStale for instant response
+            if (cachedData && cachedData.data) {
+                const cacheAge = Date.now() - (cachedData.timestamp || 0);
+                const cacheAgeMinutes = Math.round(cacheAge / 60000);
+                console.log(`⚡ [API] Returning cached data (refresh in progress, age: ${cacheAgeMinutes}min)`);
+                return res.json({
+                    success: true,
+                    incremental: false,
+                    noChanges: false,
+                    data: cachedData.data,
+                    timestamp: Date.now(),
+                    cached: true,
+                    stale: cacheAge > 60000,
+                    refreshInProgress: true,
+                    message: 'Refresh already in progress, returning cached data'
+                });
+            }
+            // If no cached data, continue with refresh (but requestQueue will deduplicate)
+        }
 
         // Use request queue to prevent concurrent refreshes for the same admin
         const startTime = Date.now();
@@ -354,7 +415,7 @@ app.post('/api/subscribers/edit', async (req, res) => {
             });
         }
 
-        const { addPendingSubscriber, removePendingSubscriber, addRemovedSubscriber } = require('./services/firebaseDbService');
+        const { addPendingSubscriber, removePendingSubscriber, addRemovedSubscriber, addRemovedActiveSubscriber, getAdminData: getFullAdminData } = require('./services/firebaseDbService');
         const results = {
             updates: [],
             removals: [],
@@ -402,8 +463,19 @@ app.post('/api/subscribers/edit', async (req, res) => {
 
         // Handle removals (browser automation to remove from Alfa)
         if (removals && Array.isArray(removals) && removals.length > 0) {
+            // Get current subscriber data before removal to check status (Active vs Requested)
+            const currentAdminData = await getFullAdminData(adminId);
+            const currentSecondarySubscribers = currentAdminData?.alfaData?.secondarySubscribers || [];
+            
             for (const phone of removals) {
                 try {
+                    // Check if subscriber is Active or Requested BEFORE removal
+                    const cleanPhone = phone.replace(/^961/, ''); // Remove 961 prefix if present
+                    const subscriberInList = currentSecondarySubscribers.find(
+                        sub => sub.phoneNumber === cleanPhone || sub.phoneNumber === phone
+                    );
+                    const isActive = subscriberInList && subscriberInList.status === 'Active';
+                    
                     // Remove from Alfa using browser automation
                     // Pass sessionData to use existing page if available (faster)
                     const result = await removeSubscriber(
@@ -420,13 +492,19 @@ app.post('/api/subscribers/edit', async (req, res) => {
                             // Non-critical if not in pending list
                         });
                         
-                        // Check if subscriber was confirmed (has consumption data)
-                        // If confirmed, add to removedSubscribers list to show as "Out"
-                        // We'll check this by seeing if it exists in secondarySubscribers
-                        // For now, we'll add it to removedSubscribers - the frontend will check if it was confirmed
-                        await addRemovedSubscriber(adminId, phone).catch(() => {
-                            // Non-critical
-                        });
+                        // Only add to removedSubscribers if subscriber was Active
+                        // Requested subscribers will disappear naturally (won't show in view details)
+                        if (isActive && subscriberInList) {
+                            // Store removed Active subscriber with full data so it can be displayed as "Out"
+                            await addRemovedActiveSubscriber(adminId, {
+                                phoneNumber: subscriberInList.phoneNumber,
+                                fullPhoneNumber: subscriberInList.fullPhoneNumber || subscriberInList.phoneNumber,
+                                consumption: subscriberInList.consumption || 0,
+                                limit: subscriberInList.quota || subscriberInList.limit || 0
+                            }).catch(() => {
+                                // Non-critical
+                            });
+                        }
                         
                         results.removals.push({ phone, success: true });
                     } else {
@@ -444,12 +522,14 @@ app.post('/api/subscribers/edit', async (req, res) => {
                 if (update.phone && update.quota) {
                     try {
                         // Edit subscriber quota in Alfa using browser automation
+                        // Pass sessionData if available (for faster edits using existing page)
                         const result = await editSubscriber(
                             adminId,
                             adminData.phone,
                             adminData.password,
                             update.phone,
-                            parseFloat(update.quota)
+                            parseFloat(update.quota),
+                            sessionData // Pass session to reuse existing page
                         );
                         
                         if (result.success) {

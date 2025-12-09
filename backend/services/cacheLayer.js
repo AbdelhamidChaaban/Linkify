@@ -1,7 +1,23 @@
-const { Redis } = require('@upstash/redis');
+const Redis = require('ioredis');
+const path = require('path');
+const fs = require('fs');
+
+// Load environment variables if not already loaded
+if (!process.env.REDIS_HOST && !process.env.REDIS_PASSWORD) {
+    const backendEnvPath = path.join(__dirname, '.env');
+    const rootEnvPath = path.join(__dirname, '..', '.env');
+    
+    if (fs.existsSync(backendEnvPath)) {
+        require('dotenv').config({ path: backendEnvPath });
+    } else if (fs.existsSync(rootEnvPath)) {
+        require('dotenv').config({ path: rootEnvPath });
+    } else {
+        require('dotenv').config();
+    }
+}
 
 /**
- * Cache Layer using Upstash Redis
+ * Cache Layer using Redis Cloud
  * Handles caching of HTML/JSON responses to avoid redundant scraping
  */
 class CacheLayer {
@@ -145,23 +161,116 @@ class CacheLayer {
      */
     initialize() {
         try {
-            const upstashUrl = process.env.UPSTASH_REDIS_REST_URL;
-            const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+            // Force reload environment variables
+            const backendEnvPath = path.join(__dirname, '.env');
+            const rootEnvPath = path.join(__dirname, '..', '.env');
+            if (fs.existsSync(backendEnvPath)) {
+                require('dotenv').config({ path: backendEnvPath, override: true });
+            } else if (fs.existsSync(rootEnvPath)) {
+                require('dotenv').config({ path: rootEnvPath, override: true });
+            }
 
-            if (!upstashUrl || !upstashToken) {
-                console.warn('⚠️ Upstash Redis credentials not found. Caching disabled.');
-                console.warn('   Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in .env');
+            const redisHost = process.env.REDIS_HOST;
+            const redisPort = parseInt(process.env.REDIS_PORT) || 6379;
+            const redisPassword = process.env.REDIS_PASSWORD;
+
+            console.log(`🔍 [Redis Init] Environment check:`);
+            console.log(`   REDIS_HOST: ${redisHost ? redisHost.substring(0, 30) + '...' : 'NOT SET'}`);
+            console.log(`   REDIS_PORT: ${redisPort || 'NOT SET'}`);
+            console.log(`   REDIS_PASSWORD: ${redisPassword ? 'SET (' + redisPassword.length + ' chars)' : 'NOT SET'}`);
+
+            // CRITICAL: Check for Upstash environment variables (should NOT exist)
+            // Just warn - don't block initialization. The Redis client will use REDIS_HOST/PORT/PASSWORD
+            if (process.env.UPSTASH_REDIS_REST_URL || process.env.UPSTASH_REDIS_REST_TOKEN) {
+                console.warn(`⚠️ Upstash environment variables detected but will be ignored.`);
+                console.warn(`   We're using Redis Cloud (REDIS_HOST/REDIS_PORT/REDIS_PASSWORD) instead.`);
+                console.warn(`   To remove this warning, delete UPSTASH_* variables from .env file.`);
+            }
+
+            if (!redisHost || !redisPassword) {
+                console.warn('⚠️ Redis Cloud credentials not found. Caching disabled.');
+                console.warn('   Set REDIS_HOST, REDIS_PORT, and REDIS_PASSWORD in .env');
                 this.enabled = false;
                 return;
             }
 
-            this.redis = new Redis({
-                url: upstashUrl,
-                token: upstashToken,
+            // Verify host is NOT Upstash
+            if (redisHost.includes('upstash')) {
+                console.error(`❌ CRITICAL: REDIS_HOST contains 'upstash'! This is wrong!`);
+                console.error(`   Current REDIS_HOST: ${redisHost}`);
+                console.error(`   This should be a Redis Cloud hostname, not Upstash!`);
+                this.enabled = false;
+                return;
+            }
+
+            // Redis Cloud connection configuration
+            // Redis Cloud may require TLS - configured via REDIS_TLS environment variable
+            // Set REDIS_TLS=true in .env if your Redis Cloud instance requires TLS
+            const useTLS = process.env.REDIS_TLS === 'true' || process.env.REDIS_TLS === '1';
+            
+            const redisConfig = {
+                host: redisHost,
+                port: redisPort,
+                password: redisPassword,
+                retryStrategy: (times) => {
+                    const delay = Math.min(times * 50, 2000);
+                    return delay;
+                },
+                maxRetriesPerRequest: 3,
+                enableReadyCheck: true,
+                connectTimeout: 10000,
+                lazyConnect: false, // Auto-connect on creation
+            };
+            
+            // Add TLS configuration if enabled
+            if (useTLS) {
+                redisConfig.tls = {}; // Redis Cloud TLS configuration
+                console.log('🔒 Redis Cloud: TLS enabled');
+            } else {
+                console.log('🔓 Redis Cloud: TLS disabled (standard connection)');
+            }
+            
+            this.redis = new Redis(redisConfig);
+
+            // Verify connection configuration immediately
+            console.log(`🔍 Redis Client Configuration:`);
+            console.log(`   Host: ${this.redis.options.host}`);
+            console.log(`   Port: ${this.redis.options.port}`);
+            console.log(`   Using TLS: ${useTLS ? 'YES' : 'NO'}`);
+
+            // Handle connection events
+            this.redis.on('connect', () => {
+                console.log(`🔄 Connecting to Redis Cloud at ${this.redis.options.host}:${this.redis.options.port}...`);
             });
 
+            this.redis.on('ready', () => {
+                this.enabled = true;
+                console.log(`✅ Redis cache layer initialized (Redis Cloud) - Connected to ${this.redis.options.host}:${this.redis.options.port}`);
+            });
+
+            this.redis.on('error', (error) => {
+                // Check if error is from Upstash (shouldn't happen)
+                if (error.message && error.message.includes('upstash.com')) {
+                    console.error(`❌ CRITICAL: Upstash error in Redis connection!`);
+                    console.error(`   Current Redis host: ${this.redis?.options?.host}`);
+                    console.error(`   Current Redis port: ${this.redis?.options?.port}`);
+                    console.error(`   Error: ${error.message}`);
+                }
+                console.warn('⚠️ Redis Client Error:', error.message);
+                if (!this.enabled) {
+                    // Only log on first error if not enabled yet
+                    console.warn('   Continuing without cache - all requests will scrape');
+                }
+            });
+
+            this.redis.on('close', () => {
+                console.warn('⚠️ Redis connection closed');
+                this.enabled = false;
+            });
+
+            // Set enabled to true initially (will be set on ready event)
+            // This allows operations to queue while connecting
             this.enabled = true;
-            console.log('✅ Redis cache layer initialized');
         } catch (error) {
             console.warn('⚠️ Failed to initialize Redis cache:', error.message);
             console.warn('   Continuing without cache - all requests will scrape');
@@ -195,6 +304,16 @@ class CacheLayer {
             const value = await this.redis.get(key);
             return value;
         } catch (error) {
+            // Check if error is from Upstash (shouldn't happen with Redis Cloud)
+            const errorStr = JSON.stringify(error) + ' ' + (error.message || '') + ' ' + (error.stack || '');
+            if (errorStr.toLowerCase().includes('upstash')) {
+                console.error(`❌ CRITICAL: Upstash error detected in get()!`);
+                console.error(`   Key: ${key}`);
+                console.error(`   Current Redis host: ${this.redis?.options?.host}`);
+                console.error(`   Current Redis port: ${this.redis?.options?.port}`);
+                console.error(`   Error message: ${error.message}`);
+                console.error(`   Full error object:`, error);
+            }
             console.warn(`⚠️ Redis get error for ${key}:`, error.message);
             return null;
         }
@@ -220,6 +339,16 @@ class CacheLayer {
             }
             return true;
         } catch (error) {
+            // Check if error is from Upstash (shouldn't happen with Redis Cloud)
+            const errorStr = JSON.stringify(error) + ' ' + (error.message || '') + ' ' + (error.stack || '');
+            if (errorStr.toLowerCase().includes('upstash')) {
+                console.error(`❌ CRITICAL: Upstash error in set()!`);
+                console.error(`   Key: ${key}`);
+                console.error(`   Current Redis host: ${this.redis?.options?.host}`);
+                console.error(`   Current Redis port: ${this.redis?.options?.port}`);
+                console.error(`   Error message: ${error.message}`);
+                console.error(`   Full error object:`, error);
+            }
             console.warn(`⚠️ Redis set error for ${key}:`, error.message);
             return false;
         }
@@ -257,19 +386,14 @@ class CacheLayer {
         }
 
         try {
-            // Check if key exists first
-            const exists = await this.redis.exists(key);
-            if (exists === 1) {
-                return false; // Key already exists
-            }
-
-            // Set the key with TTL
+            // Use SET with NX (only set if not exists) and EX (expire) options
             if (ttl && ttl > 0) {
-                await this.redis.setex(key, ttl, value);
+                const result = await this.redis.set(key, value, 'EX', ttl, 'NX');
+                return result === 'OK'; // Returns 'OK' if set, null if key exists
             } else {
-                await this.redis.set(key, value);
+                const result = await this.redis.set(key, value, 'NX');
+                return result === 'OK';
             }
-            return true; // Key was set successfully
         } catch (error) {
             console.warn(`⚠️ Redis setNX error for ${key}:`, error.message);
             return false;
@@ -376,11 +500,20 @@ class CacheLayer {
         }
 
         try {
-            // Upstash Redis zadd format: zadd(key, { score, member })
-            // The @upstash/redis client uses object format
-            await this.redis.zadd(key, { score, member });
+            // ioredis zadd format: zadd(key, score, member) or zadd(key, [score, member])
+            await this.redis.zadd(key, score, member);
             return true;
         } catch (error) {
+            // Check if error is from Upstash
+            const errorStr = JSON.stringify(error) + ' ' + (error.message || '') + ' ' + (error.stack || '');
+            if (errorStr.toLowerCase().includes('upstash')) {
+                console.error(`❌ CRITICAL: Upstash error in zadd()!`);
+                console.error(`   Key: ${key}, Member: ${member}`);
+                console.error(`   Current Redis host: ${this.redis?.options?.host}`);
+                console.error(`   Current Redis port: ${this.redis?.options?.port}`);
+                console.error(`   Error message: ${error.message}`);
+                console.error(`   Full error object:`, error);
+            }
             console.warn(`⚠️ Redis zadd error for ${key}:`, error.message);
             return false;
         }
@@ -398,7 +531,7 @@ class CacheLayer {
         }
 
         try {
-            // Upstash Redis zrem format: zrem(key, member)
+            // ioredis zrem format: zrem(key, member)
             await this.redis.zrem(key, member);
             return true;
         } catch (error) {
@@ -422,14 +555,10 @@ class CacheLayer {
 
         try {
             if (withScores) {
-                // Upstash Redis zrange with scores: zrange(key, start, stop, { withScores: true })
-                const result = await this.redis.zrange(key, start, stop, { withScores: true });
-                // Upstash returns object with member as key and score as value
-                if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
-                    // Convert object to array of [member, score] pairs
-                    return Object.entries(result).map(([member, score]) => [member, parseFloat(score)]);
-                } else if (Array.isArray(result)) {
-                    // Handle array format (alternating member/score)
+                // ioredis zrange with scores: zrange(key, start, stop, 'WITHSCORES')
+                const result = await this.redis.zrange(key, start, stop, 'WITHSCORES');
+                // ioredis returns array with alternating [member, score, member, score, ...]
+                if (Array.isArray(result)) {
                     const pairs = [];
                     for (let i = 0; i < result.length; i += 2) {
                         if (i + 1 < result.length) {
@@ -462,69 +591,22 @@ class CacheLayer {
         }
 
         try {
-            // Try ZRANGE with BYSCORE option first
-            try {
-                if (withScores) {
-                    const result = await this.redis.zrange(key, min, max, { 
-                        byScore: true, 
-                        withScores: true 
-                    });
-                    
-                    if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
-                        return Object.entries(result).map(([member, score]) => [member, parseFloat(score)]);
-                    } else if (Array.isArray(result)) {
-                        const pairs = [];
-                        for (let i = 0; i < result.length; i += 2) {
-                            if (i + 1 < result.length) {
-                                pairs.push([result[i], parseFloat(result[i + 1])]);
-                            }
+            if (withScores) {
+                // ioredis zrangebyscore with scores: zrangebyscore(key, min, max, 'WITHSCORES')
+                const result = await this.redis.zrangebyscore(key, min, max, 'WITHSCORES');
+                // ioredis returns array with alternating [member, score, member, score, ...]
+                if (Array.isArray(result)) {
+                    const pairs = [];
+                    for (let i = 0; i < result.length; i += 2) {
+                        if (i + 1 < result.length) {
+                            pairs.push([result[i], parseFloat(result[i + 1])]);
                         }
-                        return pairs;
                     }
-                    return [];
-                } else {
-                    return await this.redis.zrange(key, min, max, { byScore: true });
+                    return pairs;
                 }
-            } catch (e1) {
-                // Fallback: Get all members and filter by score
-                // This is less efficient but works if sorted set operations aren't fully supported
-                const allMembers = await this.redis.zrange(key, 0, -1, { withScores: true });
-                const filtered = [];
-                
-                if (Array.isArray(allMembers)) {
-                    for (let i = 0; i < allMembers.length; i += 2) {
-                        if (i + 1 < allMembers.length) {
-                            const member = allMembers[i];
-                            const score = parseFloat(allMembers[i + 1]);
-                            const minNum = min === '-inf' ? -Infinity : parseFloat(min);
-                            const maxNum = max === '+inf' ? Infinity : parseFloat(max);
-                            
-                            if (score >= minNum && score <= maxNum) {
-                                if (withScores) {
-                                    filtered.push([member, score]);
-                                } else {
-                                    filtered.push(member);
-                                }
-                            }
-                        }
-                    }
-                } else if (typeof allMembers === 'object' && allMembers !== null) {
-                    for (const [member, scoreStr] of Object.entries(allMembers)) {
-                        const score = parseFloat(scoreStr);
-                        const minNum = min === '-inf' ? -Infinity : parseFloat(min);
-                        const maxNum = max === '+inf' ? Infinity : parseFloat(max);
-                        
-                        if (score >= minNum && score <= maxNum) {
-                            if (withScores) {
-                                filtered.push([member, score]);
-                            } else {
-                                filtered.push(member);
-                            }
-                        }
-                    }
-                }
-                
-                return filtered;
+                return [];
+            } else {
+                return await this.redis.zrangebyscore(key, min, max);
             }
         } catch (error) {
             console.warn(`⚠️ Redis zrangebyscore error for ${key}:`, error.message);
@@ -544,9 +626,9 @@ class CacheLayer {
         }
 
         try {
-            // Upstash Redis zscore format: zscore(key, member)
+            // ioredis zscore format: zscore(key, member)
             const score = await this.redis.zscore(key, member);
-            return score !== null ? parseFloat(score) : null;
+            return score !== null && score !== undefined ? parseFloat(score) : null;
         } catch (error) {
             console.warn(`⚠️ Redis zscore error for ${key}:`, error.message);
             return null;

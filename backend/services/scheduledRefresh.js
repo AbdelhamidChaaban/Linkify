@@ -70,8 +70,11 @@ async function getAllAdmins() {
         const snapshot = await getDocs(adminsCollection);
         
         const allAdmins = [];
+        let totalDocs = 0;
+        let missingPhoneOrPassword = 0;
         
         snapshot.forEach((doc) => {
+            totalDocs++;
             const data = doc.data();
             const adminId = doc.id;
             
@@ -87,6 +90,7 @@ async function getAllAdmins() {
                     name: data.name || phone
                 });
             } else {
+                missingPhoneOrPassword++;
                 console.warn(`⚠️ Admin ${adminId} (${data.name || 'unnamed'}) is missing phone or password`);
             }
         });
@@ -94,7 +98,13 @@ async function getAllAdmins() {
         // Only log if count changed (to avoid spam when called frequently)
         // Store last count in module-level variable
         if (typeof getAllAdmins.lastCount === 'undefined' || getAllAdmins.lastCount !== allAdmins.length) {
-            console.log(`📋 Found ${allAdmins.length} admin(s) total`);
+            if (totalDocs === 0) {
+                console.log(`📋 Found 0 admin(s) total (0 documents in Firestore)`);
+            } else if (allAdmins.length === 0 && totalDocs > 0) {
+                console.log(`⚠️ Found 0 valid admin(s) out of ${totalDocs} document(s) (all missing phone/password)`);
+            } else {
+                console.log(`📋 Found ${allAdmins.length} valid admin(s) total${totalDocs > allAdmins.length ? ` (${totalDocs - allAdmins.length} skipped - missing phone/password)` : ''}`);
+            }
             getAllAdmins.lastCount = allAdmins.length;
         }
         

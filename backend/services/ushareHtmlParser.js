@@ -67,6 +67,16 @@ async function fetchUshareHtmlHttp(adminPhone, cookies) {
         const url = `${USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
         const cookieHeader = formatCookiesForHeader(cookies);
         
+        // Use connection pooling for better performance (reuse connections)
+        const https = require('https');
+        const httpsAgent = new https.Agent({
+            keepAlive: true,
+            keepAliveMsecs: 1000,
+            maxSockets: 50,
+            maxFreeSockets: 10,
+            timeout: 60000
+        });
+        
         const response = await axios.get(url, {
             headers: {
                 'Cookie': cookieHeader,
@@ -75,9 +85,10 @@ async function fetchUshareHtmlHttp(adminPhone, cookies) {
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Referer': 'https://www.alfa.com.lb/en/account'
             },
-            timeout: 5000, // 5 second timeout (faster fallback to Puppeteer)
+            timeout: 10000, // 10 second timeout (reduced from 15s to speed up refresh)
             maxRedirects: 5,
-            validateStatus: (status) => status < 400 // Accept 3xx redirects
+            validateStatus: (status) => status < 400, // Accept 3xx redirects
+            httpsAgent: httpsAgent // Use connection pooling for better performance
         });
         
         // Check if redirected to login
@@ -177,10 +188,19 @@ async function fetchUshareHtmlHttp(adminPhone, cookies) {
         
     } catch (error) {
         // HTTP request failed - will fallback to Puppeteer
+        let errorMessage = 'HTTP request failed';
+        if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+            errorMessage = `HTTP request timeout (${error.config?.timeout || 15000}ms exceeded) - Alfa website is slow`;
+        } else if (error.response) {
+            errorMessage = `HTTP ${error.response.status}: ${error.response.statusText}`;
+        } else if (error.message) {
+            errorMessage = error.message;
+        }
+        
         return {
             success: false,
             data: null,
-            error: error.message || 'HTTP request failed'
+            error: errorMessage
         };
     }
 }
@@ -215,7 +235,18 @@ async function fetchUshareHtml(adminPhone, cookies, useCache = true) {
         return httpResult;
     }
     
-    // HTTP failed - fallback to Puppeteer (slower but more reliable)
+    // HTTP failed - check if it's a login redirect (cookies expired)
+    // If so, skip Puppeteer (it will just redirect to login, wasting ~15s)
+    if (httpResult.error && (httpResult.error.includes('Redirected to login') || httpResult.error.includes('cookies expired'))) {
+        console.log(`⏭️ [Ushare HTML] HTTP request redirected to login - skipping Puppeteer (would waste time)`);
+        return {
+            success: false,
+            data: null,
+            error: 'Redirected to login - cookies expired'
+        };
+    }
+    
+    // HTTP failed for other reason - fallback to Puppeteer (slower but more reliable)
     console.log(`🔄 [Ushare HTML] HTTP request failed (${httpResult.error}), falling back to Puppeteer...`);
     
     let page = null;
@@ -254,7 +285,7 @@ async function fetchUshareHtml(adminPhone, cookies, useCache = true) {
         // OPTIMIZATION 2: Use faster navigation and reduced timeout
         await page.goto(url, {
             waitUntil: 'domcontentloaded', // Faster than 'networkidle'
-            timeout: 20000 // Reduced from 30s to 20s
+            timeout: 10000 // Reduced to 10s (matching HTTP timeout)
         });
         
         // OPTIMIZATION 2: Wait for subscriber container with reduced timeout

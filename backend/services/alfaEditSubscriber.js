@@ -19,7 +19,7 @@ function delay(ms) {
  * @param {number} newQuota - New quota in GB (e.g., 1.5)
  * @returns {Promise<{success: boolean, message: string}>} Result
  */
-async function editSubscriber(adminId, adminPhone, adminPassword, subscriberPhone, newQuota) {
+async function editSubscriber(adminId, adminPhone, adminPassword, subscriberPhone, newQuota, sessionData = null) {
     let context = null;
     let page = null;
     let refreshLockAcquired = false;
@@ -59,20 +59,19 @@ async function editSubscriber(adminId, adminPhone, adminPassword, subscriberPhon
             page = sessionData.page;
             skipNavigation = true; // Skip all login/navigation logic
             
-            // Just verify we're on the ushare page, refresh if needed
+            // Verify we're on the ushare page - but DON'T refresh (cookies are already set, refresh might cause login redirect)
             const currentUrl = page.url();
             const ushareUrl = `${ALFA_USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
             
             if (!currentUrl.includes('/ushare')) {
-                // Not on ushare page, navigate to it
+                // Not on ushare page, navigate to it (but don't refresh if already there)
                 console.log(`🌐 [Session] Navigating to Ushare page: ${ushareUrl}`);
                 await page.goto(ushareUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
                 await delay(2000);
             } else {
-                // Already on ushare page, just refresh to get latest data
-                console.log(`🔄 [Session] Refreshing Ushare page to get latest data...`);
-                await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-                await delay(2000);
+                // Already on ushare page - DON'T refresh (cookies are set, page is ready)
+                // Refreshing might cause a redirect to login even with valid cookies
+                console.log(`✅ [Session] Already on Ushare page, skipping refresh to avoid login redirect`);
             }
         } else {
             // Get a new isolated browser context from the pool
@@ -330,8 +329,63 @@ async function editSubscriber(adminId, adminPhone, adminPassword, subscriberPhon
 
         // Submit the form
         console.log(`🚀 Submitting form...`);
-        await page.waitForSelector('button[type="submit"]#submit', { timeout: 10000 });
-        await page.click('button[type="submit"]#submit');
+        
+        // Try multiple selectors for submit button (Alfa website might use different selectors)
+        let submitButtonFound = false;
+        const submitSelectors = [
+            '#submit',  // Simple ID selector
+            'button#submit',  // Button with ID
+            'button[type="submit"]',  // Button with type submit
+            'button[type="submit"]#submit',  // Combined (original)
+            'input[type="submit"]',  // Input submit button
+            'button.btn-primary[type="submit"]',  // Bootstrap button
+            'form button[type="submit"]'  // Submit button in form
+        ];
+        
+        for (const selector of submitSelectors) {
+            try {
+                await page.waitForSelector(selector, { timeout: 2000 });
+                console.log(`✅ Found submit button with selector: ${selector}`);
+                await page.click(selector);
+                submitButtonFound = true;
+                break;
+            } catch (e) {
+                // Try next selector
+                continue;
+            }
+        }
+        
+        if (!submitButtonFound) {
+            // Last resort: try to find and click submit button by evaluating JavaScript
+            console.log(`🔍 Trying JavaScript evaluation to find submit button...`);
+            const clicked = await page.evaluate(() => {
+                // Try to find submit button
+                const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+                const submitBtn = buttons.find(btn => 
+                    btn.type === 'submit' || 
+                    btn.id === 'submit' || 
+                    btn.getAttribute('onclick')?.includes('submit') ||
+                    btn.textContent?.toLowerCase().includes('submit') ||
+                    btn.classList.contains('submit') ||
+                    btn.name === 'submit'
+                );
+                
+                if (submitBtn) {
+                    // Click it directly in the page context
+                    submitBtn.click();
+                    return true;
+                }
+                return false;
+            });
+            
+            if (clicked) {
+                console.log(`✅ Found and clicked submit button via JavaScript evaluation`);
+                submitButtonFound = true;
+            } else {
+                throw new Error('Could not find submit button with any known selector. Please check the form structure.');
+            }
+        }
+        
         console.log(`✅ Clicked submit button`);
 
         // Wait for form submission

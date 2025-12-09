@@ -3,24 +3,54 @@ class AdminsManager {
         this.currentPage = 1;
         this.rowsPerPage = 25;
         this.admins = []; // Will be populated from Firebase/API
+        this.filteredAdmins = []; // Filtered admins based on search
+        this.searchQuery = ''; // Current search query
         this.selectedRows = new Set();
         this.denseMode = false;
         this.modal = null;
         this.form = null;
         this.editingAdminId = null; // Track which admin is being edited
+        this.currentUserId = null; // Current authenticated user ID
         
         this.init();
+    }
+    
+    // Get current user ID from Firebase auth
+    getCurrentUserId() {
+        if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+            return auth.currentUser.uid;
+        }
+        return null;
     }
     
     // Load admins from Firebase/API
     async loadAdmins() {
         try {
-            // Try to get all admins without orderBy to avoid index issues
+            // Get current user ID - CRITICAL for data isolation
+            this.currentUserId = this.getCurrentUserId();
+            if (!this.currentUserId) {
+                console.error('❌ No authenticated user found. Please log in.');
+                const tbody = document.getElementById('adminsTableBody');
+                if (tbody) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="empty-state" style="text-align: center; padding: 3rem; color: #ef4444;">
+                                <p>⚠️ You must be logged in to view admins.</p>
+                                <p style="margin-top: 1rem;"><a href="/auth/login.html" style="color: #3b82f6;">Go to Login</a></p>
+                            </td>
+                        </tr>
+                    `;
+                }
+                return;
+            }
+            
+            // Try to get all admins for this user only
             let snapshot;
             try {
+                // CRITICAL: Filter admins by userId to ensure each user only sees their own admins
                 // Get admins with timeout handling
                 // Firestore will automatically use cache if server is unavailable (thanks to persistence)
-                const queryPromise = db.collection('admins').get();
+                const queryPromise = db.collection('admins').where('userId', '==', this.currentUserId).get();
                 const timeoutPromise = new Promise((_, reject) => 
                     setTimeout(() => reject(new Error('Firestore timeout')), 20000) // 20s timeout (increased)
                 );
@@ -81,6 +111,9 @@ class AdminsManager {
                 });
             }
             
+            // Apply search filter if there's a search query
+            this.applySearchFilter();
+            
             // Use requestAnimationFrame for non-blocking render
             requestAnimationFrame(() => {
                 this.renderTable();
@@ -97,11 +130,14 @@ class AdminsManager {
     }
     
     init() {
-        this.bindEvents();
-        this.initModal();
-        this.showLoading();
-        // Wait for Firebase to be ready
-        this.waitForFirebase().then(() => {
+        // Wait for Firebase auth to be ready and user to be authenticated
+        this.waitForAuth().then(() => {
+            this.bindEvents();
+            this.initModal();
+            this.showLoading();
+            // Wait for Firebase to be ready
+            return this.waitForFirebase();
+        }).then(() => {
             this.loadAdmins().then(() => {
                 // Check if we should open edit modal from URL hash (e.g., #edit-{adminId})
                 this.checkUrlHash();
@@ -119,6 +155,39 @@ class AdminsManager {
                 `;
             }
         });
+    }
+    
+    async waitForAuth() {
+        // Wait for Firebase auth to be available and user to be authenticated
+        let attempts = 0;
+        while (attempts < 50) {
+            if (typeof auth !== 'undefined' && auth) {
+                // Wait for auth state to be ready
+                return new Promise((resolve, reject) => {
+                    const unsubscribe = auth.onAuthStateChanged((user) => {
+                        unsubscribe(); // Stop listening after first state change
+                        if (user && user.uid) {
+                            this.currentUserId = user.uid;
+                            console.log('✅ User authenticated:', user.uid);
+                            resolve();
+                        } else {
+                            reject(new Error('User not authenticated. Please log in.'));
+                        }
+                    });
+                    
+                    // If user is already logged in, resolve immediately
+                    if (auth.currentUser && auth.currentUser.uid) {
+                        this.currentUserId = auth.currentUser.uid;
+                        console.log('✅ User already authenticated:', auth.currentUser.uid);
+                        unsubscribe();
+                        resolve();
+                    }
+                });
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+        throw new Error('Firebase auth timeout - user not authenticated');
     }
     
     checkUrlHash() {
@@ -172,6 +241,8 @@ class AdminsManager {
                 </tr>
             `;
         }
+        // Initialize filteredAdmins as empty array during loading
+        this.filteredAdmins = [];
     }
     
     initModal() {
@@ -367,6 +438,14 @@ class AdminsManager {
             const quota = parseInt(document.getElementById('adminQuota').value.trim());
             const notUShare = document.getElementById('adminNotUShare').checked;
             
+            // Get current user ID - CRITICAL for data isolation
+            const currentUserId = this.getCurrentUserId();
+            if (!currentUserId) {
+                alert('⚠️ You must be logged in to create or edit admins.');
+                this.setLoading(false);
+                return;
+            }
+            
             // Prepare admin data
             const adminData = {
                 name: name,
@@ -375,6 +454,7 @@ class AdminsManager {
                 status: type === 'Open' ? 'Open (Admin)' : 'Closed (Admin)',
                 quota: quota,
                 notUShare: notUShare,
+                userId: currentUserId, // CRITICAL: Associate admin with current user
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             };
             
@@ -386,6 +466,23 @@ class AdminsManager {
             }
             
             if (this.editingAdminId) {
+                // CRITICAL: Verify ownership before updating
+                const adminToUpdate = this.admins.find(a => a.id === this.editingAdminId);
+                if (!adminToUpdate) {
+                    alert('Error: Admin not found.');
+                    this.setLoading(false);
+                    return;
+                }
+                
+                if (adminToUpdate.userId !== currentUserId) {
+                    alert('Error: You do not have permission to update this admin.');
+                    this.setLoading(false);
+                    return;
+                }
+                
+                // Ensure userId is preserved (not overwritten)
+                adminData.userId = currentUserId;
+                
                 // Update existing admin
                 await db.collection('admins').doc(this.editingAdminId).update(adminData);
                 
@@ -454,6 +551,39 @@ class AdminsManager {
             this.selectAllRows(e.target.checked);
         });
         
+        // Search input
+        const searchInput = document.getElementById('adminSearch');
+        const searchClear = document.getElementById('searchClear');
+        
+        searchInput.addEventListener('input', (e) => {
+            this.searchQuery = e.target.value.trim();
+            this.applySearchFilter();
+            this.currentPage = 1; // Reset to first page when searching
+            this.renderTable();
+            this.updatePagination();
+            this.updatePageInfo();
+            
+            // Show/hide clear button
+            if (this.searchQuery.length > 0) {
+                searchClear.style.display = 'flex';
+            } else {
+                searchClear.style.display = 'none';
+            }
+        });
+        
+        // Clear search button
+        searchClear.addEventListener('click', () => {
+            searchInput.value = '';
+            this.searchQuery = '';
+            this.applySearchFilter();
+            this.currentPage = 1;
+            this.renderTable();
+            this.updatePagination();
+            this.updatePageInfo();
+            searchClear.style.display = 'none';
+            searchInput.focus();
+        });
+        
         // Rows per page
         document.getElementById('rowsPerPage').addEventListener('change', (e) => {
             this.rowsPerPage = parseInt(e.target.value);
@@ -474,7 +604,7 @@ class AdminsManager {
         });
         
         document.getElementById('nextPage').addEventListener('click', () => {
-            const totalPages = Math.ceil(this.admins.length / this.rowsPerPage);
+            const totalPages = Math.ceil(this.filteredAdmins.length / this.rowsPerPage);
             if (this.currentPage < totalPages) {
                 this.currentPage++;
                 this.renderTable();
@@ -498,6 +628,20 @@ class AdminsManager {
         });
     }
     
+    applySearchFilter() {
+        if (!this.searchQuery) {
+            this.filteredAdmins = [...this.admins];
+            return;
+        }
+        
+        const query = this.searchQuery.toLowerCase();
+        this.filteredAdmins = this.admins.filter(admin => {
+            const name = (admin.name || '').toLowerCase();
+            const phone = (admin.phone || '').toLowerCase();
+            return name.includes(query) || phone.includes(query);
+        });
+    }
+    
     renderTable() {
         const tbody = document.getElementById('adminsTableBody');
         
@@ -516,9 +660,24 @@ class AdminsManager {
             return;
         }
         
+        if (this.filteredAdmins.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="m21 21-4.35-4.35"/>
+                        </svg>
+                        <p>No admins found matching "${this.searchQuery}"</p>
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+        
         const startIndex = (this.currentPage - 1) * this.rowsPerPage;
         const endIndex = startIndex + this.rowsPerPage;
-        const pageAdmins = this.admins.slice(startIndex, endIndex);
+        const pageAdmins = this.filteredAdmins.slice(startIndex, endIndex);
         
         tbody.innerHTML = pageAdmins.map(admin => `
             <tr>
@@ -582,7 +741,7 @@ class AdminsManager {
     selectAllRows(checked) {
         const startIndex = (this.currentPage - 1) * this.rowsPerPage;
         const endIndex = startIndex + this.rowsPerPage;
-        const pageAdmins = this.admins.slice(startIndex, endIndex);
+        const pageAdmins = this.filteredAdmins.slice(startIndex, endIndex);
         
         pageAdmins.forEach(admin => {
             if (checked) {
@@ -604,19 +763,21 @@ class AdminsManager {
     }
     
     updatePagination() {
-        const totalPages = Math.ceil(this.admins.length / this.rowsPerPage);
+        const totalPages = Math.ceil(this.filteredAdmins.length / this.rowsPerPage);
         document.getElementById('prevPage').disabled = this.currentPage === 1;
         document.getElementById('nextPage').disabled = this.currentPage === totalPages || totalPages === 0;
     }
     
     updatePageInfo() {
-        if (this.admins.length === 0) {
+        if (this.filteredAdmins.length === 0) {
             document.getElementById('pageInfo').textContent = '0 of 0';
             return;
         }
         const startIndex = (this.currentPage - 1) * this.rowsPerPage + 1;
-        const endIndex = Math.min(this.currentPage * this.rowsPerPage, this.admins.length);
-        document.getElementById('pageInfo').textContent = `${startIndex}–${endIndex} of ${this.admins.length}`;
+        const endIndex = Math.min(this.currentPage * this.rowsPerPage, this.filteredAdmins.length);
+        const total = this.filteredAdmins.length;
+        const displayTotal = this.searchQuery ? `${total} (filtered)` : total;
+        document.getElementById('pageInfo').textContent = `${startIndex}–${endIndex} of ${displayTotal}`;
     }
     
     editAdmin(id) {
@@ -629,9 +790,23 @@ class AdminsManager {
     }
     
     async deleteAdmin(id) {
+        // CRITICAL: Get current user ID and verify ownership
+        const currentUserId = this.getCurrentUserId();
+        if (!currentUserId) {
+            alert('Error: You must be logged in to delete admins.');
+            return;
+        }
+        
         const admin = this.admins.find(a => a.id === id);
         if (!admin) {
             console.error('Admin not found with id:', id);
+            alert('Error: Admin not found.');
+            return;
+        }
+        
+        // CRITICAL: Verify ownership before deleting
+        if (admin.userId !== currentUserId) {
+            alert('Error: You do not have permission to delete this admin.');
             return;
         }
         

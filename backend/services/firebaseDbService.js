@@ -78,8 +78,9 @@ function removeUndefined(obj) {
  * Update admin dashboard data
  * @param {string} adminId - Admin document ID
  * @param {Object} dashboardData - Dashboard data
+ * @param {string} expectedUserId - Optional: Expected userId for validation (security)
  */
-async function updateDashboardData(adminId, dashboardData) {
+async function updateDashboardData(adminId, dashboardData, expectedUserId = null) {
   // Completely disable Firebase if it's causing issues
   // Check if Firebase is disabled via environment variable
   if (process.env.DISABLE_FIREBASE === 'true') {
@@ -176,11 +177,21 @@ async function updateDashboardData(adminId, dashboardData) {
     let currentData = {};
     try {
       const currentDoc = await getDoc(userDocRef);
-      currentData = currentDoc.exists() ? currentDoc.data() : {};
+      if (!currentDoc.exists()) {
+        console.warn(`⚠️ Admin document ${adminId} does not exist`);
+        return; // Don't create new document if it doesn't exist
+      }
+      currentData = currentDoc.data();
+      
+      // SECURITY: Validate userId if provided
+      if (expectedUserId && currentData.userId && currentData.userId !== expectedUserId) {
+        console.warn(`⚠️ Security: Admin ${adminId} does not belong to user ${expectedUserId}, update rejected`);
+        return; // Reject update to prevent unauthorized modification
+      }
     } catch (getError) {
       // Firebase is offline or failed - that's OK, we'll use empty currentData
       console.warn('⚠️ Could not get current document (Firebase may be offline):', getError.message);
-      // Continue with empty currentData
+      // Continue with empty currentData (but we can't validate userId if offline)
     }
     
     // Track balance history (last 5 successful refreshes)
@@ -204,6 +215,49 @@ async function updateDashboardData(adminId, dashboardData) {
       currentData.balanceHistory = balanceHistory;
     }
     
+    // CRITICAL: Store successful dates/expiration with timestamps for fallback on API failure
+    // Only update cache when we have valid values from successful API calls
+    const now = Date.now();
+    const nowISO = new Date().toISOString();
+    
+    // Cache subscriptionDate and validityDate from getmyservices API (only if valid)
+    if (cleanDashboardData.subscriptionDate && 
+        typeof cleanDashboardData.subscriptionDate === 'string' && 
+        cleanDashboardData.subscriptionDate.trim() && 
+        !cleanDashboardData.subscriptionDate.includes('NaN')) {
+      currentData._cachedDates = currentData._cachedDates || {};
+      currentData._cachedDates.subscriptionDate = {
+        value: cleanDashboardData.subscriptionDate,
+        timestamp: now,
+        date: nowISO
+      };
+    }
+    
+    if (cleanDashboardData.validityDate && 
+        typeof cleanDashboardData.validityDate === 'string' && 
+        cleanDashboardData.validityDate.trim() && 
+        !cleanDashboardData.validityDate.includes('NaN')) {
+      currentData._cachedDates = currentData._cachedDates || {};
+      currentData._cachedDates.validityDate = {
+        value: cleanDashboardData.validityDate,
+        timestamp: now,
+        date: nowISO
+      };
+    }
+    
+    // Cache expiration from getexpirydate API (only if valid and > 0)
+    if (cleanDashboardData.expiration !== undefined && 
+        cleanDashboardData.expiration !== null && 
+        typeof cleanDashboardData.expiration === 'number' && 
+        !isNaN(cleanDashboardData.expiration) && 
+        cleanDashboardData.expiration > 0) {
+      currentData._cachedExpiration = {
+        value: cleanDashboardData.expiration,
+        timestamp: now,
+        date: nowISO
+      };
+    }
+    
     // Preserve critical fields that should not be overwritten
     const preservedFields = {
       name: currentData.name,
@@ -211,6 +265,7 @@ async function updateDashboardData(adminId, dashboardData) {
       password: currentData.password,
       quota: currentData.quota,
       type: currentData.type,
+      userId: currentData.userId || null, // CRITICAL: Preserve userId for data isolation
       pendingSubscribers: Array.isArray(currentData.pendingSubscribers) ? currentData.pendingSubscribers : [], // CRITICAL: Preserve pending subscribers (always array)
       removedSubscribers: Array.isArray(currentData.removedSubscribers) ? currentData.removedSubscribers : [], // Preserve removed subscribers (always array)
       createdAt: currentData.createdAt,
@@ -280,9 +335,14 @@ async function updateDashboardData(adminId, dashboardData) {
 /**
  * Get admin data by adminId
  * @param {string} adminId - Admin document ID
+ * @param {string} expectedUserId - Optional: Expected userId for validation (security)
  * @returns {Promise<{phone: string, password: string, name: string} | null>} Admin data
+ * 
+ * SECURITY NOTE: This function does not validate userId by default.
+ * The frontend is responsible for filtering by userId and validating ownership.
+ * For enhanced security, pass expectedUserId and this function will verify ownership.
  */
-async function getAdminData(adminId) {
+async function getAdminData(adminId, expectedUserId = null) {
   // Check if Firebase is disabled
   if (process.env.DISABLE_FIREBASE === 'true') {
     console.log('ℹ️ Firebase is disabled via DISABLE_FIREBASE env var');
@@ -305,15 +365,39 @@ async function getAdminData(adminId) {
     }
     
     const data = adminDoc.data();
+    
+    // SECURITY: Validate userId if provided
+    if (expectedUserId && data.userId && data.userId !== expectedUserId) {
+      console.warn(`⚠️ Security: Admin ${adminId} does not belong to user ${expectedUserId}`);
+      return null; // Return null to prevent unauthorized access
+    }
+    
     return {
       phone: data.phone || '',
       password: data.password || '',
-      name: data.name || ''
+      name: data.name || '',
+      userId: data.userId || null, // Include userId in response
+      // Include cached dates and expiration for fallback
+      _cachedDates: data._cachedDates || null,
+      _cachedExpiration: data._cachedExpiration || null,
+      // Also include expiration from alfaData for backward compatibility
+      expiration: data.alfaData?.expiration || null,
+      // Include full alfaData for checking subscriber status
+      alfaData: data.alfaData || null
     };
   } catch (error) {
     console.error(`❌ Error getting admin data for ${adminId}:`, error.message);
     return null;
   }
+}
+
+/**
+ * Get full admin data including alfaData (alias for getAdminData with full data)
+ * @param {string} adminId - Admin document ID
+ * @returns {Promise<Object|null>} Full admin data including alfaData
+ */
+async function getFullAdminData(adminId) {
+  return await getAdminData(adminId);
 }
 
 /**
@@ -503,6 +587,70 @@ async function addRemovedSubscriber(adminId, subscriberPhone) {
 }
 
 /**
+ * Add a removed Active subscriber with full data (for displaying as "Out" in view details)
+ * @param {string} adminId - Admin document ID
+ * @param {Object} subscriberData - Subscriber data with phoneNumber, fullPhoneNumber, consumption, limit
+ * @returns {Promise<boolean>} Success status
+ */
+async function addRemovedActiveSubscriber(adminId, subscriberData) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    return false;
+  }
+  
+  // Check if Firebase is initialized
+  if (!db || !app) {
+    return false;
+  }
+  
+  try {
+    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
+    const adminDoc = await getDoc(adminDocRef);
+    
+    if (!adminDoc.exists()) {
+      return false;
+    }
+    
+    const data = adminDoc.data();
+    const removedActiveSubscribers = data.removedActiveSubscribers || [];
+    
+    // Check if subscriber already in removed Active list
+    const phoneToCheck = subscriberData.phoneNumber;
+    if (removedActiveSubscribers.some(sub => sub.phoneNumber === phoneToCheck)) {
+      return true; // Already tracked
+    }
+    
+    // Add to removed Active list with full data
+    removedActiveSubscribers.push({
+      phoneNumber: subscriberData.phoneNumber,
+      fullPhoneNumber: subscriberData.fullPhoneNumber || subscriberData.phoneNumber,
+      consumption: subscriberData.consumption || 0,
+      limit: subscriberData.limit || 0,
+      status: 'Active' // Always Active since we only store Active removed subscribers
+    });
+    
+    // Also add to removedSubscribers array (for backward compatibility)
+    const removedSubscribers = data.removedSubscribers || [];
+    if (!removedSubscribers.includes(phoneToCheck)) {
+      removedSubscribers.push(phoneToCheck);
+    }
+    
+    // Update document
+    await setDoc(adminDocRef, {
+      ...data,
+      removedActiveSubscribers: removedActiveSubscribers,
+      removedSubscribers: removedSubscribers
+    }, { merge: true });
+    
+    console.log(`✅ Added removed Active subscriber ${phoneToCheck} to admin ${adminId} with data`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Error adding removed Active subscriber for ${adminId}:`, error.message);
+    return false;
+  }
+}
+
+/**
  * Get balance history for an admin (last 5 successful refreshes)
  * @param {string} adminId - Admin document ID
  * @returns {Promise<Array>} Balance history array
@@ -542,9 +690,11 @@ async function getBalanceHistory(adminId) {
 module.exports = {
   updateDashboardData,
   getAdminData,
+  getFullAdminData,
   addPendingSubscriber,
   getPendingSubscribers,
   removePendingSubscriber,
+  addRemovedActiveSubscriber,
   addRemovedSubscriber,
   getBalanceHistory
 };

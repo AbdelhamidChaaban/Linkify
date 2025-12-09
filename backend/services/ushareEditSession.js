@@ -72,34 +72,129 @@ async function prepareEditSession(adminId, adminPhone, adminPassword) {
             }
         }
         
-        // Check if cookies are expired
+        // CRITICAL: Check if cookies are expired and login PROACTIVELY before any navigation
+        // This ensures admin is logged in BEFORE user sees the edit modal (no waiting)
+        const userId = adminId || adminPhone;
         let cookiesExpired = true;
+        
         if (cookies && cookies.length > 0) {
-            const cookieExpiry = await getCookieExpiry(adminId || adminPhone);
-            const now = Date.now();
-            if (cookieExpiry && cookieExpiry > now) {
-                cookiesExpired = false;
+            console.log(`🔍 [Edit Session] Checking cookie validity for ${userId}`);
+            console.log(`   Cookies found: ${cookies.length}`);
+            
+            // CRITICAL: Check if __ACCOUNT cookie exists (this is the key cookie that lasts 72 hours)
+            // __ACCOUNT cookies don't expire quickly - if missing, cookies are invalid
+            const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+            console.log(`   __ACCOUNT cookie: ${hasAccountCookie ? '✅ Found' : '❌ Missing'}`);
+            
+            if (!hasAccountCookie) {
+                // Missing __ACCOUNT cookie - cookies are invalid (even if other cookies exist)
+                cookiesExpired = true;
+                console.log(`⚠️ [Edit Session] Cookies are invalid - missing __ACCOUNT cookie (required for authentication)`);
             } else {
-                cookiesExpired = areCookiesExpired(cookies);
+                // __ACCOUNT cookie exists - check Redis expiry to see if it's still valid
+                const cookieExpiry = await getCookieExpiry(userId);
+                const now = Date.now();
+                
+                console.log(`   Redis expiry: ${cookieExpiry ? new Date(cookieExpiry).toISOString() : 'null'}`);
+                console.log(`   Current time: ${new Date(now).toISOString()}`);
+                
+                if (cookieExpiry && typeof cookieExpiry === 'number' && !isNaN(cookieExpiry)) {
+                    // Ensure cookieExpiry is in milliseconds (not seconds)
+                    const expiryMs = cookieExpiry > 10000000000 ? cookieExpiry : cookieExpiry * 1000;
+                    
+                    if (expiryMs > now) {
+                        // Redis expiry says cookies are still valid
+                        cookiesExpired = false;
+                        const timeRemaining = Math.floor((expiryMs - now) / 1000 / 60);
+                        console.log(`✅ [Edit Session] Cookies are valid (__ACCOUNT exists, Redis expiry: ${timeRemaining} minutes remaining)`);
+                    } else {
+                        // Redis expiry says cookies are expired
+                        const timeExpired = Math.floor((now - expiryMs) / 1000 / 60);
+                        console.log(`⚠️ [Edit Session] Cookies are expired (Redis expiry: expired ${timeExpired} minutes ago)`);
+                        cookiesExpired = true;
+                    }
+                } else {
+                    // No Redis expiry - but __ACCOUNT exists, so assume valid (it lasts 72 hours)
+                    // Only login if navigation fails (handled below)
+                    cookiesExpired = false;
+                    console.log(`✅ [Edit Session] Cookies appear valid (__ACCOUNT exists, no Redis expiry - will verify on navigation)`);
+                }
             }
+        } else {
+            console.log(`⚠️ [Edit Session] No cookies found`);
         }
         
-        // Login if needed
+        // If cookies are expired or missing, login IMMEDIATELY (before navigation)
+        // This ensures cookies are fresh when we navigate, so user doesn't wait
         if (!cookies || cookies.length === 0 || cookiesExpired) {
-            console.log(`🔐 [Edit Session] Cookies expired/missing, performing login...`);
+            console.log(`🔐 [Edit Session] Cookies expired/missing, performing PROACTIVE login before navigation...`);
             if (!adminPassword) {
                 throw new Error('No valid cookies and password not provided');
             }
             
+            // Perform login FIRST (before any navigation)
+            // This ensures admin is logged in before user sees the modal
             const loginResult = await loginToAlfa(page, adminPhone, adminPassword, adminId);
             if (!loginResult.success) {
                 throw new Error('Login failed');
             }
-            await delay(2000);
+            
+            // Get fresh cookies after login
+            cookies = await getCookies(userId);
+            if (!cookies || cookies.length === 0) {
+                const savedSession = await getSession(userId);
+                if (savedSession && savedSession.cookies) {
+                    cookies = savedSession.cookies;
+                }
+            }
+            
+            // Inject fresh cookies (format them properly for Puppeteer)
+            if (cookies && cookies.length > 0) {
+                const formattedCookies = cookies.map(cookie => {
+                    return {
+                        ...cookie,
+                        domain: cookie.domain || 'www.alfa.com.lb',
+                        path: cookie.path || '/',
+                        expires: cookie.expires ? (cookie.expires > 10000000000 ? Math.floor(cookie.expires / 1000) : cookie.expires) : undefined
+                    };
+                });
+                await page.setCookie(...formattedCookies);
+                console.log(`✅ [Edit Session] Injected ${formattedCookies.length} fresh cookies after login (formatted for Puppeteer)`);
+            }
+            await delay(1000); // Brief delay to ensure cookies are set
         } else {
-            // Inject cookies
-            await page.setCookie(...cookies);
-            console.log(`✅ [Edit Session] Injected ${cookies.length} cookies`);
+            // Cookies are valid - format them properly for Puppeteer (ensure domain/path are set)
+            const formattedCookies = cookies.map(cookie => {
+                // Ensure domain and path are set (required for Puppeteer)
+                return {
+                    ...cookie,
+                    domain: cookie.domain || 'www.alfa.com.lb',
+                    path: cookie.path || '/',
+                    // Ensure expires is in seconds (Puppeteer expects seconds, not milliseconds)
+                    expires: cookie.expires ? (cookie.expires > 10000000000 ? Math.floor(cookie.expires / 1000) : cookie.expires) : undefined
+                };
+            });
+            
+            // CRITICAL: Navigate to domain first before setting cookies (Puppeteer requirement)
+            console.log(`🌐 [Edit Session] Navigating to domain first to set cookies properly...`);
+            await page.goto('https://www.alfa.com.lb', {
+                waitUntil: 'domcontentloaded',
+                timeout: 10000
+            });
+            await delay(500);
+            
+            // Set cookies in Puppeteer (must be on correct domain)
+            await page.setCookie(...formattedCookies);
+            console.log(`✅ [Edit Session] Injected ${formattedCookies.length} valid cookies (formatted for Puppeteer)`);
+            
+            // Verify cookies were set by checking if __ACCOUNT cookie exists
+            const setCookies = await page.cookies();
+            const hasAccountAfterSet = setCookies.some(c => c.name === '__ACCOUNT');
+            if (!hasAccountAfterSet) {
+                console.log(`⚠️ [Edit Session] __ACCOUNT cookie not found after setting - cookies may not have been set correctly`);
+            } else {
+                console.log(`✅ [Edit Session] Verified __ACCOUNT cookie is set in browser`);
+            }
         }
         
         // Navigate to Ushare page
@@ -111,10 +206,10 @@ async function prepareEditSession(adminId, adminPhone, adminPassword) {
         });
         await delay(2000);
         
-        // Check if redirected to login
+        // Check if redirected to login (shouldn't happen if we logged in proactively, but handle it)
         const currentUrl = page.url();
         if (currentUrl.includes('/login')) {
-            console.log(`⚠️ [Edit Session] Redirected to login, performing login...`);
+            console.log(`⚠️ [Edit Session] Unexpected redirect to login, performing login immediately...`);
             if (!adminPassword) {
                 throw new Error('Cookies expired and password not provided');
             }

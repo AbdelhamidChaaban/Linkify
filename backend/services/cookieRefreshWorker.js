@@ -45,6 +45,7 @@ const activeLogins = new Map();
 const activeRefreshes = new Set(); // Track admin IDs currently being refreshed
 let workerTimeoutId = null;
 let isRunning = false;
+let keepAliveCycleRunning = false; // Guard to prevent concurrent keep-alive cycles
 
 /**
  * Update failure rate tracking and adjust concurrency dynamically
@@ -1234,14 +1235,14 @@ async function performSilentKeepAlive(userId) {
     try {
         const cookies = await getCookies(userId);
         if (!cookies || cookies.length === 0) {
-            console.log(`❌ [Keep-Alive] ${userId}: No cookies found, triggering auto-login...`);
+            // Only log failures - success is logged in summary
             return await triggerAutoLogin(userId);
         }
 
         // Check if __ACCOUNT cookie exists
         const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
         if (!hasAccountCookie) {
-            console.log(`❌ [Keep-Alive] ${userId}: No __ACCOUNT cookie found, triggering auto-login...`);
+            // Only log failures - success is logged in summary
             return await triggerAutoLogin(userId);
         }
 
@@ -1250,26 +1251,18 @@ async function performSilentKeepAlive(userId) {
         
         if (result.success) {
             const newExpiryUTC = await getCookieExpiry(userId);
-            if (newExpiryUTC) {
-                const newTimeUntilExpiry = Math.round((newExpiryUTC - Date.now()) / 60000);
-                const expiryStr = formatTimeForLogging(newExpiryUTC);
-                console.log(`✅ [Keep-Alive] ${userId}: Extended (expires in ${newTimeUntilExpiry} min, until ${expiryStr})`);
-                
-                // Clear last scheduled time for this admin so it gets logged when rescheduled
-                // (the expiry changed, so next keep-alive time will change)
-                lastScheduledKeepAlive.delete(userId);
-            } else {
-                console.log(`✅ [Keep-Alive] ${userId}: Extended`);
-            }
+            // Clear last scheduled time for this admin so it gets logged when rescheduled
+            // (the expiry changed, so next keep-alive time will change)
+            lastScheduledKeepAlive.delete(userId);
+            // Success is logged in summary - no individual log here
             return { success: true, newExpiry: newExpiryUTC };
         } else {
             // Keep-alive failed - trigger auto-login immediately
-            const reason = result.needsRefresh ? 'expired' : 'timeout';
-            console.log(`❌ [Keep-Alive] ${userId}: Failed (${reason}), triggering auto-login...`);
+            // Only log failures - success is logged in summary
             return await triggerAutoLogin(userId);
         }
     } catch (error) {
-        console.log(`❌ [Keep-Alive] ${userId}: Failed (${error.message}), triggering auto-login...`);
+        // Only log failures - success is logged in summary
         return await triggerAutoLogin(userId);
     }
 }
@@ -1293,19 +1286,10 @@ async function triggerAutoLogin(userId) {
         
         // Get new expiry after login
         const newExpiryUTC = await getCookieExpiry(userId);
-        if (newExpiryUTC) {
-            const newTimeUntilExpiry = Math.round((newExpiryUTC - Date.now()) / 60000);
-            const expiryStr = formatTimeForLogging(newExpiryUTC);
-            console.log(`✅ [Keep-Alive] ${userId}: Auto-login successful (expires in ${newTimeUntilExpiry} min, until ${expiryStr})`);
-            
-            // Clear last scheduled time so it gets logged when rescheduled
-            lastScheduledKeepAlive.delete(userId);
-            
-            return { success: true, newExpiry: newExpiryUTC, autoLogin: true };
-        } else {
-            console.log(`✅ [Keep-Alive] ${userId}: Auto-login successful`);
-            return { success: true, newExpiry: null, autoLogin: true };
-        }
+        // Clear last scheduled time so it gets logged when rescheduled
+        lastScheduledKeepAlive.delete(userId);
+        // Success is logged in summary - no individual log here
+        return { success: true, newExpiry: newExpiryUTC, autoLogin: true };
     } catch (loginError) {
         console.error(`❌ [Keep-Alive] ${userId}: Auto-login failed - ${loginError.message}`);
         return { success: false, newExpiry: null };
@@ -1356,6 +1340,14 @@ async function calculateNextKeepAliveTime(userId) {
  * Only processes admins scheduled for keep-alive at this time (dynamic scheduling)
  */
 async function runSilentKeepAliveCycle() {
+    // CRITICAL: Prevent concurrent execution of keep-alive cycle
+    if (keepAliveCycleRunning) {
+        console.log('⏸️ [Keep-Alive] Cycle already running, skipping...');
+        return;
+    }
+    
+    keepAliveCycleRunning = true;
+    
     try {
         const admins = await getAllAdmins();
         
@@ -1392,27 +1384,91 @@ async function runSilentKeepAliveCycle() {
         }
         
         // PROACTIVE LOGIN: Perform login for admins with expired/missing cookies
+        // CRITICAL: Process in batches to prevent overwhelming the system
         if (adminsNeedingLogin.length > 0) {
-            console.log(`🔐 [Keep-Alive] Detected ${adminsNeedingLogin.length} admin(s) with expired/missing cookies - performing proactive login...`);
-            
             let loginSuccessCount = 0;
             let loginFailCount = 0;
+            const failedAdmins = [];
             
-            await Promise.allSettled(
-                adminsNeedingLogin.map(async (admin) => {
-                    try {
-                        console.log(`🔐 [Keep-Alive] Performing proactive login for ${admin.id}...`);
-                        await loginAndSaveCookies(admin.phone, admin.password, admin.id);
-                        loginSuccessCount++;
-                        console.log(`✅ [Keep-Alive] Proactive login SUCCESS for ${admin.id} - cookies refreshed`);
-                    } catch (error) {
-                        loginFailCount++;
-                        console.error(`❌ [Keep-Alive] Proactive login FAILED for ${admin.id}: ${error.message}`);
+            // Filter out admins that should be skipped (already locked, circuit breaker active, etc.)
+            const adminsToProcess = [];
+            for (const admin of adminsNeedingLogin) {
+                // Check if a refresh is already in progress for this admin
+                const existingLock = await hasRefreshLock(admin.id);
+                if (existingLock) {
+                    continue; // Skip this admin - manual refresh is handling it
+                }
+                
+                // CRITICAL: Check circuit breaker - skip if too many recent failures
+                const sanitizedId = String(admin.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+                const failCountKey = `user:${sanitizedId}:failCount`;
+                const failWindowKey = `user:${sanitizedId}:failWindow`;
+                const failCount = await cacheLayer.get(failCountKey);
+                const failWindowStart = await cacheLayer.get(failWindowKey);
+                
+                if (failCount && parseInt(failCount) >= 3) {
+                    const now = Date.now();
+                    if (failWindowStart) {
+                        const windowStartTime = parseInt(failWindowStart);
+                        // If within 10-minute window, skip login (circuit breaker active)
+                        if (now - windowStartTime < 10 * 60 * 1000) {
+                            continue; // Skip this admin - too many recent failures
+                        }
                     }
-                })
-            );
+                }
+                
+                adminsToProcess.push(admin);
+            }
             
-            console.log(`📊 [Keep-Alive] Proactive login completed: ${loginSuccessCount} succeeded, ${loginFailCount} failed`);
+            // Process in batches to respect MAX_CONCURRENT_LOGINS
+            const batchSize = MAX_CONCURRENT_LOGINS;
+            for (let i = 0; i < adminsToProcess.length; i += batchSize) {
+                const batch = adminsToProcess.slice(i, i + batchSize);
+                
+                // Process batch in parallel (but limited by batchSize)
+                await Promise.allSettled(
+                    batch.map(async (admin) => {
+                        // Try to acquire lock before login (5 minute TTL)
+                        const lockAcquired = await acquireRefreshLock(admin.id, 300);
+                        if (!lockAcquired) {
+                            return; // Skip if we can't acquire lock
+                        }
+                        
+                        const sanitizedId = String(admin.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+                        const failCountKey = `user:${sanitizedId}:failCount`;
+                        const failWindowKey = `user:${sanitizedId}:failWindow`;
+                        
+                        try {
+                            await loginAndSaveCookies(admin.phone, admin.password, admin.id);
+                            loginSuccessCount++;
+                            // Reset circuit breaker on success
+                            await cacheLayer.del(failCountKey).catch(() => {});
+                            await cacheLayer.del(failWindowKey).catch(() => {});
+                        } catch (error) {
+                            loginFailCount++;
+                            failedAdmins.push({ id: admin.id, error: error.message });
+                            
+                            // Update circuit breaker on failure
+                            await updateCircuitBreaker(admin.id, false).catch(() => {});
+                        } finally {
+                            // Always release the lock
+                            await releaseRefreshLock(admin.id).catch(() => {});
+                        }
+                    })
+                );
+                
+                // Add delay between batches to prevent overwhelming the system
+                if (i + batchSize < adminsToProcess.length) {
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay between batches
+                }
+            }
+            
+            // Only log summary
+            if (loginFailCount > 0) {
+                console.log(`🔐 [Keep-Alive] Proactive login: ${loginSuccessCount} succeeded, ${loginFailCount} failed${failedAdmins.length > 0 ? ` (${failedAdmins.slice(0, 5).map(f => f.id).join(', ')}${failedAdmins.length > 5 ? '...' : ''})` : ''}`);
+            } else if (loginSuccessCount > 0) {
+                console.log(`🔐 [Keep-Alive] Proactive login: ${loginSuccessCount} succeeded`);
+            }
         }
         
         if (adminsToKeepAlive.length === 0) {
@@ -1421,7 +1477,7 @@ async function runSilentKeepAliveCycle() {
             return;
         }
 
-        console.log(`🔔 [Keep-Alive] Executing keep-alive for ${adminsToKeepAlive.length} admin(s)...`);
+        // Removed individual execution log - only log summary
         
         let successCount = 0;
         let failCount = 0;
@@ -1442,19 +1498,26 @@ async function runSilentKeepAliveCycle() {
             })
         );
         
-        const summaryParts = [`${successCount} SUCCESS`];
-        if (autoLoginCount > 0) {
-            summaryParts.push(`${autoLoginCount} via auto-login`);
+        // Only log if there were failures or auto-logins (successful keep-alives are silent)
+        if (failCount > 0 || autoLoginCount > 0) {
+            const summaryParts = [];
+            if (autoLoginCount > 0) {
+                summaryParts.push(`${autoLoginCount} auto-login`);
+            }
+            if (failCount > 0) {
+                summaryParts.push(`${failCount} failed`);
+            }
+            if (summaryParts.length > 0) {
+                console.log(`🔔 [Keep-Alive] ${adminsToKeepAlive.length} admin(s): ${summaryParts.join(', ')}`);
+            }
         }
-        if (failCount > 0) {
-            summaryParts.push(`${failCount} FAILED`);
-        }
-        console.log(`✅ [Keep-Alive] Completed: ${summaryParts.join(', ')}`);
+        // Silent if all succeeded via keep-alive (no failures, no auto-logins)
         
     } catch (error) {
         console.error(`❌ [Keep-Alive] Error in keep-alive cycle:`, error.message);
     } finally {
         // Always reschedule next keep-alive cycle (finds earliest next time across all admins)
+        keepAliveCycleRunning = false; // Reset flag to allow next cycle
         scheduleNextKeepAlive();
     }
 }
@@ -1537,9 +1600,10 @@ async function scheduleNextKeepAlive() {
         // Find earliest next keep-alive time (all in UTC)
         const earliestNextUTC = Math.min(...nextTimes);
         
-        // CRITICAL: Also check for expired cookies periodically (every 5 minutes)
-        // This ensures we catch expired cookies quickly and perform proactive login
-        const EXPIRED_COOKIE_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+        // CRITICAL: Also check for expired cookies periodically (every 1 minute)
+        // This ensures we catch expired cookies IMMEDIATELY and perform proactive login
+        // Users should never see login modals - cookies should be refreshed proactively
+        const EXPIRED_COOKIE_CHECK_INTERVAL = 1 * 60 * 1000; // 1 minute (reduced from 5 minutes for faster detection)
         const delayToNextKeepAlive = Math.max(0, earliestNextUTC - nowUTC);
         const delay = Math.min(delayToNextKeepAlive, EXPIRED_COOKIE_CHECK_INTERVAL);
         
