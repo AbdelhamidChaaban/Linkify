@@ -85,7 +85,7 @@ async function fetchUshareHtmlHttp(adminPhone, cookies) {
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Referer': 'https://www.alfa.com.lb/en/account'
             },
-            timeout: 10000, // 10 second timeout (reduced from 15s to speed up refresh)
+            timeout: 6000, // 6 second timeout (reduced for faster failure and cache usage)
             maxRedirects: 5,
             validateStatus: (status) => status < 400, // Accept 3xx redirects
             httpsAgent: httpsAgent // Use connection pooling for better performance
@@ -246,6 +246,16 @@ async function fetchUshareHtml(adminPhone, cookies, useCache = true) {
         };
     }
     
+    // HTTP failed - check if it's a timeout (Alfa server is slow, skip Puppeteer to save time)
+    if (httpResult.error && httpResult.error.includes('timeout')) {
+        console.log(`⏭️ [Ushare HTML] HTTP request timed out - skipping Puppeteer fallback (would waste time, Alfa server is slow)`);
+        return {
+            success: false,
+            data: null,
+            error: httpResult.error
+        };
+    }
+    
     // HTTP failed for other reason - fallback to Puppeteer (slower but more reliable)
     console.log(`🔄 [Ushare HTML] HTTP request failed (${httpResult.error}), falling back to Puppeteer...`);
     
@@ -285,7 +295,7 @@ async function fetchUshareHtml(adminPhone, cookies, useCache = true) {
         // OPTIMIZATION 2: Use faster navigation and reduced timeout
         await page.goto(url, {
             waitUntil: 'domcontentloaded', // Faster than 'networkidle'
-            timeout: 10000 // Reduced to 10s (matching HTTP timeout)
+            timeout: 6000 // Reduced to 6s (matching HTTP timeout for faster failure)
         });
         
         // OPTIMIZATION 2: Wait for subscriber container with reduced timeout

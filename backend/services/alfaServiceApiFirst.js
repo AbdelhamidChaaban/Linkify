@@ -113,28 +113,30 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         _ushareError: null
     };
     
-    // Start all 4 sources in parallel
-    const expiryPromise = apiRequest('/en/account/getexpirydate', cookies, { timeout: 5000, maxRetries: 0 })
+    // OPTIMIZED: Reduced timeouts for faster failure and aggressive cache usage
+    // Alfa's servers are slow, so we fail fast and rely on cached data more
+    const expiryPromise = apiRequest('/en/account/getexpirydate', cookies, { timeout: 3000, maxRetries: 0 })
         .then(data => ({ success: true, data, error: null }))
         .catch(error => ({ success: false, data: null, error }));
     
-    const consumptionPromise = apiRequest('/en/account/getconsumption', cookies, { timeout: 15000, maxRetries: 1 })
+    // Reduced timeout and removed retry for faster completion (use cache instead)
+    const consumptionPromise = apiRequest('/en/account/getconsumption', cookies, { timeout: 8000, maxRetries: 0 })
         .then(data => ({ success: true, data, error: null }))
         .catch(error => ({ success: false, data: null, error }));
     
-    // CRITICAL: Enforce strict 9-second timeout for getmyservices
-    // Use Promise.race to ensure it never takes more than 9 seconds
+    // OPTIMIZED: Reduced timeout from 9s to 6s for faster failure
+    // Use Promise.race to ensure it never takes more than 6 seconds
     const servicesTimeoutPromise = new Promise((resolve) => {
         setTimeout(() => {
-            resolve({ success: false, data: null, error: { type: 'Timeout', message: 'Request timeout after 9000ms - using cached data' }, _timedOut: true });
-        }, 9000);
+            resolve({ success: false, data: null, error: { type: 'Timeout', message: 'Request timeout after 6000ms - using cached data' }, _timedOut: true });
+        }, 6000);
     });
     
-    const servicesApiPromise = apiRequest('/en/account/manage-services/getmyservices', cookies, { timeout: 10000, maxRetries: 0 })
+    const servicesApiPromise = apiRequest('/en/account/manage-services/getmyservices', cookies, { timeout: 7000, maxRetries: 0 })
         .then(data => ({ success: true, data, error: null, _timedOut: false }))
         .catch(error => ({ success: false, data: null, error, _timedOut: false }));
     
-    // Race between API call and 9-second timeout - timeout always wins if API takes >9s
+    // Race between API call and 6-second timeout - timeout always wins if API takes >6s
     const servicesPromise = Promise.race([servicesApiPromise, servicesTimeoutPromise]);
     
     // OPTIMIZATION: Use cache for Ushare HTML (avoids waiting ~20s)
@@ -209,7 +211,7 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
     const expiryStartTime = Date.now();
     if (expiryResult.status === 'fulfilled' && expiryResult.value.success) {
         const duration = Date.now() - expiryStartTime;
-        if (duration > 5000) {
+        if (duration > 3000) {
             // Took more than 5 seconds - skip and use cached data
             console.log(`⏱️ API getexpirydate took ${duration}ms (>5s), skipping and using cached data`);
             results._apiSuccess.expiry = false;
@@ -235,7 +237,7 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         results._apiErrors.expiry = error?.type || 'Unknown';
         const duration = Date.now() - expiryStartTime;
         
-        if (error?.type === 'Timeout' || duration > 5000) {
+        if (error?.type === 'Timeout' || duration > 3000) {
             console.log(`⏱️ API getexpirydate timed out (>5s), using cached data`);
         } else {
             console.log(`❌ API getexpirydate failed: ${error?.type || 'Unknown'} (${duration}ms)`);
