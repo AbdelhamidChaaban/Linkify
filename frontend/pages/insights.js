@@ -3543,7 +3543,10 @@ class InsightsManager {
         try {
             // Prepare edit session: Navigate to Ushare page and get subscriber data
             console.log('🔄 Preparing edit session...');
-            const response = await fetch('/api/ushare/prepare-edit', {
+            
+            // Get backend base URL from config
+            const baseURL = window.AEFA_API_URL || window.location.origin;
+            const response = await fetch(`${baseURL}/api/ushare/prepare-edit`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -4062,7 +4065,8 @@ class InsightsManager {
             
             // Call backend API
             try {
-                const response = await fetch('/api/subscribers/edit', {
+                const baseURL = window.AEFA_API_URL || window.location.origin;
+                const response = await fetch(`${baseURL}/api/subscribers/edit`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -4544,7 +4548,8 @@ class InsightsManager {
             const results = [];
             for (const item of items) {
                 try {
-                    const response = await fetch('/api/subscribers/add', {
+                    const baseURL = window.AEFA_API_URL || window.location.origin;
+                    const response = await fetch(`${baseURL}/api/subscribers/add`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
