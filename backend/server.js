@@ -49,22 +49,8 @@ const { getAdminData, getFullAdminData, getBalanceHistory } = require('./service
 const { prepareEditSession, getActiveSession, closeSession } = require('./services/ushareEditSession');
 
 const app = express();
-// Parse PORT as integer - Render.com automatically sets PORT environment variable
-// Use it directly without port-finding logic
-const PORT = (() => {
-    const envPort = process.env.PORT;
-    if (!envPort) {
-        // Default fallback (should not happen on Render.com)
-        console.warn(`⚠️  PORT environment variable not set, using default 10000`);
-        return 10000;
-    }
-    const parsed = parseInt(envPort, 10);
-    if (isNaN(parsed) || parsed < 0 || parsed > 65535) {
-        console.warn(`⚠️  Invalid PORT value "${envPort}", using default 10000`);
-        return 10000;
-    }
-    return parsed;
-})();
+// Make sure the Express app binds to Render's dynamic port
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 // CORS configuration - Allow requests from Vercel and localhost
@@ -82,6 +68,11 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
+
+// Simple health check route at "/" that returns plain text
+app.get('/', (req, res) => {
+    res.send('Backend is live!');
+});
 
 // Import request queue for handling concurrent requests
 const requestQueue = require('./services/requestQueue');
@@ -665,22 +656,14 @@ async function startServer() {
         // Browser pool initialization will happen in background
         // Use PORT directly (Render.com sets this automatically)
         
-        // Start server immediately (before browser pool initialization)
-        app.listen(PORT, '0.0.0.0', () => {
-            console.log(`🚀 Linkify backend server running on port ${PORT}`);
-            console.log(`📁 Serving static files from: ${frontendPath}`);
-            console.log(`🌐 Server is listening on 0.0.0.0:${PORT}`);
+        // Start server immediately - Render.com needs the port bound right away
+        app.listen(PORT, () => {
+            console.log(`Backend running on port ${PORT}`);
         });
         
-        // Initialize browser pool in background (non-blocking)
-        // This allows server to start even if Chromium isn't ready yet
-        console.log('🔧 Initializing browser pool (non-blocking)...');
-        browserPool.initialize().then(() => {
-            console.log('✅ Browser pool initialized successfully');
-        }).catch((err) => {
-            console.error('⚠️ Browser pool initialization failed (server still running):', err.message);
-            console.error('   Browser-dependent features will not work until Chromium is available');
-        });
+        // Defer heavy Puppeteer tasks - do not launch immediately at startup
+        // Browser pool will be initialized lazily when first needed
+        console.log('ℹ️ Browser pool will be initialized on first use (deferred for faster startup)');
         
         // Start scheduled refresh service (non-blocking)
         console.log('🔧 Initializing scheduled refresh service...');
