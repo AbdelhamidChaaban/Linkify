@@ -30,17 +30,26 @@ class AlfaAPIService {
     async checkHealth() {
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            // Increased timeout to 15s to handle Render.com cold starts
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
             
             const response = await fetch(`${this.baseURL}/health`, {
                 method: 'GET',
-                signal: controller.signal
+                signal: controller.signal,
+                // Add mode and credentials for cross-origin requests
+                mode: 'cors',
+                credentials: 'omit'
             });
             
             clearTimeout(timeoutId);
             return response.ok;
         } catch (error) {
-            console.error('Health check failed:', error);
+            // Don't log AbortError as error - it's just a timeout
+            if (error.name !== 'AbortError') {
+                console.error('Health check failed:', error);
+            } else {
+                console.warn('Health check timed out (backend may be starting up)');
+            }
             return false;
         }
     }
@@ -54,10 +63,14 @@ class AlfaAPIService {
      */
     async fetchDashboardData(phone, password, adminId) {
         try {
-            // First check if backend is available
+            // OPTIONAL: Check backend health first (but don't block if it times out)
+            // Render.com free tier has cold starts, so health check may timeout even if backend is working
+            // We'll try the actual API call anyway - if backend is down, the API call will fail with a better error
             const isHealthy = await this.checkHealth();
             if (!isHealthy) {
-                throw new Error('Backend server is not responding. Please make sure the server is running on ' + this.baseURL);
+                console.warn('⚠️ Health check failed or timed out, but proceeding with API call anyway (Render.com may be cold starting)');
+                // Don't throw - continue with API call anyway
+                // If backend is actually down, the API call will fail with a more specific error
             }
 
             // Create abort controller for timeout
