@@ -91,20 +91,22 @@ class BrowserPool {
      * @private
      */
     async _launchBrowser() {
-        console.log('🚀 Launching persistent browser instance...');
+        console.log('🚀 Launching persistent browser instance with Render-safe configuration...');
         
         // Use bundled Chromium from puppeteer (uses cached Chromium)
         // This ensures we always use the Chromium that was downloaded during npm install
         const executablePath = puppeteerBase.executablePath();
         console.log(`📦 Using bundled Chromium at: ${executablePath}`);
         
+        // Render.com-safe Puppeteer launch configuration
+        // These flags are required for Puppeteer to work in Render.com's containerized environment
         const launchOptions = {
-            executablePath: executablePath, // Uses bundled Chromium
+            executablePath: executablePath, // Uses bundled Chromium from puppeteer.executablePath()
             headless: true,
-            // Render.com-compatible args
+            // Render.com-compatible args (required for containerized environments)
             args: [
-                '--no-sandbox',                    // Required for Render.com
-                '--disable-setuid-sandbox',        // Required for Render.com
+                '--no-sandbox',                    // Required for Render.com (disables sandbox)
+                '--disable-setuid-sandbox',        // Required for Render.com (disables setuid sandbox)
                 '--disable-dev-shm-usage',         // Prevents /dev/shm issues on Render.com
                 '--disable-blink-features=AutomationControlled',
                 '--disable-features=IsolateOrigins,site-per-process',
@@ -120,6 +122,7 @@ class BrowserPool {
             ]
         };
         
+        console.log('✅ Launch options configured with Render-safe flags');
         const browser = await puppeteer.launch(launchOptions);
         
         // Handle browser disconnection

@@ -543,48 +543,100 @@ app.post('/api/subscribers/edit', async (req, res) => {
 });
 
 // Prepare edit session: Navigate to Ushare page and return subscriber data + session ID
+// Render.com-optimized: Uses browser pool with Render-safe flags, proper error handling, and non-blocking startup
 app.post('/api/ushare/prepare-edit', async (req, res) => {
+    // Set a timeout for the entire request to prevent hanging
+    const requestTimeout = setTimeout(() => {
+        if (!res.headersSent) {
+            res.status(504).json({
+                success: false,
+                error: 'Request timeout - The operation took too long. Please try again.'
+            });
+        }
+    }, 60000); // 60 second timeout for entire request
+    
     try {
         const { adminId } = req.body;
         
+        // Validate input
         if (!adminId) {
+            clearTimeout(requestTimeout);
             return res.status(400).json({
                 success: false,
                 error: 'adminId is required'
             });
         }
         
-        console.log(`[${new Date().toISOString()}] Preparing edit session for admin: ${adminId}`);
+        console.log(`[${new Date().toISOString()}] 🚀 [Prepare Edit] Starting edit session preparation for admin: ${adminId}`);
+        
+        // Ensure browser pool is initialized (non-blocking, lazy initialization)
+        try {
+            await browserPool.initialize();
+        } catch (browserError) {
+            clearTimeout(requestTimeout);
+            console.error('❌ [Prepare Edit] Browser pool initialization failed:', browserError);
+            return res.status(500).json({
+                success: false,
+                error: 'Browser initialization failed. Please try again in a moment.'
+            });
+        }
         
         // Get admin data
         const adminData = await getAdminData(adminId);
         if (!adminData || !adminData.phone || !adminData.password) {
+            clearTimeout(requestTimeout);
             return res.status(404).json({
                 success: false,
                 error: 'Admin not found or missing credentials'
             });
         }
         
+        console.log(`[${new Date().toISOString()}] 📋 [Prepare Edit] Admin data retrieved, preparing edit session...`);
+        
         // Prepare edit session (navigates to Ushare page and returns data + session ID)
+        // This uses the browser pool which has Render-safe flags:
+        // - --no-sandbox
+        // - --disable-setuid-sandbox
+        // - --disable-dev-shm-usage
+        // Navigation timeouts are set to 30-45s in ushareEditSession.js
         const result = await prepareEditSession(adminId, adminData.phone, adminData.password);
         
+        clearTimeout(requestTimeout);
+        
         if (result.success) {
+            console.log(`[${new Date().toISOString()}] ✅ [Prepare Edit] Edit session prepared successfully: ${result.sessionId}`);
             res.json({
                 success: true,
                 sessionId: result.sessionId,
                 data: result.data
             });
         } else {
+            console.error(`[${new Date().toISOString()}] ❌ [Prepare Edit] Failed to prepare edit session: ${result.error}`);
             res.status(500).json({
                 success: false,
                 error: result.error || 'Failed to prepare edit session'
             });
         }
     } catch (error) {
-        console.error('❌ Error preparing edit session:', error);
+        clearTimeout(requestTimeout);
+        console.error(`[${new Date().toISOString()}] ❌ [Prepare Edit] Unexpected error:`, error);
+        console.error('   Error message:', error?.message);
+        console.error('   Error stack:', error?.stack);
+        
+        // Provide user-friendly error messages
+        let errorMessage = error?.message || 'Unknown error occurred';
+        
+        if (error.message && error.message.includes('Navigation timeout')) {
+            errorMessage = 'Navigation timeout - The page took too long to load. This may happen if the backend is cold-starting or the Alfa website is slow. Please try again in a moment.';
+        } else if (error.message && error.message.includes('net::ERR_')) {
+            errorMessage = `Network error: ${error.message}. Please check your internet connection and try again.`;
+        } else if (error.message && error.message.includes('Browser closed')) {
+            errorMessage = 'Browser connection lost. Please try again.';
+        }
+        
         res.status(500).json({
             success: false,
-            error: error?.message || 'Unknown error occurred'
+            error: errorMessage
         });
     }
 });

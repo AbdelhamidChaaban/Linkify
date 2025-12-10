@@ -179,7 +179,7 @@ async function prepareEditSession(adminId, adminPhone, adminPassword) {
             console.log(`🌐 [Edit Session] Navigating to domain first to set cookies properly...`);
             await page.goto('https://www.alfa.com.lb', {
                 waitUntil: 'domcontentloaded',
-                timeout: 10000
+                timeout: 30000 // Increased timeout for Render.com (30 seconds)
             });
             await delay(500);
             
@@ -202,7 +202,7 @@ async function prepareEditSession(adminId, adminPhone, adminPassword) {
         console.log(`🌐 [Edit Session] Navigating to Ushare page: ${ushareUrl}`);
         await page.goto(ushareUrl, {
             waitUntil: 'domcontentloaded',
-            timeout: 20000
+            timeout: 45000 // Increased timeout for Render.com (45 seconds)
         });
         await delay(2000);
         
@@ -220,7 +220,7 @@ async function prepareEditSession(adminId, adminPhone, adminPassword) {
             await delay(2000);
             await page.goto(ushareUrl, {
                 waitUntil: 'domcontentloaded',
-                timeout: 20000
+                timeout: 45000 // Increased timeout for Render.com (45 seconds)
             });
             await delay(2000);
         }
@@ -292,6 +292,15 @@ async function prepareEditSession(adminId, adminPhone, adminPassword) {
         
     } catch (error) {
         console.error(`❌ [Edit Session] Error preparing session:`, error.message);
+        console.error(`   Error stack:`, error.stack);
+        
+        // Provide more descriptive error messages for common issues
+        let errorMessage = error.message;
+        if (error.message && error.message.includes('Navigation timeout')) {
+            errorMessage = 'Navigation timeout - The page took too long to load. This may happen if the backend is cold-starting or the Alfa website is slow. Please try again in a moment.';
+        } else if (error.message && error.message.includes('net::ERR_')) {
+            errorMessage = `Network error: ${error.message}. Please check your internet connection and try again.`;
+        }
         
         // Clean up on error
         if (context) {
@@ -302,7 +311,7 @@ async function prepareEditSession(adminId, adminPhone, adminPassword) {
             success: false,
             sessionId: null,
             data: null,
-            error: error.message
+            error: errorMessage
         };
     }
 }
