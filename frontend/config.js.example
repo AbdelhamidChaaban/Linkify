@@ -1,5 +1,0 @@
-// Frontend API Configuration
-// Copy this file to config.js and update with your Render.com backend URL
-
-window.AEFA_API_URL = 'https://your-backend-url.onrender.com';
-
