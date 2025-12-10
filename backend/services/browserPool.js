@@ -1,7 +1,6 @@
 // CRITICAL: Set Puppeteer cache directory BEFORE requiring puppeteer
 // This ensures Chromium persists from build to runtime on Render.com
 const path = require('path');
-const fs = require('fs');
 const cacheDir = path.join(__dirname, '..', 'node_modules', '.cache', 'puppeteer');
 if (!process.env.PUPPETEER_CACHE_DIR) {
     process.env.PUPPETEER_CACHE_DIR = cacheDir;
@@ -94,34 +93,13 @@ class BrowserPool {
     async _launchBrowser() {
         console.log('🚀 Launching persistent browser instance...');
         
-        // Try to get executablePath from bundled puppeteer
-        // CRITICAL: Verify the file exists before using it
-        let executablePath = null;
-        try {
-            const possiblePath = puppeteerBase.executablePath();
-            if (possiblePath) {
-                // Verify the file actually exists and is accessible
-                if (fs.existsSync(possiblePath)) {
-                    try {
-                        fs.accessSync(possiblePath, fs.constants.F_OK);
-                        executablePath = possiblePath;
-                        console.log(`📦 Bundled Chromium found at: ${executablePath.substring(0, 80)}...`);
-                    } catch (accessError) {
-                        console.warn(`⚠️ Chromium file exists but is not accessible: ${possiblePath}`);
-                        console.warn(`   Will let Puppeteer locate Chromium automatically`);
-                    }
-                } else {
-                    console.warn(`⚠️ Chromium path returned by Puppeteer does not exist: ${possiblePath}`);
-                    console.warn(`   Will let Puppeteer locate Chromium automatically`);
-                }
-            }
-        } catch (error) {
-            // If executablePath() throws, or any other error
-            console.warn(`⚠️ Could not get/verify Chromium path: ${error.message}`);
-            console.warn(`   Will let Puppeteer locate Chromium automatically`);
-        }
+        // Use bundled Chromium from puppeteer (uses cached Chromium)
+        // This ensures we always use the Chromium that was downloaded during npm install
+        const executablePath = puppeteerBase.executablePath();
+        console.log(`📦 Using bundled Chromium at: ${executablePath}`);
         
         const launchOptions = {
+            executablePath: executablePath, // Uses bundled Chromium
             headless: true,
             // Render.com-compatible args
             args: [
@@ -141,11 +119,6 @@ class BrowserPool {
                 '--disable-ipc-flooding-protection'
             ]
         };
-        
-        // Only set executablePath if we successfully got it
-        if (executablePath) {
-            launchOptions.executablePath = executablePath;
-        }
         
         const browser = await puppeteer.launch(launchOptions);
         
