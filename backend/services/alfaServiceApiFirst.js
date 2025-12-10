@@ -936,10 +936,21 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                         throw new Error('Admin not found or missing credentials for auto-login');
                     }
                     
-                    // Perform full login
-                    await loginAndSaveCookies(adminData.phone, adminData.password, userId);
-                    cookies = await getCookies(userId);
-                    loginPerformed = true;
+                    // Perform full login - use cookies returned directly
+                    const loginCookies = await loginAndSaveCookies(adminData.phone, adminData.password, userId);
+                    if (loginCookies && loginCookies.length > 0) {
+                        cookies = loginCookies;
+                        loginPerformed = true;
+                        console.log(`✅ [${userId}] Full login successful, using ${cookies.length} cookies from login`);
+                    } else {
+                        // Fallback: Try to retrieve from Redis
+                        cookies = await getCookies(userId);
+                        if (!cookies || cookies.length === 0) {
+                            throw new Error('Cookies not found after login - login may have failed or Redis is not available');
+                        }
+                        loginPerformed = true;
+                        console.log(`✅ [${userId}] Full login successful, retrieved ${cookies.length} cookies from Redis (fallback)`);
+                    }
                     
                     // Retry all sources after login
                     refreshStart = Date.now();
@@ -1000,16 +1011,21 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 
                 // Perform auto-login
                 try {
-                    await loginAndSaveCookies(adminData.phone, adminData.password, userId);
-                    // CRITICAL: Retrieve cookies fresh from Redis after login to ensure they're in the correct format
-                    cookies = await getCookies(userId);
-                    if (!cookies || cookies.length === 0) {
-                        throw new Error('Cookies not found in Redis after auto-login');
+                    // loginAndSaveCookies returns cookies directly - use them!
+                    const loginCookies = await loginAndSaveCookies(adminData.phone, adminData.password, userId);
+                    if (loginCookies && loginCookies.length > 0) {
+                        cookies = loginCookies;
+                        loginPerformed = true;
+                        console.log(`✅ [${userId}] Auto-login successful, got ${cookies.length} cookies from login`);
+                    } else {
+                        // Fallback: Try to retrieve from Redis
+                        cookies = await getCookies(userId);
+                        if (!cookies || cookies.length === 0) {
+                            throw new Error('Cookies not found after auto-login - login may have failed or Redis is not available');
+                        }
+                        loginPerformed = true;
+                        console.log(`✅ [${userId}] Auto-login successful, retrieved ${cookies.length} cookies from Redis (fallback)`);
                     }
-                    loginPerformed = true;
-                    console.log(`✅ [${userId}] Auto-login successful, got ${cookies?.length || 0} fresh cookies from Redis`);
-                    // Small delay to ensure cookies are fully persisted
-                    await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay
                 } catch (loginError) {
                     console.error(`❌ [${userId}] Auto-login failed:`, loginError.message);
                     throw new Error(`Auto-login failed: ${loginError.message}`);
@@ -1207,21 +1223,27 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             try {
                 console.log(`🔐 [${userId}] Performing login to get fresh cookies...`);
                 const loginStart = Date.now();
-                await loginAndSaveCookies(phone, password, userId);
+                // loginAndSaveCookies returns the cookies directly - use them!
+                // This avoids dependency on Redis being immediately available after login
+                const loginCookies = await loginAndSaveCookies(phone, password, userId);
                 loginPerformed = true;
                 const loginDuration = Date.now() - loginStart;
                 console.log(`✅ [${userId}] Login completed in ${loginDuration}ms`);
                 
-                // CRITICAL: Retrieve cookies fresh from Redis after login to ensure they're in the correct format
-                // This ensures cookies are properly persisted and formatted for all endpoints
-                cookies = await getCookies(userId);
-                if (!cookies || cookies.length === 0) {
-                    throw new Error('Cookies not found in Redis after login');
+                // Use cookies returned directly from login (they're already saved to Redis if available)
+                // Fallback to retrieving from Redis if login didn't return cookies (shouldn't happen)
+                if (loginCookies && loginCookies.length > 0) {
+                    cookies = loginCookies;
+                    console.log(`✅ [${userId}] Using ${cookies.length} cookies from login (already saved to Redis if available)`);
+                } else {
+                    // Fallback: Try to retrieve from Redis (in case Redis save succeeded but return failed)
+                    console.log(`⚠️ [${userId}] Login didn't return cookies, trying to retrieve from Redis...`);
+                    cookies = await getCookies(userId);
+                    if (!cookies || cookies.length === 0) {
+                        throw new Error('Cookies not found after login - login may have failed or Redis is not available');
+                    }
+                    console.log(`✅ [${userId}] Retrieved ${cookies.length} cookies from Redis (fallback)`);
                 }
-                console.log(`✅ [${userId}] Retrieved ${cookies.length} fresh cookies from Redis after login`);
-                
-                // Small delay to ensure cookies are fully persisted and available
-                await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay
                 
                 // Now fetch all sources in parallel with fresh cookies
                 refreshStart = Date.now();

@@ -66,6 +66,9 @@ PUPPETEER_CACHE_DIR=/opt/render/project/src/backend/node_modules/.cache/puppetee
 REDIS_HOST=redis-11585.c55.eu-central-1-1.ec2.cloud.redislabs.com
 REDIS_PORT=11585
 REDIS_PASSWORD=your-rediscloud-password-here
+# REDIS_TLS: Set to "true" if your Redis Cloud port requires TLS, "false" if not
+# Most Redis Cloud instances on port 11585 require TLS, but some may not
+# If you get "wrong version number" SSL errors, try setting REDIS_TLS=false
 REDIS_TLS=true
 
 # Firebase Configuration

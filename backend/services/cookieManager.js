@@ -351,11 +351,21 @@ async function saveCookies(userId, cookies) {
         }
         
         // Save cookies with TTL matching shortest cookie expiry
-        await cacheLayer.set(key, JSON.stringify(cookieData), ttl);
-        console.log(`✅ Saved ${cookies.length} cookies to Redis for ${userId} (TTL: ${Math.round(ttl / 60)} minutes)`);
+        // Check if Redis is available before attempting save
+        if (!cacheLayer.isAvailable()) {
+            console.warn(`⚠️ Redis not available - cookies will not persist for ${userId} (available in memory for this request only)`);
+        } else {
+            const saveResult = await cacheLayer.set(key, JSON.stringify(cookieData), ttl);
+            if (saveResult) {
+                console.log(`✅ Saved ${cookies.length} cookies to Redis for ${userId} (TTL: ${Math.round(ttl / 60)} minutes)`);
+            } else {
+                console.warn(`⚠️ Failed to save cookies to Redis for ${userId} - Redis may not be available`);
+            }
+        }
         
         // Store cookie expiry timestamp (user:{id}:cookieExpiry)
-        if (cookieExpiryTimestamp) {
+        // Only save expiry/refresh schedule if Redis is available
+        if (cookieExpiryTimestamp && cacheLayer.isAvailable()) {
             const expiryKey = getCookieExpiryKey(userId);
             const expiryTtl = Math.max(60, Math.floor((cookieExpiryTimestamp - Date.now()) / 1000));
             await cacheLayer.set(expiryKey, cookieExpiryTimestamp.toString(), expiryTtl);

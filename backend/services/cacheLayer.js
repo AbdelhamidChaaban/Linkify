@@ -204,9 +204,23 @@ class CacheLayer {
             }
 
             // Redis Cloud connection configuration
-            // Redis Cloud may require TLS - configured via REDIS_TLS environment variable
-            // Set REDIS_TLS=true in .env if your Redis Cloud instance requires TLS
-            const useTLS = process.env.REDIS_TLS === 'true' || process.env.REDIS_TLS === '1';
+            // Redis Cloud port 11585 typically requires TLS
+            // However, some Redis Cloud instances may use non-TLS ports
+            // The error "wrong version number" suggests TLS mismatch
+            const redisTlsEnv = (process.env.REDIS_TLS || '').toLowerCase().trim();
+            
+            // Try TLS first (default for Redis Cloud), but allow override
+            // If REDIS_TLS is explicitly set, respect it
+            let useTLS;
+            if (redisTlsEnv === 'false' || redisTlsEnv === '0' || redisTlsEnv === 'no') {
+                useTLS = false;
+            } else if (redisTlsEnv === 'true' || redisTlsEnv === '1' || redisTlsEnv === 'yes' || redisTlsEnv === '') {
+                // Default to TLS for Redis Cloud (port 11585 typically requires it)
+                useTLS = true;
+            } else {
+                // Unknown value, default to TLS
+                useTLS = true;
+            }
             
             const redisConfig = {
                 host: redisHost,
@@ -222,12 +236,18 @@ class CacheLayer {
                 lazyConnect: false, // Auto-connect on creation
             };
             
-            // Add TLS configuration if enabled
+            // Add TLS configuration for Redis Cloud
+            // For Redis Cloud, TLS is typically required
             if (useTLS) {
-                redisConfig.tls = {}; // Redis Cloud TLS configuration
-                console.log('🔒 Redis Cloud: TLS enabled');
+                // Redis Cloud TLS configuration
+                // Some Redis Cloud instances may need rejectUnauthorized: false
+                redisConfig.tls = {
+                    rejectUnauthorized: false, // Redis Cloud uses valid certs, but this prevents certificate issues
+                };
+                console.log('🔒 Redis Cloud: TLS enabled (required for Redis Cloud port 11585)');
             } else {
-                console.log('🔓 Redis Cloud: TLS disabled (standard connection)');
+                console.log('🔓 Redis Cloud: TLS disabled - using plain connection');
+                console.log('⚠️ WARNING: Most Redis Cloud instances require TLS. If connection fails, set REDIS_TLS=true');
             }
             
             this.redis = new Redis(redisConfig);
@@ -256,6 +276,20 @@ class CacheLayer {
                     console.error(`   Current Redis port: ${this.redis?.options?.port}`);
                     console.error(`   Error: ${error.message}`);
                 }
+                
+                // Check for SSL/TLS errors
+                if (error.message && (error.message.includes('wrong version number') || error.message.includes('SSL routines'))) {
+                    console.error(`❌ Redis TLS/SSL Error: ${error.message}`);
+                    console.error(`   Current TLS setting: ${this.redis?.options?.tls ? 'ENABLED' : 'DISABLED'}`);
+                    console.error(`   Host: ${this.redis?.options?.host}`);
+                    console.error(`   Port: ${this.redis?.options?.port}`);
+                    console.error(`   ⚠️ SOLUTION: Check your Redis Cloud connection details:`);
+                    console.error(`      - If port ${this.redis?.options?.port} requires TLS, ensure REDIS_TLS=true`);
+                    console.error(`      - If port ${this.redis?.options?.port} does NOT support TLS, set REDIS_TLS=false`);
+                    console.error(`      - Verify the correct port in your Redis Cloud dashboard`);
+                    console.error(`      - Redis Cloud may have separate TLS and non-TLS ports`);
+                }
+                
                 console.warn('⚠️ Redis Client Error:', error.message);
                 if (!this.enabled) {
                     // Only log on first error if not enabled yet

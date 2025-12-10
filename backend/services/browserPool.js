@@ -1,6 +1,7 @@
 // CRITICAL: Set Puppeteer cache directory BEFORE requiring puppeteer
 // This ensures Chromium persists from build to runtime on Render.com
 const path = require('path');
+const fs = require('fs');
 const cacheDir = path.join(__dirname, '..', 'node_modules', '.cache', 'puppeteer');
 if (!process.env.PUPPETEER_CACHE_DIR) {
     process.env.PUPPETEER_CACHE_DIR = cacheDir;
@@ -94,13 +95,30 @@ class BrowserPool {
         console.log('🚀 Launching persistent browser instance...');
         
         // Try to get executablePath from bundled puppeteer
+        // CRITICAL: Verify the file exists before using it
         let executablePath = null;
         try {
-            executablePath = puppeteerBase.executablePath();
-            console.log(`📦 Bundled Chromium path: ${executablePath ? executablePath.substring(0, 80) + '...' : 'NOT FOUND'}`);
+            const possiblePath = puppeteerBase.executablePath();
+            if (possiblePath) {
+                // Verify the file actually exists and is accessible
+                if (fs.existsSync(possiblePath)) {
+                    try {
+                        fs.accessSync(possiblePath, fs.constants.F_OK);
+                        executablePath = possiblePath;
+                        console.log(`📦 Bundled Chromium found at: ${executablePath.substring(0, 80)}...`);
+                    } catch (accessError) {
+                        console.warn(`⚠️ Chromium file exists but is not accessible: ${possiblePath}`);
+                        console.warn(`   Will let Puppeteer locate Chromium automatically`);
+                    }
+                } else {
+                    console.warn(`⚠️ Chromium path returned by Puppeteer does not exist: ${possiblePath}`);
+                    console.warn(`   Will let Puppeteer locate Chromium automatically`);
+                }
+            }
         } catch (error) {
-            console.warn(`⚠️ Could not get executable path: ${error.message}`);
-            console.warn(`   Will attempt launch without explicit path`);
+            // If executablePath() throws, or any other error
+            console.warn(`⚠️ Could not get/verify Chromium path: ${error.message}`);
+            console.warn(`   Will let Puppeteer locate Chromium automatically`);
         }
         
         const launchOptions = {
