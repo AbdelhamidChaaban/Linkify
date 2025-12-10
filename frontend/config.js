@@ -12,8 +12,8 @@
  * before this script loads.
  */
 
-// ⚠️ UPDATE THIS WITH YOUR RENDER.COM BACKEND URL AFTER DEPLOYMENT
-window.AEFA_API_URL = window.AEFA_API_URL || 'https://your-backend-url.onrender.com';
+// Backend API URL - Configured for production
+window.AEFA_API_URL = window.AEFA_API_URL || 'https://cellspottmanage.onrender.com';
 
 // Log the configured API URL (for debugging in production)
 if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {

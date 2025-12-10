@@ -3,13 +3,22 @@
  */
 class AlfaAPIService {
     constructor() {
-        // Use window.AEFA_API_URL if set, otherwise detect from current window location
+        // Use window.AEFA_API_URL if set and valid, otherwise detect from current window location
         // This ensures it works regardless of what port the server is running on
-        if (window.AEFA_API_URL) {
+        if (window.AEFA_API_URL && 
+            window.AEFA_API_URL !== 'https://your-backend-url.onrender.com' &&
+            !window.AEFA_API_URL.includes('your-backend-url')) {
             this.baseURL = window.AEFA_API_URL;
         } else {
+            // Placeholder URL detected or not set - warn and use same origin (for local dev only)
+            if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                console.error('❌ Backend URL not configured! Please update frontend/config.js with your Render.com backend URL.');
+                console.error('   Current value:', window.AEFA_API_URL || 'not set');
+                console.error('   Frontend URL:', window.location.origin);
+                console.error('   ⚠️ API calls will fail - update config.js now!');
+            }
             // Use the same origin as the current page (same host and port)
-            // This way it automatically works on any port (3000, 3001, etc.)
+            // This way it automatically works on any port (3000, 3001, etc.) for local dev
             this.baseURL = window.location.origin;
         }
     }
