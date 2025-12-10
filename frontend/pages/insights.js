@@ -2836,7 +2836,9 @@ class InsightsManager {
         
         try {
             // Fetch balance history from backend
-            const response = await fetch(`/api/admin/${adminId}/balance-history`);
+            // Get backend base URL from config
+            const baseURL = window.AEFA_API_URL || window.location.origin;
+            const response = await fetch(`${baseURL}/api/admin/${adminId}/balance-history`);
             const result = await response.json();
             
             if (!result.success) {
