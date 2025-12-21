@@ -749,6 +749,7 @@ class HomeManager {
                 phone: data.phone || 'N/A',
                 usage: totalConsumption,
                 usageLimit: totalLimit,
+                quota: data.quota || null, // Admin's quota (e.g., 15 GB) - different from totalLimit (total bundle, e.g., 77 GB)
                 subscribersCount: activeSubscribersCount, // Show only active subscribers count
                 freeSpace: freeSpace,
                 validityDate: validityDateStr,
@@ -1081,7 +1082,8 @@ class HomeManager {
             id: service.id,
             name: service.name,
             phone: service.phone,
-            alfaData: service.alfaData
+            alfaData: service.alfaData,
+            quota: service.quota || null // Admin's quota (e.g., 15 GB) - NOT usageLimit (total bundle)
         };
 
         // Import and use insights manager's view details method
@@ -1152,33 +1154,217 @@ class HomeManager {
             return data;
         }
 
-        // Get admin consumption
-        if (subscriber.alfaData.adminConsumption) {
-            const adminConsumptionStr = String(subscriber.alfaData.adminConsumption).trim();
-            const match = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
-            if (match) {
-                data.adminConsumption = parseFloat(match[1]) || 0;
-                data.adminLimit = parseFloat(match[2]) || 0;
-            }
+        const alfaData = subscriber.alfaData;
+        
+        // Get total limit FIRST (needed for validation of admin consumption string)
+        if (alfaData.totalConsumption) {
+            const parsed = this.parseConsumption(alfaData.totalConsumption);
+            data.totalConsumption = parsed.used;
+            data.totalLimit = parsed.total || 0;
+        }
+        
+        // Get admin limit from quota (this is the admin's quota, e.g., 15 GB, NOT the total bundle limit)
+        // Admin limit should always be the quota set when creating the admin
+        if (subscriber.quota) {
+            const quotaStr = String(subscriber.quota).trim();
+            const quotaMatch = quotaStr.match(/^([\d.]+)/);
+            data.adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
         }
 
-        // Get total consumption
-        if (subscriber.alfaData.totalConsumption) {
-            const parsed = this.parseConsumption(subscriber.alfaData.totalConsumption);
-            data.totalConsumption = parsed.used;
-            data.totalLimit = parsed.total || data.totalLimit;
+        // Extract admin consumption - handle multiple formats
+        let adminConsumption = 0;
+        
+        // Priority 1: Check if adminConsumption exists and parse it
+        if (alfaData.hasOwnProperty('adminConsumption')) {
+            try {
+                if (alfaData.adminConsumption === null || alfaData.adminConsumption === undefined || alfaData.adminConsumption === '') {
+                    // Empty/null - will use fallback
+                } else if (typeof alfaData.adminConsumption === 'number') {
+                    adminConsumption = alfaData.adminConsumption;
+                } else if (typeof alfaData.adminConsumption === 'string') {
+                    const adminConsumptionStr = alfaData.adminConsumption.trim();
+                    
+                    // Handle "X / Y GB" format
+                    const matchWithLimit = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
+                    // Handle "X GB" format (without limit)
+                    const matchWithoutLimit = adminConsumptionStr.match(/^([\d.]+)\s*(GB|MB)/i);
+                    
+                    if (matchWithLimit) {
+                        const extractedConsumption = parseFloat(matchWithLimit[1]) || 0;
+                        const extractedLimit = parseFloat(matchWithLimit[2]) || 0;
+                        
+                        // IMPORTANT: Check if the limit matches totalLimit (not adminLimit)
+                        // If it matches totalLimit, this is actually total consumption, not admin consumption
+                        // Admin consumption should have a limit that matches admin quota, not total bundle size
+                        const adminQuota = data.adminLimit || 0;
+                        const totalBundleLimit = data.totalLimit || 0;
+                        // If extracted limit is closer to totalLimit than adminQuota, it's likely total consumption
+                        const isLikelyTotalConsumption = adminQuota > 0 && extractedLimit > adminQuota && 
+                                                         (totalBundleLimit === 0 || Math.abs(extractedLimit - totalBundleLimit) < Math.abs(extractedLimit - adminQuota));
+                        
+                        if (isLikelyTotalConsumption) {
+                            // This looks like total consumption (e.g., "71.21 / 77 GB" where 77 is totalLimit, not adminLimit)
+                            // Don't use it as admin consumption - keep it as 0, will use fallback extraction
+                            console.log(`⚠️ Ignoring adminConsumption string "${adminConsumptionStr}" - limit (${extractedLimit}) matches totalLimit, not adminLimit (${adminQuota}). This is likely total consumption, not admin consumption.`);
+                            adminConsumption = 0; // Will be extracted from U-Share Main if available
+                        } else {
+                            // This looks like valid admin consumption (e.g., "17.11 / 15 GB" where 15 is admin quota)
+                            // Convert MB to GB if needed
+                            if (matchWithLimit[3] && matchWithLimit[3].toUpperCase() === 'MB' && extractedConsumption > 0) {
+                                adminConsumption = extractedConsumption / 1024;
+                            } else {
+                                adminConsumption = extractedConsumption;
+                            }
+                            // Use extracted limit only if we don't have quota (as fallback)
+                            if (data.adminLimit === 0) {
+                                data.adminLimit = extractedLimit;
+                            }
+                        }
+                    } else if (matchWithoutLimit) {
+                        adminConsumption = parseFloat(matchWithoutLimit[1]) || 0;
+                        // Convert MB to GB if needed
+                        if (matchWithoutLimit[2] && matchWithoutLimit[2].toUpperCase() === 'MB' && adminConsumption > 0) {
+                            adminConsumption = adminConsumption / 1024;
+                        }
+                    } else {
+                        // Try to extract just the number
+                        const numMatch = adminConsumptionStr.match(/^([\d.]+)/);
+                        if (numMatch) {
+                            adminConsumption = parseFloat(numMatch[1]) || 0;
+                        }
+                    }
+                }
+            } catch (parseError) {
+                console.warn('⚠️ Error parsing adminConsumption:', parseError);
+            }
         }
+        
+        // Fallback 1: Extract from consumptions array (U-Share Main circle)
+        if (adminConsumption === 0 && alfaData.consumptions && Array.isArray(alfaData.consumptions) && alfaData.consumptions.length > 0) {
+            const uShareMain = alfaData.consumptions.find(c => 
+                c.planName && c.planName.toLowerCase().includes('u-share main')
+            ) || alfaData.consumptions[0]; // Fallback to first circle
+            
+            if (uShareMain) {
+                if (uShareMain.used) {
+                    const usedStr = String(uShareMain.used).trim();
+                    const usedMatch = usedStr.match(/^([\d.]+)/);
+                    adminConsumption = usedMatch ? parseFloat(usedMatch[1]) : parseFloat(usedStr) || 0;
+                } else if (uShareMain.usage) {
+                    const usageStr = String(uShareMain.usage).trim();
+                    const usageMatch = usageStr.match(/^([\d.]+)/);
+                    adminConsumption = usageMatch ? parseFloat(usageMatch[1]) : 0;
+                }
+            }
+        }
+        
+        // Fallback 2: Extract from primaryData (raw API response) - U-Share Main service
+        if (adminConsumption === 0 && alfaData.primaryData) {
+            try {
+                const primaryData = alfaData.primaryData;
+                
+                if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue)) {
+                    for (const service of primaryData.ServiceInformationValue) {
+                        const serviceName = (service.ServiceNameValue || '').toLowerCase();
+                        
+                        // Skip Mobile Internet - that's total consumption, not admin consumption
+                        if (serviceName.includes('mobile internet')) {
+                            continue;
+                        }
+                        
+                        // Look for U-Share Main service
+                        if (serviceName.includes('u-share') && serviceName.includes('main')) {
+                            if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                for (const details of service.ServiceDetailsInformationValue) {
+                                    // Look for U-Share Main circle in SecondaryValue
+                                    if (details.SecondaryValue && Array.isArray(details.SecondaryValue)) {
+                                        const uShareMain = details.SecondaryValue.find(secondary => {
+                                            const bundleName = (secondary.BundleNameValue || '').toLowerCase();
+                                            return bundleName.includes('u-share main') || bundleName.includes('main');
+                                        });
+                                        
+                                        if (uShareMain && uShareMain.ConsumptionValue) {
+                                            let consumption = parseFloat(uShareMain.ConsumptionValue) || 0;
+                                            const consumptionUnit = uShareMain.ConsumptionUnitValue || '';
+                                            if (consumptionUnit === 'MB' && consumption > 0) {
+                                                consumption = consumption / 1024;
+                                            }
+                                            adminConsumption = consumption;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    // Fallback: Use ConsumptionValue from U-Share Main service details
+                                    if (adminConsumption === 0 && details.ConsumptionValue) {
+                                        let consumption = parseFloat(details.ConsumptionValue) || 0;
+                                        const consumptionUnit = details.ConsumptionUnitValue || '';
+                                        if (consumptionUnit === 'MB' && consumption > 0) {
+                                            consumption = consumption / 1024;
+                                        }
+                                        adminConsumption = consumption;
+                                        break;
+                                    }
+                                }
+                                if (adminConsumption > 0) break;
+                            }
+                        }
+                    }
+                }
+            } catch (extractError) {
+                console.warn('⚠️ Error extracting admin consumption from primaryData:', extractError);
+            }
+        }
+        
+        data.adminConsumption = adminConsumption;
+        
+        // Total consumption and totalLimit were already extracted above (needed for validation)
 
         // Get subscribers from secondarySubscribers
         if (subscriber.alfaData.secondarySubscribers && Array.isArray(subscriber.alfaData.secondarySubscribers)) {
             subscriber.alfaData.secondarySubscribers.forEach(secondary => {
                 if (secondary && secondary.phoneNumber) {
-                    const consumptionStr = secondary.consumption || '';
-                    const parsed = this.parseConsumption(consumptionStr);
+                    let used = 0;
+                    let total = 0;
+                    
+                    // Check if data is from ushare HTML (has consumption and quota as numbers in GB)
+                    if (typeof secondary.consumption === 'number' && typeof secondary.quota === 'number') {
+                        // Data from ushare HTML - already in GB
+                        used = secondary.consumption;
+                        total = secondary.quota;
+                    } else if (secondary.consumptionText) {
+                        // Parse from consumptionText (format: "0.48 / 30 GB")
+                        const consumptionMatch = secondary.consumptionText.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                        if (consumptionMatch) {
+                            used = parseFloat(consumptionMatch[1]) || 0;
+                            total = parseFloat(consumptionMatch[2]) || 0;
+                        }
+                    } else {
+                        // Fallback: parse from consumption string (format: "1.18 / 30 GB" or "1.18/30 GB")
+                        const consumptionStr = secondary.consumption || '';
+                        if (consumptionStr) {
+                            const consumptionMatch = consumptionStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                            if (consumptionMatch) {
+                                used = parseFloat(consumptionMatch[1]) || 0;
+                                total = parseFloat(consumptionMatch[2]) || 0;
+                            }
+                        }
+                        
+                        // Fallback: use raw values if consumption string parsing failed
+                        if ((used === 0 && total === 0) && secondary.rawConsumption && secondary.quota) {
+                            used = parseFloat(secondary.rawConsumption) || 0;
+                            total = parseFloat(secondary.quota) || 0;
+                            
+                            // Convert MB to GB if needed
+                            if (secondary.rawConsumptionUnit === 'MB' && secondary.quotaUnit === 'GB') {
+                                used = used / 1024;
+                            }
+                        }
+                    }
+                    
                     data.subscribers.push({
                         phoneNumber: secondary.phoneNumber,
-                        consumption: parsed.used,
-                        limit: parsed.total
+                        consumption: used,
+                        limit: total
                     });
                 }
             });

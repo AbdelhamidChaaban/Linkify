@@ -855,28 +855,75 @@ class AdminsManager {
             console.log('✅ Backend server is healthy');
             
             // Fetch Alfa data
-            const alfaData = await window.AlfaAPIService.fetchDashboardData(phone, password, adminId);
+            const alfaResponse = await window.AlfaAPIService.fetchDashboardData(phone, password, adminId);
+            
+            if (!alfaResponse) {
+                throw new Error('No data returned from backend');
+            }
+            
+            // Extract actual data from response (could be at root level or in .data property)
+            const alfaData = alfaResponse.data || alfaResponse;
             
             if (!alfaData) {
-                throw new Error('No data returned from backend');
+                throw new Error('No data in response');
             }
             
             console.log('✅ Alfa data received:', {
                 hasBalance: !!alfaData.balance,
                 hasTotalConsumption: !!alfaData.totalConsumption,
                 hasAdminConsumption: !!alfaData.adminConsumption,
+                hasPrimaryData: !!alfaData.primaryData,
                 subscribersCount: alfaData.subscribersCount
             });
             
             // Update admin document with Alfa data
             console.log('💾 Saving Alfa data to Firestore for admin:', adminId);
+            
+            // CRITICAL: Ensure primaryData has ServiceInformationValue as an array (required for status determination)
+            // This prevents new admins from being incorrectly marked as inactive on first add
+            if (alfaData && typeof alfaData === 'object') {
+                if (alfaData.primaryData && typeof alfaData.primaryData === 'object') {
+                    // Ensure ServiceInformationValue exists as an array (even if empty)
+                    // This is required for the frontend status check to work correctly
+                    if (!alfaData.primaryData.ServiceInformationValue || !Array.isArray(alfaData.primaryData.ServiceInformationValue)) {
+                        alfaData.primaryData.ServiceInformationValue = Array.isArray(alfaData.primaryData.ServiceInformationValue) 
+                            ? alfaData.primaryData.ServiceInformationValue 
+                            : [];
+                        console.log('🔧 [Frontend Save] Ensured primaryData.ServiceInformationValue is an array (length:', alfaData.primaryData.ServiceInformationValue.length, ')');
+                    } else {
+                        console.log('✅ [Frontend Save] primaryData.ServiceInformationValue exists as array (length:', alfaData.primaryData.ServiceInformationValue.length, ')');
+                    }
+                } else if (!alfaData.primaryData) {
+                    // If primaryData is missing entirely, create it with empty ServiceInformationValue array
+                    // This ensures the structure exists for status checking (admin will be inactive but structure is correct)
+                    alfaData.primaryData = { ServiceInformationValue: [] };
+                    console.log('⚠️ [Frontend Save] WARNING: primaryData was missing! Created with empty ServiceInformationValue array - admin will be marked inactive');
+                }
+            }
+            
+            // Log the structure for debugging
+            if (alfaData.primaryData && alfaData.primaryData.ServiceInformationValue) {
+                console.log('📊 [Frontend Save] primaryData.ServiceInformationValue structure verified:', {
+                    isArray: Array.isArray(alfaData.primaryData.ServiceInformationValue),
+                    length: alfaData.primaryData.ServiceInformationValue.length,
+                    firstService: alfaData.primaryData.ServiceInformationValue[0] ? 
+                        (alfaData.primaryData.ServiceInformationValue[0].ServiceNameValue || 'N/A') : 'none'
+                });
+            } else {
+                console.warn('⚠️ [Frontend Save] WARNING: primaryData or ServiceInformationValue is missing!');
+            }
+            
+            // Small delay to let backend save complete first (backend save is async via process.nextTick)
+            // This reduces chance of frontend overwriting backend save
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
             await db.collection('admins').doc(adminId).update({
                 alfaData: alfaData,
                 alfaDataFetchedAt: firebase.firestore.FieldValue.serverTimestamp(),
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
             
-            console.log('✅ Alfa data saved to Firestore successfully');
+            console.log('✅ Alfa data saved to Firestore successfully (frontend save completed)');
             
             // Trigger a refresh of the insights page if it's open
             window.dispatchEvent(new CustomEvent('alfaDataUpdated', { 
@@ -897,4 +944,5 @@ let adminsManager;
 document.addEventListener('DOMContentLoaded', () => {
     adminsManager = new AdminsManager();
 });
+
 

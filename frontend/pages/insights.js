@@ -957,7 +957,19 @@ class InsightsManager {
                 // Get pending subscribers count from Firebase (for backward compatibility - only use if Ushare HTML not available)
                 const pendingSubscribers = data.pendingSubscribers || [];
                 const removedSubscribers = data.removedSubscribers || [];
+                // CRITICAL: removedActiveSubscribers is stored at root level of Firebase document, not in alfaData
                 const removedActiveSubscribers = data.removedActiveSubscribers || [];
+                
+                // Debug logging for removedActiveSubscribers
+                if (removedActiveSubscribers.length > 0 || data.removedActiveSubscribers) {
+                    console.log(`🔍 [${doc.id}] removedActiveSubscribers from Firebase:`, {
+                        length: removedActiveSubscribers.length,
+                        exists: !!data.removedActiveSubscribers,
+                        isArray: Array.isArray(data.removedActiveSubscribers),
+                        raw: data.removedActiveSubscribers,
+                        processed: removedActiveSubscribers
+                    });
+                }
                 
                 // Filter out removed pending subscribers from the count
                 const activePendingSubscribers = pendingSubscribers.filter(pending => {
@@ -2176,6 +2188,16 @@ class InsightsManager {
         // DEBUG: Log the full subscriber data to see what's available
         console.log('\n🔍 [View Details] Full subscriber data check:');
         console.log('   - alfaData exists:', !!subscriber.alfaData);
+        console.log('   - removedActiveSubscribers exists:', !!subscriber.removedActiveSubscribers);
+        console.log('   - removedActiveSubscribers type:', typeof subscriber.removedActiveSubscribers);
+        console.log('   - removedActiveSubscribers is array:', Array.isArray(subscriber.removedActiveSubscribers));
+        if (Array.isArray(subscriber.removedActiveSubscribers)) {
+            console.log('   - removedActiveSubscribers length:', subscriber.removedActiveSubscribers.length);
+            if (subscriber.removedActiveSubscribers.length > 0) {
+                console.log('   - removedActiveSubscribers:', subscriber.removedActiveSubscribers);
+            }
+        }
+        console.log('   - removedSubscribers:', subscriber.removedSubscribers);
         if (subscriber.alfaData) {
             console.log('   - alfaData keys:', Object.keys(subscriber.alfaData));
             console.log('   - secondarySubscribers:', subscriber.alfaData.secondarySubscribers);
@@ -2197,6 +2219,8 @@ class InsightsManager {
         // DEBUG: Log extracted view data
         console.log('🔍 Extracted view data:', viewData);
         console.log('🔍 Subscribers count:', viewData.subscribers.length);
+        console.log('🔍 removedActiveSubscribers in viewData:', viewData.removedActiveSubscribers);
+        console.log('🔍 removedActiveSubscribers length:', viewData.removedActiveSubscribers ? viewData.removedActiveSubscribers.length : 0);
         
         // Show modal
         this.showViewDetailsModal(viewData);
@@ -2644,7 +2668,9 @@ class InsightsManager {
         // Removed Active subscribers (no longer in ushare HTML but should still be displayed as "Out")
         // These are Active subscribers that were removed - they should appear with red color and "Out" label
         const removedActiveSubscribers = data.removedActiveSubscribers || [];
+        console.log(`🔍 [View Details Modal] Checking removedActiveSubscribers: length=${removedActiveSubscribers.length}`, removedActiveSubscribers);
         if (removedActiveSubscribers.length > 0) {
+            console.log(`✅ [View Details Modal] Found ${removedActiveSubscribers.length} removed active subscriber(s) to display as "Out"`);
             removedActiveSubscribers.forEach(removedSub => {
                 // Check if this removed subscriber is already in data.subscribers (shouldn't happen, but check anyway)
                 const isAlreadyShown = data.subscribers.some(sub => {
@@ -3533,7 +3559,7 @@ class InsightsManager {
         
         // Store current admin ID
         this.editingAdminId = adminId;
-        this.editingSessionId = null; // Will be set when session is prepared
+        // No session ID needed (stateless API)
         
         // Show modal with loading state
         modal.classList.add('show');
@@ -3543,63 +3569,69 @@ class InsightsManager {
         this.showEditModalLoading();
         
         try {
-            // Prepare edit session: Navigate to Ushare page and get subscriber data
-            console.log('🔄 Preparing edit session...');
+            // Fetch Ushare data using new API-only endpoint (no Puppeteer)
+            console.log('🔄 Fetching subscriber data...');
             
-            // Get backend base URL from config
-            const baseURL = window.AEFA_API_URL || window.location.origin;
-            const response = await fetch(`${baseURL}/api/ushare/prepare-edit`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ adminId })
-            });
+            // Use AlfaAPIService to get Ushare data (JWT-protected)
+            const ushareResponse = await window.AlfaAPIService.getUshare(adminId, false); // useQueue = false for immediate response
             
-            const result = await response.json();
-            
-            if (result.success && result.data) {
-                // Store session ID for later use
-                this.editingSessionId = result.sessionId;
-                
-                // Hide loading
-                this.hideEditModalLoading();
-                
-                // Initialize modal with fresh Ushare data
-                this.initEditSubscribersModalWithUshareData(subscriber, result.data);
-                
-                console.log('✅ Edit session prepared, modal ready');
-            } else {
-                throw new Error(result.error || 'Failed to prepare edit session');
+            // Check if response was queued
+            if (ushareResponse.queued) {
+                throw new Error('Request was queued. Please try again in a moment.');
             }
+            
+            // Transform response format: { number, results, summary } -> { subscribers: results }
+            // The modal expects: { subscribers: [{ phoneNumber, usedConsumption, totalQuota, status }] }
+            const ushareData = {
+                subscribers: ushareResponse.results || []
+            };
+            
+            // Hide loading
+            this.hideEditModalLoading();
+            
+            // Initialize modal with fresh Ushare data
+            this.initEditSubscribersModalWithUshareData(subscriber, ushareData);
+            
+            console.log('✅ Subscriber data loaded, modal ready');
         } catch (error) {
-            console.error('❌ Error preparing edit session:', error);
+            console.error('❌ Error loading subscriber data:', error);
             this.hideEditModalLoading();
             alert(`Failed to load subscriber data: ${error.message}`);
             this.closeEditSubscribersModal();
         }
     }
     
-    showEditModalLoading() {
+    showEditModalLoading(message = 'Processing...') {
         const modal = document.getElementById('editSubscribersModal');
         if (!modal) return;
         
         const modalContainer = modal.querySelector('.edit-subscribers-modal-container');
         if (!modalContainer) return;
         
+        // Ensure modal container has relative positioning
+        modalContainer.style.position = 'relative';
+        
         // Create or show loading overlay
         let loadingOverlay = modalContainer.querySelector('.edit-modal-loading');
         if (!loadingOverlay) {
             loadingOverlay = document.createElement('div');
             loadingOverlay.className = 'edit-modal-loading';
-            loadingOverlay.innerHTML = `
-                <div class="edit-modal-loading-spinner">
-                    <div class="spinner"></div>
-                    <p>Loading subscriber data...</p>
-                </div>
-            `;
             modalContainer.appendChild(loadingOverlay);
         }
+        
+        // Update loading message
+        loadingOverlay.innerHTML = `
+            <div class="edit-modal-loading-spinner">
+                <div class="refresh-loading">
+                    <div class="loader">
+                        <div class="inner one"></div>
+                        <div class="inner two"></div>
+                        <div class="inner three"></div>
+                    </div>
+                </div>
+                <p>${message}</p>
+            </div>
+        `;
         loadingOverlay.style.display = 'flex';
     }
     
@@ -3894,9 +3926,9 @@ class InsightsManager {
     
     openAdminSelectorForEditItem(itemIndex) {
         // Open admin selector modal (reuse existing functionality)
-        // Get active admins (excluding the current admin being edited)
+        // Get active admins that match "Available Services" criteria (excluding the current admin being edited)
         const activeAdmins = this.subscribers.filter(s => 
-            s.status === 'active' && 
+            this.isAdminAvailableService(s) &&
             s.id !== this.editingAdminId &&
             s.notUShare !== true
         );
@@ -3963,6 +3995,9 @@ class InsightsManager {
         }
         
         this.isSubmittingEditForm = true;
+        
+        // Show loading animation
+        this.showEditModalLoading('Processing subscriber changes...');
         
         // Disable submit button to prevent multiple clicks
         const submitButton = document.querySelector('#editSubscribersForm button[type="submit"]');
@@ -4065,38 +4100,82 @@ class InsightsManager {
             
             // No need to ask for confirmation again - user already confirmed when clicking remove button
             
-            // Call backend API
+            // Call backend API using new individual endpoints (JWT-protected, no Puppeteer)
             try {
-                const baseURL = window.AEFA_API_URL || window.location.origin;
-                const response = await fetch(`${baseURL}/api/subscribers/edit`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                    body: JSON.stringify({
-                        adminId: this.editingAdminId,
-                        sessionId: this.editingSessionId, // Pass session ID to use existing page
-                        updates: updates,
-                        removals: removals,
-                        additions: additions
-                    })
-                });
+                const adminId = this.editingAdminId;
+                const results = {
+                    additions: [],
+                    updates: [],
+                    removals: []
+                };
                 
-                const result = await response.json();
+                // Process additions
+                for (const addition of additions) {
+                    try {
+                        await window.AlfaAPIService.addSubscriber(adminId, addition.phone, addition.quota);
+                        results.additions.push({ phone: addition.phone, success: true });
+                    } catch (error) {
+                        console.error(`❌ Failed to add subscriber ${addition.phone}:`, error);
+                        results.additions.push({ phone: addition.phone, success: false, error: error.message });
+                    }
+                }
                 
-                if (response.ok && result.success) {
-                console.log('✅ Subscribers updated successfully');
+                // Process updates
+                for (const update of updates) {
+                    try {
+                        await window.AlfaAPIService.editSubscriber(adminId, update.phone, update.quota);
+                        results.updates.push({ phone: update.phone, success: true });
+                    } catch (error) {
+                        console.error(`❌ Failed to update subscriber ${update.phone}:`, error);
+                        results.updates.push({ phone: update.phone, success: false, error: error.message });
+                    }
+                }
                 
+                // Process removals
+                for (const phone of removals) {
+                    try {
+                        await window.AlfaAPIService.removeSubscriber(adminId, phone, true);
+                        results.removals.push({ phone, success: true });
+                    } catch (error) {
+                        console.error(`❌ Failed to remove subscriber ${phone}:`, error);
+                        results.removals.push({ phone, success: false, error: error.message });
+                    }
+                }
+                
+                // Check if all operations succeeded
+                const allSuccess = 
+                    results.additions.every(r => r.success) &&
+                    results.updates.every(r => r.success) &&
+                    results.removals.every(r => r.success);
+                
+                if (allSuccess) {
+                    console.log('✅ Subscribers updated successfully');
+                    
+                    // Copy success message to clipboard if there are additions
+                    if (results.additions.length > 0) {
+                        const firstAddition = results.additions.find(r => r.success);
+                        if (firstAddition && subscriber) {
+                            const adminPhone = subscriber.phone || '';
+                            const message = `Send ${adminPhone} to 1323`;
+                            try {
+                                await navigator.clipboard.writeText(message);
+                                console.log('✅ Copied to clipboard:', message);
+                            } catch (clipError) {
+                                console.warn('Failed to copy to clipboard:', clipError);
+                            }
+                        }
+                    }
+                    
                     // Build success message
                     const messages = [];
-                    if (additions.length > 0) {
-                        messages.push(`Added ${additions.length} subscriber(s)`);
+                    if (results.additions.length > 0) {
+                        messages.push(`Added ${results.additions.length} subscriber(s)`);
                     }
-                    if (updates.length > 0) {
-                        messages.push(`Updated ${updates.length} subscriber(s)`);
+                    if (results.updates.length > 0) {
+                        messages.push(`Updated ${results.updates.length} subscriber(s)`);
                     }
-                    if (removals.length > 0) {
-                        messages.push(`Removed ${removals.length} subscriber(s)`);
+                    if (results.removals.length > 0) {
+                        messages.push(`Removed ${results.removals.length} subscriber(s)`);
                     }
                     
                     const successMessage = messages.length > 0 
@@ -4108,21 +4187,39 @@ class InsightsManager {
                     // Close the modal
                     this.closeEditSubscribersModal();
                     
-                    // Refresh the specific admin's data to update dashboard (subscriber count, etc.)
-                    // This will update the view details modal if it's open
-                    await this.refreshSubscriber(this.editingAdminId);
-                    
-                    // Refresh the entire subscribers table to update counts and data
-                    this.loadSubscribers();
+                    // Note: No automatic refresh - user can refresh manually if needed
                 } else {
-                    console.error('❌ Error updating subscribers:', result.error || 'Unknown error');
-                    alert('Error updating subscribers: ' + (result.error || 'Unknown error'));
+                    // Some operations failed - copy cancel message
+                    const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
+                    try {
+                        await navigator.clipboard.writeText(cancelMessage);
+                        console.log('✅ Copied to clipboard:', cancelMessage);
+                    } catch (clipError) {
+                        console.warn('Failed to copy to clipboard:', clipError);
+                    }
+                    
+                    // Some operations failed
+                    const failed = [
+                        ...results.additions.filter(r => !r.success).map(r => `Add ${r.phone}: ${r.error}`),
+                        ...results.updates.filter(r => !r.success).map(r => `Update ${r.phone}: ${r.error}`),
+                        ...results.removals.filter(r => !r.success).map(r => `Remove ${r.phone}: ${r.error}`)
+                    ];
+                    
+                    const successCount = 
+                        results.additions.filter(r => r.success).length +
+                        results.updates.filter(r => r.success).length +
+                        results.removals.filter(r => r.success).length;
+                    
+                    alert(`⚠️ Some operations failed (${successCount} succeeded). Errors:\n${failed.join('\n')}`);
                 }
             } catch (error) {
                 console.error('❌ Error calling API:', error);
-                alert('Error updating subscribers. Please try again.');
+                alert('Error updating subscribers: ' + (error.message || 'Please try again.'));
             }
         } finally {
+            // Hide loading animation
+            this.hideEditModalLoading();
+            
             // Re-enable submit button and reset flag
             this.isSubmittingEditForm = false;
             if (submitButton && originalButtonText) {
@@ -4309,43 +4406,122 @@ class InsightsManager {
         }
     }
     
-    openAdminSelector(itemIndex) {
-        const modal = document.getElementById('adminSelectorModal');
-        if (!modal) return;
-        
-        // Store the current item index for when admin is selected
-        modal.dataset.itemIndex = itemIndex;
-        
-        // Get active admins
-        const activeAdmins = this.subscribers.filter(sub => sub.status === 'active');
-        
-        // Populate the modal
-        this.populateAdminSelector(activeAdmins);
-        
-        // Show modal with animation
-        modal.classList.add('show');
-        document.body.style.overflow = 'hidden';
-        
-        // Focus search input
-        const searchInput = document.getElementById('adminSelectorSearch');
-        if (searchInput) {
-            setTimeout(() => searchInput.focus(), 100);
+    /**
+     * Check if an admin matches the "Available Services" criteria
+     * Same logic as the "Available Services" checkbox filter in insights table
+     */
+    isAdminAvailableService(admin) {
+        // Must be active
+        if (admin.status !== 'active') {
+            return false;
         }
         
-        // Bind search functionality
-        if (searchInput) {
-            searchInput.oninput = (e) => {
-                const searchTerm = e.target.value.toLowerCase().trim();
-                this.filterAdminSelector(searchTerm, activeAdmins);
-            };
+        // TERM 1 & 2: Admin must have less than 3 total subscribers (active + removed "Out" subscribers)
+        // This matches the logic in applyFilters() when availableServices filter is checked
+        const activeSubscribersCount = admin.subscribersActiveCount || 0;
+        const removedActiveSubscribers = admin.removedActiveSubscribers || [];
+        const removedSubscribersCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
+        const totalSubscribersCount = activeSubscribersCount + removedSubscribersCount;
+        if (totalSubscribersCount >= 3) {
+            return false; // Exclude this admin
         }
         
-        // Close on overlay click
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                this.closeAdminSelector();
-            }
+        // TERM 3: Admin must have minimum 20 days before validity date
+        // This matches the logic in applyFilters() when availableServices filter is checked
+        const validityDateStr = admin.validityDate || '';
+        
+        // Helper function to parse DD/MM/YYYY date
+        const parseDDMMYYYY = (dateStr) => {
+            if (!dateStr || dateStr === 'N/A' || dateStr.trim() === '') return null;
+            const parts = String(dateStr).trim().split('/');
+            if (parts.length !== 3) return null;
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+            const year = parseInt(parts[2], 10);
+            if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+            return new Date(year, month, day);
         };
+        
+        // Helper function to calculate days until validity date
+        const daysUntilValidity = (dateStr) => {
+            const validityDate = parseDDMMYYYY(dateStr);
+            if (!validityDate) return null;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            validityDate.setHours(0, 0, 0, 0);
+            const diffTime = validityDate.getTime() - today.getTime();
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            return diffDays;
+        };
+        
+        const daysUntil = daysUntilValidity(validityDateStr);
+        if (daysUntil === null || daysUntil < 20) {
+            return false; // Exclude if validity date is invalid or less than 20 days away
+        }
+        
+        return true; // All criteria passed
+    }
+    
+    openAdminSelector(itemIndex) {
+        try {
+            const modal = document.getElementById('adminSelectorModal');
+            if (!modal) {
+                console.error('Admin selector modal not found');
+                return;
+            }
+            
+            // Store the current item index for when admin is selected
+            modal.dataset.itemIndex = itemIndex;
+            
+            // Get active admins that match "Available Services" criteria
+            // Only show admins that would appear when "Available Services" checkbox is checked
+            let activeAdmins = [];
+            try {
+                activeAdmins = this.subscribers.filter(sub => {
+                    try {
+                        return this.isAdminAvailableService(sub);
+                    } catch (error) {
+                        console.error('Error checking admin availability:', error, sub);
+                        return false; // Skip admins that cause errors
+                    }
+                });
+            } catch (error) {
+                console.error('Error filtering admins:', error);
+                // Fallback to all active admins if filtering fails
+                activeAdmins = this.subscribers.filter(sub => sub.status === 'active');
+            }
+            
+            // Populate the modal
+            this.populateAdminSelector(activeAdmins);
+            
+            // Show modal with animation
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+            
+            // Focus search input
+            const searchInput = document.getElementById('adminSelectorSearch');
+            if (searchInput) {
+                setTimeout(() => searchInput.focus(), 100);
+            }
+            
+            // Bind search functionality
+            if (searchInput) {
+                searchInput.oninput = (e) => {
+                    const searchTerm = e.target.value.toLowerCase().trim();
+                    this.filterAdminSelector(searchTerm, activeAdmins);
+                };
+            }
+            
+            // Close on overlay click
+            modal.onclick = (e) => {
+                if (e.target === modal) {
+                    this.closeAdminSelector();
+                }
+            };
+        } catch (error) {
+            console.error('Error opening admin selector:', error);
+            alert('Error opening admin selector. Please check the console for details.');
+        }
     }
     
     closeAdminSelector() {
@@ -4475,6 +4651,53 @@ class InsightsManager {
         this.closeAdminSelector();
     }
     
+    showAddModalLoading(message = 'Processing...') {
+        const modal = document.getElementById('addSubscribersModal');
+        if (!modal) return;
+        
+        const modalContainer = modal.querySelector('.add-subscribers-modal-container');
+        if (!modalContainer) return;
+        
+        // Ensure modal container has relative positioning
+        modalContainer.style.position = 'relative';
+        
+        // Create or show loading overlay
+        let loadingOverlay = modalContainer.querySelector('.add-modal-loading');
+        if (!loadingOverlay) {
+            loadingOverlay = document.createElement('div');
+            loadingOverlay.className = 'add-modal-loading';
+            modalContainer.appendChild(loadingOverlay);
+        }
+        
+        // Update loading message
+        loadingOverlay.innerHTML = `
+            <div class="add-modal-loading-spinner">
+                <div class="refresh-loading">
+                    <div class="loader">
+                        <div class="inner one"></div>
+                        <div class="inner two"></div>
+                        <div class="inner three"></div>
+                    </div>
+                </div>
+                <p>${message}</p>
+            </div>
+        `;
+        loadingOverlay.style.display = 'flex';
+    }
+    
+    hideAddModalLoading() {
+        const modal = document.getElementById('addSubscribersModal');
+        if (!modal) return;
+        
+        const modalContainer = modal.querySelector('.add-subscribers-modal-container');
+        if (!modalContainer) return;
+        
+        const loadingOverlay = modalContainer.querySelector('.add-modal-loading');
+        if (loadingOverlay) {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+    
     async handleAddSubscribersSubmit() {
         // Prevent duplicate submissions
         if (this.isSubmittingAddForm) {
@@ -4486,6 +4709,9 @@ class InsightsManager {
         if (!form) return;
         
         this.isSubmittingAddForm = true;
+        
+        // Show loading animation
+        this.showAddModalLoading('Adding subscribers...');
         
         // Disable submit button to prevent multiple clicks
         const submitBtn = document.getElementById('shareSubscribersBtn');
@@ -4592,12 +4818,39 @@ class InsightsManager {
             const successCount = results.filter(r => r.success).length;
             const failCount = results.filter(r => !r.success).length;
             
+            // Copy message to clipboard based on success/failure
             if (failCount === 0) {
+                // All succeeded - copy success message
+                const firstSuccess = results.find(r => r.success);
+                if (firstSuccess) {
+                    const firstItem = items.find(item => item.subscriber === firstSuccess.subscriber);
+                    if (firstItem) {
+                        const admin = this.subscribers.find(s => s.id === firstItem.adminId);
+                        const adminPhone = admin?.phone || firstItem.adminId;
+                        const message = `Send ${adminPhone} to 1323`;
+                        try {
+                            await navigator.clipboard.writeText(message);
+                            console.log('✅ Copied to clipboard:', message);
+                        } catch (clipError) {
+                            console.warn('Failed to copy to clipboard:', clipError);
+                        }
+                    }
+                }
+                
                 alert(`✅ Successfully added ${successCount} subscriber(s)!`);
                 this.closeAddSubscribersModal();
                 // Optionally refresh the page or reload subscribers
                 this.loadSubscribers();
             } else {
+                // Some failed - copy cancel message
+                const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
+                try {
+                    await navigator.clipboard.writeText(cancelMessage);
+                    console.log('✅ Copied to clipboard:', cancelMessage);
+                } catch (clipError) {
+                    console.warn('Failed to copy to clipboard:', clipError);
+                }
+                
                 const failedSubscribers = results.filter(r => !r.success)
                     .map(r => `${r.subscriber}: ${r.message}`)
                     .join('\n');
@@ -4614,6 +4867,9 @@ class InsightsManager {
             console.error('Error adding subscribers:', error);
             alert('Failed to add subscribers. Please try again.');
         } finally {
+            // Hide loading animation
+            this.hideAddModalLoading();
+            
             // Re-enable submit button and reset flag
             this.isSubmittingAddForm = false;
             if (submitBtn && originalButtonText) {

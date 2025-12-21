@@ -42,11 +42,9 @@ const browserPool = require('./services/browserPool');
 const cacheLayer = require('./services/cacheLayer');
 const scheduledRefresh = require('./services/scheduledRefresh');
 const cookieRefreshWorker = require('./services/cookieRefreshWorker');
-const { addSubscriber } = require('./services/alfaAddSubscriber');
-const { editSubscriber } = require('./services/alfaEditSubscriber');
-const { removeSubscriber } = require('./services/alfaRemoveSubscriber');
-const { getAdminData, getFullAdminData, getBalanceHistory } = require('./services/firebaseDbService');
-const { prepareEditSession, getActiveSession, closeSession } = require('./services/ushareEditSession');
+// Removed: Puppeteer-based subscriber services (replaced with API-only routes in subscriberRoutes.js)
+const { getAdminData, getFullAdminData, getBalanceHistory, getActionLogs, logAction } = require('./services/firebaseDbService');
+// Removed: Puppeteer-based edit session (replaced with API-only routes)
 
 const app = express();
 // Make sure the Express app binds to Render's dynamic port
@@ -69,20 +67,45 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Simple health check route at "/" that returns plain text
-app.get('/', (req, res) => {
-    res.send('Backend is live!');
+// Request logging middleware - Only log API requests (not static files)
+app.use((req, res, next) => {
+    // Only log API routes, not static files
+    if (req.path.startsWith('/api/')) {
+        const timestamp = new Date().toISOString();
+        console.log(`📥 [${timestamp}] ${req.method} ${req.path}`);
+        if (req.method === 'POST' && req.body && Object.keys(req.body).length > 0) {
+            const bodyKeys = Object.keys(req.body);
+            const sanitizedBody = { ...req.body };
+            // Hide password in logs for security
+            if (sanitizedBody.password) {
+                sanitizedBody.password = '***HIDDEN***';
+            }
+            console.log(`   Body keys: ${bodyKeys.join(', ')}`);
+        }
+    }
+    next();
 });
 
 // Import request queue for handling concurrent requests
 const requestQueue = require('./services/requestQueue');
 
-// Health check (before static files to avoid conflicts)
+// Import new API routes
+const alfaApiRoutes = require('./routes/alfaApiRoutes');
+const subscriberRoutes = require('./routes/subscriberRoutes');
+const actionLogsRoutes = require('./routes/actionLogsRoutes');
+
+// Import queue workers
+const { initializeWorkers } = require('./services/queue');
+const { initializeWorker: initializeUshareWorker } = require('./workers/ushareHtmlWorker');
+
+// Health check endpoint at /health
 app.get('/health', (req, res) => {
+    console.log(`\n💚 Health check called at ${new Date().toISOString()}\n`);
     res.json({ 
         status: 'ok', 
         timestamp: new Date().toISOString(),
         browserPool: {
+            // TODO: Remove Puppeteer health check once captchaService.js replaces login fallback
             initialized: browserPool.isInitialized(),
             activeContexts: browserPool.getActiveContextCount()
         },
@@ -93,6 +116,12 @@ app.get('/health', (req, res) => {
         }
     });
 });
+
+// Mount new JWT-protected API routes
+// These routes require authentication via JWT token
+app.use('/api', alfaApiRoutes);      // /api/getconsumption, /api/getexpirydate, etc.
+app.use('/api', subscriberRoutes);   // /api/addSubscriber, /api/editSubscriber, etc.
+app.use('/api', actionLogsRoutes);   // /api/actionLogs
 
 // Cache management endpoint (optional - for debugging/admin)
 app.delete('/api/cache/:identifier', async (req, res) => {
@@ -128,13 +157,22 @@ app.get('/api/cache/:identifier/stats', async (req, res) => {
 
 // Fetch Alfa dashboard data (with incremental scraping support)
 app.post('/api/alfa/fetch', async (req, res) => {
+    const requestStartTime = Date.now();
+    
+    // CRITICAL: Log immediately - this MUST show up
+    process.stdout.write(`\n\n🔥🔥🔥 REFRESH API CALLED 🔥🔥🔥\n`);
+    console.error(`\n\n🔥🔥🔥 REFRESH API CALLED - ${new Date().toISOString()} 🔥🔥🔥\n`);
+    console.log(`\n\n🔥🔥🔥 REFRESH API CALLED - ${new Date().toISOString()} 🔥🔥🔥\n`);
+    
     try {
-        console.log(`\n${'='.repeat(80)}`);
-        console.log(`🔵 [API] /api/alfa/fetch request received at ${new Date().toISOString()}`);
-        console.log(`   Body keys: ${Object.keys(req.body).join(', ')}`);
-        console.log(`${'='.repeat(80)}\n`);
-        
         const { phone, password, adminId } = req.body;
+        
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`[${new Date().toISOString()}] 🔵 [API] /api/alfa/fetch - Refresh request received`);
+        console.log(`   Body keys: ${Object.keys(req.body).join(', ')}`);
+        console.log(`   Phone: ${phone || 'not provided'}`);
+        console.log(`   Admin ID: ${adminId || 'not provided'}`);
+        console.log(`${'='.repeat(80)}\n`);
 
         if (!phone || !password) {
             console.log(`⚠️ [API] Missing phone or password in request`);
@@ -145,7 +183,7 @@ app.post('/api/alfa/fetch', async (req, res) => {
         }
 
         const identifier = adminId || phone;
-        console.log(`[${new Date().toISOString()}] 🔵 [API] Fetching Alfa data for admin: ${identifier}`);
+        console.log(`[${new Date().toISOString()}] 📋 [API] Processing refresh for admin: ${identifier}`);
 
         // CRITICAL: Check for existing refresh lock BEFORE processing to prevent concurrent logins
         const { hasRefreshLock, getLastJson } = require('./services/cookieManager');
@@ -174,15 +212,19 @@ app.post('/api/alfa/fetch', async (req, res) => {
         }
 
         // Use request queue to prevent concurrent refreshes for the same admin
+        console.log(`[${new Date().toISOString()}] 🔄 [API] Starting refresh for ${identifier} via request queue...`);
         const startTime = Date.now();
         const data = await requestQueue.execute(identifier, async () => {
+            console.log(`[${new Date().toISOString()}] ✅ [API] Request queue executing refresh for ${identifier}`);
             return await fetchAlfaData(phone, password, adminId, identifier);
         });
         const duration = Date.now() - startTime;
+        console.log(`[${new Date().toISOString()}] 📊 [API] Request queue completed for ${identifier} in ${duration}ms`);
 
         // Check if this was an incremental (no-changes) response
         if (data.incremental && data.noChanges) {
-            console.log(`[${new Date().toISOString()}] ⚡ Incremental check: No changes (${duration}ms)`);
+            console.log(`[${new Date().toISOString()}] ⚡ [API] Incremental check: No changes detected (${duration}ms)`);
+            console.log(`[${new Date().toISOString()}] ✅ [API] /api/alfa/fetch completed for ${identifier} - No changes\n`);
             res.json({
                 success: true,
                 incremental: true,
@@ -194,7 +236,8 @@ app.post('/api/alfa/fetch', async (req, res) => {
                 lastUpdate: data.lastUpdate
             });
         } else {
-            console.log(`[${new Date().toISOString()}] ✅ Completed ${data.incremental ? 'incremental' : 'full'} scrape in ${duration}ms`);
+            console.log(`[${new Date().toISOString()}] ✅ [API] Completed ${data.incremental ? 'incremental' : 'full'} refresh in ${duration}ms`);
+            console.log(`[${new Date().toISOString()}] ✅ [API] /api/alfa/fetch completed for ${identifier} - Data refreshed\n`);
             res.json({
                 success: true,
                 incremental: data.incremental || false,
@@ -205,9 +248,12 @@ app.post('/api/alfa/fetch', async (req, res) => {
             });
         }
     } catch (error) {
-        console.error('❌ Error fetching Alfa data:', error);
-        console.error('Error message:', error?.message);
-        console.error('Stack trace:', error?.stack);
+        const errorDuration = Date.now() - (requestStartTime || Date.now());
+        console.error(`\n[${new Date().toISOString()}] ❌ [API] /api/alfa/fetch ERROR for ${identifier || 'unknown'}`);
+        console.error(`   Duration: ${errorDuration}ms`);
+        console.error(`   Error message: ${error?.message}`);
+        console.error(`   Stack trace: ${error?.stack}`);
+        console.error(`${'='.repeat(80)}\n`);
         
         res.status(500).json({
             success: false,
@@ -290,7 +336,9 @@ app.post('/api/refresh/clear-stuck', async (req, res) => {
     }
 });
 
-// Add subscriber endpoint
+// Add subscriber endpoint (legacy - delegates to new route handler)
+// NOTE: This endpoint is kept for backward compatibility
+// New code should use /api/addSubscriber (JWT-protected) instead
 app.post('/api/subscribers/add', async (req, res) => {
     try {
         const { adminId, subscriberPhone, quota } = req.body;
@@ -299,6 +347,15 @@ app.post('/api/subscribers/add', async (req, res) => {
             return res.status(400).json({
                 success: false,
                 error: 'adminId, subscriberPhone, and quota are required'
+            });
+        }
+
+        // Validate quota
+        const quotaNum = parseFloat(quota);
+        if (isNaN(quotaNum) || quotaNum < 0.1 || quotaNum > 70) {
+            return res.status(400).json({
+                success: false,
+                error: 'Quota must be between 0.1 and 70 GB'
             });
         }
 
@@ -314,46 +371,267 @@ app.post('/api/subscribers/add', async (req, res) => {
             });
         }
 
-        // Call addSubscriber service
-        const result = await addSubscriber(
-            adminId,
-            adminData.phone,
-            adminData.password,
-            subscriberPhone,
-            parseFloat(quota)
-        );
-
-        if (result.success) {
-            console.log(`[${new Date().toISOString()}] ✅ Successfully added subscriber`);
-            
-            // Store as pending subscriber in Firebase (wait for it to complete)
-            const { addPendingSubscriber } = require('./services/firebaseDbService');
-            try {
-                const added = await addPendingSubscriber(adminId, subscriberPhone, parseFloat(quota));
-                if (added) {
-                    console.log(`[${new Date().toISOString()}] ✅ Pending subscriber ${subscriberPhone} stored in Firebase for admin ${adminId}`);
-                } else {
-                    console.warn(`[${new Date().toISOString()}] ⚠️ Failed to store pending subscriber ${subscriberPhone} in Firebase`);
-                }
-            } catch (pendingError) {
-                console.warn(`⚠️ Could not add pending subscriber (non-critical):`, pendingError?.message);
-            }
-            
-            res.json({
-                success: true,
-                message: result.message || 'Subscriber added successfully'
-            });
-        } else {
-            console.log(`[${new Date().toISOString()}] ❌ Failed to add subscriber: ${result.message}`);
-            res.status(500).json({
+        // Clean subscriber number (8 digits)
+        const cleanSubscriberNumber = subscriberPhone.replace(/\D/g, '').substring(0, 8);
+        if (cleanSubscriberNumber.length !== 8) {
+            return res.status(400).json({
                 success: false,
-                error: result.message || 'Failed to add subscriber'
+                error: 'Subscriber number must be 8 digits'
             });
         }
+
+        // Use the same logic as the new route
+        const { getCookiesOrLogin } = require('./services/cookieManager');
+        const { formatCookiesForHeader } = require('./services/apiClient');
+        const axios = require('axios');
+        const ALFA_BASE_URL = 'https://www.alfa.com.lb';
+        const USHARE_BASE_URL = `${ALFA_BASE_URL}/en/account/manage-services/ushare`;
+        
+        // Get cookies
+        const cookies = await getCookiesOrLogin(adminData.phone, adminData.password, adminId);
+
+        // Get CSRF token (reuse helper from subscriberRoutes)
+        // Import the helper function
+        const getCsrfToken = async (adminPhone, cookies, adminId, adminPassword, retryCount = 0) => {
+            const MAX_RETRIES = 2;
+            try {
+                const hasAccountCookie = cookies && cookies.some(c => c.name === '__ACCOUNT');
+                if (!hasAccountCookie && cookies && cookies.length > 0 && adminId && adminPassword && retryCount < MAX_RETRIES) {
+                    console.log(`🔄 [CSRF] Missing __ACCOUNT cookie, refreshing... (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+                    const refreshedCookies = await getCookiesOrLogin(adminPhone, adminPassword, adminId);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    return getCsrfToken(adminPhone, refreshedCookies, adminId, adminPassword, retryCount + 1);
+                }
+                
+                const cookieHeaderForRequest = formatCookiesForHeader(cookies);
+                const url = `${USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
+                const response = await axios.get(url, {
+                    headers: {
+                        'Cookie': cookieHeaderForRequest,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    },
+                    timeout: 20000,
+                    maxRedirects: 5
+                });
+                
+                if (response.status >= 400) {
+                    if (adminId && adminPassword && retryCount < MAX_RETRIES) {
+                        const refreshedCookies = await getCookiesOrLogin(adminPhone, adminPassword, adminId);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        return getCsrfToken(adminPhone, refreshedCookies, adminId, adminPassword, retryCount + 1);
+                    }
+                    throw new Error(`Failed to get CSRF token: HTTP ${response.status}`);
+                }
+                
+                const html = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+                let csrfMatch = html.match(/name="__RequestVerificationToken"\s+value="([^"]+)"/);
+                if (!csrfMatch) {
+                    csrfMatch = html.match(/__RequestVerificationToken[^>]*value="([^"]+)"/);
+                }
+                if (!csrfMatch) {
+                    csrfMatch = html.match(/<input[^>]*name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
+                }
+                
+                if (!csrfMatch || !csrfMatch[1]) {
+                    if (adminId && adminPassword && retryCount < MAX_RETRIES) {
+                        const refreshedCookies = await getCookiesOrLogin(adminPhone, adminPassword, adminId);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        return getCsrfToken(adminPhone, refreshedCookies, adminId, adminPassword, retryCount + 1);
+                    }
+                    throw new Error('CSRF token not found in page');
+                }
+                
+                const maxQuotaMatch = html.match(/id="MaxQuota"\s+value="([^"]+)"/);
+                const maxQuota = maxQuotaMatch ? parseFloat(maxQuotaMatch[1]) : null;
+                
+                return {
+                    token: csrfMatch[1],
+                    maxQuota: maxQuota
+                };
+            } catch (error) {
+                if (error.message && (error.message.includes('CSRF token') || error.message.includes('cookies expired'))) {
+                    throw error;
+                }
+                if (error.response?.status === 401 || error.response?.status === 403) {
+                    if (adminId && adminPassword && retryCount < MAX_RETRIES) {
+                        const refreshedCookies = await getCookiesOrLogin(adminPhone, adminPassword, adminId);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        return getCsrfToken(adminPhone, refreshedCookies, adminId, adminPassword, retryCount + 1);
+                    }
+                    throw new Error('Authentication failed - cookies expired');
+                }
+                throw error;
+            }
+        };
+
+        const { token: csrfToken, maxQuota } = await getCsrfToken(adminData.phone, cookies, adminId, adminData.password);
+        const actualMaxQuota = maxQuota || 70;
+
+        // Format cookie header for POST request
+        const cookieHeader = formatCookiesForHeader(cookies);
+
+        // Build form data
+        const { URLSearchParams } = require('url');
+        const formData = new URLSearchParams();
+        formData.append('mobileNumber', adminData.phone);
+        formData.append('Number', cleanSubscriberNumber);
+        formData.append('Quota', quotaNum.toString());
+        formData.append('MaxQuota', actualMaxQuota.toString());
+        formData.append('__RequestVerificationToken', csrfToken);
+        const url = `${USHARE_BASE_URL}?mobileNumber=${adminData.phone}`;
+
+        console.log(`📤 [Add Subscriber] POSTing to ${url}`);
+        console.log(`   Subscriber: ${cleanSubscriberNumber}, Quota: ${quotaNum}GB, MaxQuota: ${actualMaxQuota}GB`);
+
+        const response = await axios.post(url, formData.toString(), {
+            headers: {
+                'Cookie': cookieHeader,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': url
+            },
+            maxRedirects: 0,
+            validateStatus: (status) => status >= 200 && status < 400,
+            timeout: 20000
+        });
+
+        console.log(`📥 [Add Subscriber] Response status: ${response.status}`);
+
+        const location = response.headers.location || '';
+        if (location) {
+            console.log(`   Redirect location: ${location}`);
+        }
+
+        // Check if redirected to login
+        if (response.status >= 300 && location.includes('/login')) {
+            return res.status(401).json({
+                success: false,
+                error: 'Authentication failed - cookies expired'
+            });
+        }
+
+        // Parse response HTML to check for errors
+        let html = '';
+        if (response.data && typeof response.data === 'string') {
+            html = response.data;
+        } else if (response.data) {
+            html = JSON.stringify(response.data);
+        }
+
+        const errorPatterns = [
+            /error|Error|ERROR/,
+            /invalid|Invalid|INVALID/,
+            /failed|Failed|FAILED/,
+            /already exists|already added|duplicate/i,
+            /not found|does not exist/i
+        ];
+
+        const hasError = errorPatterns.some(pattern => pattern.test(html));
+        const successPatterns = [/success|Success|SUCCESS/, /added successfully|subscriber added/i];
+        const hasSuccess = successPatterns.some(pattern => pattern.test(html));
+        const isRedirect = response.status >= 300 && response.status < 400;
+        const is200 = response.status === 200;
+
+        if (hasError && !hasSuccess) {
+            const errorMatch = html.match(/(error|Error)[^<]*([^<]{0,100})/i);
+            const errorMessage = errorMatch ? errorMatch[0].substring(0, 200) : 'Unknown error from Alfa';
+            console.error(`❌ [Add Subscriber] Error detected: ${errorMessage}`);
+            
+            // Log failed action
+            try {
+                const userId = adminData.userId || null;
+                if (userId) {
+                    await logAction(userId, adminId, adminData.name || 'Unknown', adminData.phone, 'add', cleanSubscriberNumber, quotaNum, false, errorMessage);
+                }
+            } catch (logError) {
+                console.warn(`⚠️ Could not log action (non-critical):`, logError?.message);
+            }
+            
+            return res.status(400).json({
+                success: false,
+                error: `Failed to add subscriber: ${errorMessage}`
+            });
+        }
+
+        // Invalidate cache
+        const { invalidateUshareCache } = require('./services/ushareHtmlParser');
+        if (isRedirect && !location.includes('/login')) {
+            console.log(`✅ [Add Subscriber] Got ${response.status} redirect (success)`);
+            invalidateUshareCache(adminData.phone).catch(() => {});
+            
+            // Log action (get userId from adminData)
+            try {
+                const userId = adminData.userId || null;
+                if (userId) {
+                    await logAction(userId, adminId, adminData.name || 'Unknown', adminData.phone, 'add', cleanSubscriberNumber, quotaNum, true);
+                }
+            } catch (logError) {
+                console.warn(`⚠️ Could not log action (non-critical):`, logError?.message);
+            }
+            
+            return res.json({
+                success: true,
+                message: 'Subscriber added successfully'
+            });
+        }
+
+        // For 200 OK, do brief verification
+        if (is200) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const { fetchUshareHtml } = require('./services/ushareHtmlParser');
+            const verifyResult = await fetchUshareHtml(adminData.phone, cookies, false).catch(() => null);
+            
+            if (verifyResult && verifyResult.success && verifyResult.data) {
+                const subscribers = verifyResult.data.subscribers || [];
+                const subscriberExists = subscribers.some(sub => {
+                    const subNumber = sub.phoneNumber || sub.fullPhoneNumber || '';
+                    return subNumber.replace(/^961/, '').replace(/\D/g, '') === cleanSubscriberNumber;
+                });
+                
+                if (subscriberExists) {
+                    console.log(`✅ [Add Subscriber] Verified: Subscriber ${cleanSubscriberNumber} exists`);
+                }
+            }
+            await invalidateUshareCache(adminData.phone).catch(() => {});
+            
+            // Log action (get userId from adminData)
+            try {
+                const userId = adminData.userId || null;
+                if (userId) {
+                    await logAction(userId, adminId, adminData.name || 'Unknown', adminData.phone, 'add', cleanSubscriberNumber, quotaNum, true);
+                }
+            } catch (logError) {
+                console.warn(`⚠️ Could not log action (non-critical):`, logError?.message);
+            }
+        }
+
+        // Store as pending subscriber in Firebase
+        const { addPendingSubscriber } = require('./services/firebaseDbService');
+        try {
+            await addPendingSubscriber(adminId, cleanSubscriberNumber, quotaNum);
+        } catch (pendingError) {
+            console.warn(`⚠️ Could not add pending subscriber (non-critical):`, pendingError?.message);
+        }
+
+        res.json({
+            success: true,
+            message: 'Subscriber added successfully'
+        });
+
     } catch (error) {
         console.error('❌ Error adding subscriber:', error);
         console.error('Error message:', error?.message);
         console.error('Stack trace:', error?.stack);
+        
+        // Log failed action
+        try {
+            if (adminData && adminData.userId) {
+                const cleanSubscriberNumber = subscriberPhone?.replace(/\D/g, '').substring(0, 8);
+                await logAction(adminData.userId, adminId, adminData.name || 'Unknown', adminData.phone || '', 'add', cleanSubscriberNumber || '', quota || null, false, error.message || 'Unknown error');
+            }
+        } catch (logError) {
+            console.warn(`⚠️ Could not log action (non-critical):`, logError?.message);
+        }
         
         res.status(500).json({
             success: false,
@@ -363,301 +641,34 @@ app.post('/api/subscribers/add', async (req, res) => {
 });
 
 // Edit subscribers endpoint (update quota, add, remove)
+// REMOVED: /api/subscribers/edit - Replaced with API-only routes:
+//   PUT /api/editSubscriber (JWT-protected, no Puppeteer)
+//   POST /api/addSubscriber (JWT-protected, no Puppeteer)
+//   DELETE /api/removeSubscriber (JWT-protected, no Puppeteer)
 app.post('/api/subscribers/edit', async (req, res) => {
-    try {
-        const { adminId, sessionId, updates, removals, additions } = req.body;
-
-        if (!adminId) {
-            return res.status(400).json({
-                success: false,
-                error: 'adminId is required'
-            });
-        }
-
-        console.log(`[${new Date().toISOString()}] Editing subscribers for admin: ${adminId}`);
-        console.log(`   Updates: ${updates?.length || 0}, Removals: ${removals?.length || 0}, Additions: ${additions?.length || 0}`);
-
-        // Get admin data from Firebase
-        const adminData = await getAdminData(adminId);
-        if (!adminData || !adminData.phone || !adminData.password) {
-            return res.status(404).json({
-                success: false,
-                error: 'Admin not found or missing credentials'
-            });
-        }
-
-        const { addPendingSubscriber, removePendingSubscriber, addRemovedSubscriber, addRemovedActiveSubscriber, getAdminData: getFullAdminData } = require('./services/firebaseDbService');
-        const results = {
-            updates: [],
-            removals: [],
-            additions: []
-        };
-        
-        // Get session data if sessionId provided (for faster edits using existing page)
-        let sessionData = null;
-        if (sessionId) {
-            sessionData = getActiveSession(sessionId);
-            if (sessionData) {
-                console.log(`⚡ Using existing edit session for faster operations`);
-            } else {
-                console.log(`⚠️ Session ${sessionId} not found or expired, will create new page`);
-            }
-        }
-
-        // Handle additions
-        if (additions && Array.isArray(additions) && additions.length > 0) {
-            for (const addition of additions) {
-                if (addition.phone && addition.quota) {
-                    try {
-                        // Pass sessionData to use existing page if available (faster)
-                        const result = await addSubscriber(
-                            adminId,
-                            adminData.phone,
-                            adminData.password,
-                            addition.phone,
-                            parseFloat(addition.quota),
-                            sessionData
-                        );
-                        
-                        if (result.success) {
-                            await addPendingSubscriber(adminId, addition.phone, parseFloat(addition.quota));
-                            results.additions.push({ phone: addition.phone, success: true });
-                        } else {
-                            results.additions.push({ phone: addition.phone, success: false, error: result.message });
-                        }
-                    } catch (error) {
-                        results.additions.push({ phone: addition.phone, success: false, error: error.message });
-                    }
-                }
-            }
-        }
-
-        // Handle removals (browser automation to remove from Alfa)
-        if (removals && Array.isArray(removals) && removals.length > 0) {
-            // Get current subscriber data before removal to check status (Active vs Requested)
-            const currentAdminData = await getFullAdminData(adminId);
-            const currentSecondarySubscribers = currentAdminData?.alfaData?.secondarySubscribers || [];
-            
-            for (const phone of removals) {
-                try {
-                    // Check if subscriber is Active or Requested BEFORE removal
-                    const cleanPhone = phone.replace(/^961/, ''); // Remove 961 prefix if present
-                    const subscriberInList = currentSecondarySubscribers.find(
-                        sub => sub.phoneNumber === cleanPhone || sub.phoneNumber === phone
-                    );
-                    const isActive = subscriberInList && subscriberInList.status === 'Active';
-                    
-                    // Remove from Alfa using browser automation
-                    // Pass sessionData to use existing page if available (faster)
-                    const result = await removeSubscriber(
-                        adminId,
-                        adminData.phone,
-                        adminData.password,
-                        phone,
-                        sessionData
-                    );
-                    
-                    if (result.success) {
-                        // Remove from pending subscribers in Firebase (if pending)
-                        await removePendingSubscriber(adminId, phone).catch(() => {
-                            // Non-critical if not in pending list
-                        });
-                        
-                        // Only add to removedSubscribers if subscriber was Active
-                        // Requested subscribers will disappear naturally (won't show in view details)
-                        if (isActive && subscriberInList) {
-                            // Store removed Active subscriber with full data so it can be displayed as "Out"
-                            await addRemovedActiveSubscriber(adminId, {
-                                phoneNumber: subscriberInList.phoneNumber,
-                                fullPhoneNumber: subscriberInList.fullPhoneNumber || subscriberInList.phoneNumber,
-                                consumption: subscriberInList.consumption || 0,
-                                limit: subscriberInList.quota || subscriberInList.limit || 0
-                            }).catch(() => {
-                                // Non-critical
-                            });
-                        }
-                        
-                        results.removals.push({ phone, success: true });
-                    } else {
-                        results.removals.push({ phone, success: false, error: result.message });
-                    }
-                } catch (error) {
-                    results.removals.push({ phone, success: false, error: error.message });
-                }
-            }
-        }
-
-        // Handle updates (quota changes via browser automation)
-        if (updates && Array.isArray(updates) && updates.length > 0) {
-            for (const update of updates) {
-                if (update.phone && update.quota) {
-                    try {
-                        // Edit subscriber quota in Alfa using browser automation
-                        // Pass sessionData if available (for faster edits using existing page)
-                        const result = await editSubscriber(
-                            adminId,
-                            adminData.phone,
-                            adminData.password,
-                            update.phone,
-                            parseFloat(update.quota),
-                            sessionData // Pass session to reuse existing page
-                        );
-                        
-                        if (result.success) {
-                            // Update pending subscriber quota in Firebase if it exists
-                            try {
-                                await removePendingSubscriber(adminId, update.phone);
-                                await addPendingSubscriber(adminId, update.phone, parseFloat(update.quota));
-                            } catch (firebaseError) {
-                                // Non-critical if not in pending list
-                                console.log(`ℹ️ Could not update pending subscriber (non-critical): ${firebaseError.message}`);
-                            }
-                            results.updates.push({ phone: update.phone, success: true });
-                        } else {
-                            results.updates.push({ phone: update.phone, success: false, error: result.message });
-                        }
-                    } catch (error) {
-                        results.updates.push({ phone: update.phone, success: false, error: error.message });
-                    }
-                }
-            }
-        }
-
-        const allSuccess = 
-            results.additions.every(r => r.success) &&
-            results.removals.every(r => r.success) &&
-            results.updates.every(r => r.success);
-
-        res.json({
-            success: allSuccess,
-            results: results,
-            message: allSuccess ? 'Subscribers updated successfully' : 'Some operations failed'
-        });
-    } catch (error) {
-        console.error('❌ Error editing subscribers:', error);
-        res.status(500).json({
-            success: false,
-            error: error?.message || 'Unknown error occurred while editing subscribers'
-        });
-    }
+    res.status(410).json({
+        success: false,
+        error: 'This endpoint has been removed. Please use the new API-only routes: PUT /api/editSubscriber, POST /api/addSubscriber, DELETE /api/removeSubscriber'
+    });
 });
 
 // Prepare edit session: Navigate to Ushare page and return subscriber data + session ID
 // Render.com-optimized: Uses browser pool with Render-safe flags, proper error handling, and non-blocking startup
+// REMOVED: /api/ushare/prepare-edit - Replaced with GET /api/ushare (JWT-protected, no Puppeteer)
+// Use GET /api/ushare?adminId=xxx to fetch subscriber list directly
 app.post('/api/ushare/prepare-edit', async (req, res) => {
-    // Set a timeout for the entire request to prevent hanging
-    const requestTimeout = setTimeout(() => {
-        if (!res.headersSent) {
-            res.status(504).json({
-                success: false,
-                error: 'Request timeout - The operation took too long. Please try again.'
-            });
-        }
-    }, 60000); // 60 second timeout for entire request
-    
-    try {
-        const { adminId } = req.body;
-        
-        // Validate input
-        if (!adminId) {
-            clearTimeout(requestTimeout);
-            return res.status(400).json({
-                success: false,
-                error: 'adminId is required'
-            });
-        }
-        
-        console.log(`[${new Date().toISOString()}] 🚀 [Prepare Edit] Starting edit session preparation for admin: ${adminId}`);
-        
-        // Ensure browser pool is initialized (non-blocking, lazy initialization)
-        try {
-            await browserPool.initialize();
-        } catch (browserError) {
-            clearTimeout(requestTimeout);
-            console.error('❌ [Prepare Edit] Browser pool initialization failed:', browserError);
-            return res.status(500).json({
-                success: false,
-                error: 'Browser initialization failed. Please try again in a moment.'
-            });
-        }
-        
-        // Get admin data
-        const adminData = await getAdminData(adminId);
-        if (!adminData || !adminData.phone || !adminData.password) {
-            clearTimeout(requestTimeout);
-            return res.status(404).json({
-                success: false,
-                error: 'Admin not found or missing credentials'
-            });
-        }
-        
-        console.log(`[${new Date().toISOString()}] 📋 [Prepare Edit] Admin data retrieved, preparing edit session...`);
-        
-        // Prepare edit session (navigates to Ushare page and returns data + session ID)
-        // This uses the browser pool which has Render-safe flags:
-        // - --no-sandbox
-        // - --disable-setuid-sandbox
-        // - --disable-dev-shm-usage
-        // Navigation timeouts are set to 30-45s in ushareEditSession.js
-        const result = await prepareEditSession(adminId, adminData.phone, adminData.password);
-        
-        clearTimeout(requestTimeout);
-        
-        if (result.success) {
-            console.log(`[${new Date().toISOString()}] ✅ [Prepare Edit] Edit session prepared successfully: ${result.sessionId}`);
-            res.json({
-                success: true,
-                sessionId: result.sessionId,
-                data: result.data
-            });
-        } else {
-            console.error(`[${new Date().toISOString()}] ❌ [Prepare Edit] Failed to prepare edit session: ${result.error}`);
-            res.status(500).json({
-                success: false,
-                error: result.error || 'Failed to prepare edit session'
-            });
-        }
-    } catch (error) {
-        clearTimeout(requestTimeout);
-        console.error(`[${new Date().toISOString()}] ❌ [Prepare Edit] Unexpected error:`, error);
-        console.error('   Error message:', error?.message);
-        console.error('   Error stack:', error?.stack);
-        
-        // Provide user-friendly error messages
-        let errorMessage = error?.message || 'Unknown error occurred';
-        
-        if (error.message && error.message.includes('Navigation timeout')) {
-            errorMessage = 'Navigation timeout - The page took too long to load. This may happen if the backend is cold-starting or the Alfa website is slow. Please try again in a moment.';
-        } else if (error.message && error.message.includes('net::ERR_')) {
-            errorMessage = `Network error: ${error.message}. Please check your internet connection and try again.`;
-        } else if (error.message && error.message.includes('Browser closed')) {
-            errorMessage = 'Browser connection lost. Please try again.';
-        }
-        
-        res.status(500).json({
-            success: false,
-            error: errorMessage
-        });
-    }
+    res.status(410).json({
+        success: false,
+        error: 'This endpoint has been removed. Please use GET /api/ushare?adminId=xxx to fetch subscriber data (JWT-protected, API-only)'
+    });
 });
 
-// Close edit session
+// REMOVED: /api/ushare/close-session - No longer needed (no Puppeteer sessions)
 app.post('/api/ushare/close-session', async (req, res) => {
-    try {
-        const { sessionId } = req.body;
-        
-        if (sessionId) {
-            await closeSession(sessionId);
-        }
-        
-        res.json({ success: true });
-    } catch (error) {
-        console.error('❌ Error closing session:', error);
-        res.status(500).json({
-            success: false,
-            error: error?.message || 'Unknown error occurred'
-        });
-    }
+    res.status(410).json({
+        success: false,
+        error: 'This endpoint has been removed. Sessions are no longer used (stateless API-only backend)'
+    });
 });
 
 // Get balance history endpoint
@@ -688,7 +699,8 @@ app.get('/api/admin/:adminId/balance-history', async (req, res) => {
 });
 
 // Serve frontend static files (AFTER all API routes)
-const frontendPath = path.join(__dirname, '../frontend');
+// This will serve index.html at the root "/" and all other frontend files
+const frontendPath = path.join(__dirname, '..', 'frontend');
 console.log('📁 Frontend path:', frontendPath);
 app.use(express.static(frontendPath));
 
@@ -720,10 +732,16 @@ async function startServer() {
         // Start scheduled refresh service (non-blocking)
         console.log('🔧 Initializing scheduled refresh service...');
         scheduledRefresh.startScheduledRefresh();
+        scheduledRefresh.startScheduledCleanup();
         
         // Start background cookie refresh worker (proactive cookie renewal) - non-blocking
         console.log('🔧 Starting background cookie refresh worker...');
         cookieRefreshWorker.startWorker();
+        
+        // Initialize BullMQ queues and workers
+        console.log('🔧 Initializing BullMQ queues and workers...');
+        initializeWorkers();
+        initializeUshareWorker();
         
     } catch (err) {
         console.error('❌ Failed to start server:', err);
@@ -739,6 +757,17 @@ async function gracefulShutdown(signal) {
         // Stop cookie refresh worker
         console.log('🛑 Stopping cookie refresh worker...');
         cookieRefreshWorker.stopWorker();
+        
+        // Close queue workers
+        try {
+            const { closeQueues } = require('./services/queue');
+            const { closeWorker } = require('./workers/ushareHtmlWorker');
+            console.log('🛑 Closing queue workers...');
+            await closeWorker();
+            await closeQueues();
+        } catch (queueError) {
+            console.warn('⚠️ Error closing queues:', queueError.message);
+        }
         
         // Close browser pool
         await browserPool.shutdown();

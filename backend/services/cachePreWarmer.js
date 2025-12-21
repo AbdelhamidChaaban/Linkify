@@ -1,5 +1,6 @@
 const cacheLayer = require('./cacheLayer');
-const { fetchAlfaData } = require('./alfaService');
+// MIGRATED: Using API-first service (no Puppeteer) instead of legacy alfaService.js
+const { fetchAlfaData } = require('./alfaServiceApiFirst');
 
 /**
  * Cache Pre-Warmer Service

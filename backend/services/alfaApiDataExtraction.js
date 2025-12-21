@@ -4,13 +4,24 @@
  * @returns {Object} Extracted data
  */
 function extractFromGetConsumption(apiResponseData) {
+    // CRITICAL: Ensure primaryData always has ServiceInformationValue (even if empty array)
+    // This is required for status determination in Firebase
+    const primaryData = apiResponseData && typeof apiResponseData === 'object' 
+        ? { ...apiResponseData } 
+        : {};
+    
+    // Ensure ServiceInformationValue exists as an array (for status validation)
+    if (!primaryData.ServiceInformationValue || !Array.isArray(primaryData.ServiceInformationValue)) {
+        primaryData.ServiceInformationValue = apiResponseData?.ServiceInformationValue || [];
+    }
+    
     const extracted = {
         balance: null,
         totalConsumption: null,
         adminConsumption: null,
         secondarySubscribers: [],
         subscribersCount: 0,
-        primaryData: apiResponseData // Save full response for later use
+        primaryData: primaryData // Save full response with guaranteed ServiceInformationValue structure
     };
 
     // Extract balance

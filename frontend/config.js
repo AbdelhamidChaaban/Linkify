@@ -12,8 +12,16 @@
  * before this script loads.
  */
 
-// Backend API URL - Configured for production
-window.AEFA_API_URL = window.AEFA_API_URL || 'https://cellspottmanage.onrender.com';
+// Backend API URL - Auto-detect localhost for development
+const isLocalhost = window.location.hostname === 'localhost' || 
+                    window.location.hostname === '127.0.0.1' ||
+                    window.location.hostname === '';
+
+window.AEFA_API_URL = window.AEFA_API_URL || (
+    isLocalhost 
+        ? 'http://localhost:3000'  // Local development
+        : 'https://cellspottmanage.onrender.com'  // Production
+);
 
 // Log the configured API URL (for debugging in production)
 if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {

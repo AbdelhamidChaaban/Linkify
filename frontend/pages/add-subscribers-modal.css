@@ -21,6 +21,7 @@
 }
 
 .add-subscribers-modal-container {
+    position: relative;
     background: linear-gradient(135deg, rgba(13, 17, 32, 0.98) 0%, rgba(90, 33, 182, 0.35) 43%, rgba(13, 17, 32, 0.98) 100%);
     border: 1px solid rgba(58, 10, 78, 0.5);
     border-radius: 1.2rem;
@@ -96,6 +97,183 @@ body.light-mode .add-subscribers-title {
 
 body.light-mode .add-subscribers-breadcrumbs .breadcrumb-current {
     color: #1e293b;
+}
+
+/* Loading overlay for add subscriber modal */
+.add-modal-loading {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(13, 17, 32, 0.95);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+    border-radius: 1.2rem;
+    min-height: 200px;
+    padding: 2rem;
+    box-sizing: border-box;
+}
+
+body.light-mode .add-modal-loading {
+    background: rgba(255, 255, 255, 0.95);
+}
+
+.add-modal-loading-spinner {
+    text-align: center;
+    color: #f8fafc;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    max-width: 300px;
+}
+
+body.light-mode .add-modal-loading-spinner {
+    color: #1e293b;
+}
+
+/* 3D Rotating Loader (same as refresh animation) */
+.add-modal-loading-spinner .refresh-loading {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 1.5rem;
+}
+
+.add-modal-loading-spinner .refresh-loading .loader {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    perspective: 800px;
+}
+
+.add-modal-loading-spinner .refresh-loading .inner {
+    position: absolute;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+}
+
+.add-modal-loading-spinner .refresh-loading .inner.one {
+    left: 0%;
+    top: 0%;
+    animation: rotate-one 1s linear infinite;
+    border-bottom: 3px solid #8b5cf6;
+}
+
+.add-modal-loading-spinner .refresh-loading .inner.two {
+    right: 0%;
+    top: 0%;
+    animation: rotate-two 1s linear infinite;
+    border-right: 3px solid #8b5cf6;
+}
+
+.add-modal-loading-spinner .refresh-loading .inner.three {
+    right: 0%;
+    bottom: 0%;
+    animation: rotate-three 1s linear infinite;
+    border-top: 3px solid #8b5cf6;
+}
+
+@keyframes rotate-one {
+    0% {
+        transform: rotateX(35deg) rotateY(-45deg) rotateZ(0deg);
+    }
+    100% {
+        transform: rotateX(35deg) rotateY(-45deg) rotateZ(360deg);
+    }
+}
+
+@keyframes rotate-two {
+    0% {
+        transform: rotateX(50deg) rotateY(10deg) rotateZ(0deg);
+    }
+    100% {
+        transform: rotateX(50deg) rotateY(10deg) rotateZ(360deg);
+    }
+}
+
+@keyframes rotate-three {
+    0% {
+        transform: rotateX(35deg) rotateY(55deg) rotateZ(0deg);
+    }
+    100% {
+        transform: rotateX(35deg) rotateY(55deg) rotateZ(360deg);
+    }
+}
+
+.add-modal-loading-spinner p {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 500;
+    padding: 0 1rem;
+}
+
+/* Responsive styles for mobile */
+@media (max-width: 768px) {
+    .add-modal-loading {
+        padding: 1.5rem;
+        min-height: 150px;
+    }
+    
+    .add-modal-loading-spinner {
+        max-width: 100%;
+        padding: 0;
+    }
+    
+    .add-modal-loading-spinner .refresh-loading {
+        width: 48px;
+        height: 48px;
+        margin: 0 auto 1rem;
+    }
+    
+    .add-modal-loading-spinner .refresh-loading .loader {
+        width: 48px;
+        height: 48px;
+    }
+    
+    .add-modal-loading-spinner p {
+        font-size: 0.875rem;
+        padding: 0 0.5rem;
+        line-height: 1.4;
+        word-wrap: break-word;
+    }
+}
+
+@media (max-width: 480px) {
+    .add-modal-loading {
+        padding: 1rem;
+        min-height: 120px;
+    }
+    
+    .add-modal-loading-spinner {
+        max-width: 100%;
+    }
+    
+    .add-modal-loading-spinner .refresh-loading {
+        width: 40px;
+        height: 40px;
+        margin: 0 auto 0.75rem;
+    }
+    
+    .add-modal-loading-spinner .refresh-loading .loader {
+        width: 40px;
+        height: 40px;
+    }
+    
+    .add-modal-loading-spinner p {
+        font-size: 0.8125rem;
+        padding: 0 0.25rem;
+    }
 }
 
 body.light-mode .add-subscribers-breadcrumbs .breadcrumb-link {

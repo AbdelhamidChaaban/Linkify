@@ -124,15 +124,15 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         .then(data => ({ success: true, data, error: null }))
         .catch(error => ({ success: false, data: null, error }));
     
-    // OPTIMIZED: Reduced timeout from 9s to 6s for faster failure
-    // Use Promise.race to ensure it never takes more than 6 seconds
+    // Increased timeout to 10s to match actual API response time (~9s)
+    // Use Promise.race to ensure it never takes more than 10 seconds
     const servicesTimeoutPromise = new Promise((resolve) => {
         setTimeout(() => {
-            resolve({ success: false, data: null, error: { type: 'Timeout', message: 'Request timeout after 6000ms - using cached data' }, _timedOut: true });
-        }, 6000);
+            resolve({ success: false, data: null, error: { type: 'Timeout', message: 'Request timeout after 10000ms - using cached data' }, _timedOut: true });
+        }, 10000);
     });
     
-    const servicesApiPromise = apiRequest('/en/account/manage-services/getmyservices', cookies, { timeout: 7000, maxRetries: 0 })
+    const servicesApiPromise = apiRequest('/en/account/manage-services/getmyservices', cookies, { timeout: 10000, maxRetries: 0 })
         .then(data => ({ success: true, data, error: null, _timedOut: false }))
         .catch(error => ({ success: false, data: null, error, _timedOut: false }));
     
@@ -229,7 +229,7 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
             results.expiry = expiryResult.value.data;
             results._apiSuccess.expiry = true;
             results._apiErrors.expiry = null;
-            console.log(`✅ API getexpirydate succeeded (${duration}ms)`);
+            console.log(`✅ API getexpirydate: SUCCESS (${duration}ms)`);
         }
     } else {
         const error = expiryResult.status === 'fulfilled' ? expiryResult.value.error : expiryResult.reason;
@@ -238,9 +238,9 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         const duration = Date.now() - expiryStartTime;
         
         if (error?.type === 'Timeout' || duration > 3000) {
-            console.log(`⏱️ API getexpirydate timed out (>5s), using cached data`);
+            console.log(`⏱️ API getexpirydate: TIMEOUT (${duration}ms) - using cached data`);
         } else {
-            console.log(`❌ API getexpirydate failed: ${error?.type || 'Unknown'} (${duration}ms)`);
+            console.log(`❌ API getexpirydate: FAILED - ${error?.type || 'Unknown'} (${duration}ms)`);
         }
         
         // Use cached expiry if available (for timeout or other errors)
@@ -260,13 +260,13 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         results._apiSuccess.consumption = true;
         results._apiErrors.consumption = null;
         const duration = Date.now() - consumptionStartTime;
-        console.log(`✅ API getconsumption succeeded (${duration}ms)`);
+        console.log(`✅ API getconsumption: SUCCESS (${duration}ms)`);
     } else {
         const error = consumptionResult.status === 'fulfilled' ? consumptionResult.value.error : consumptionResult.reason;
         results._apiSuccess.consumption = false;
         results._apiErrors.consumption = error?.type || 'Unknown';
         const duration = Date.now() - consumptionStartTime;
-        console.log(`❌ API getconsumption failed: ${error?.type || 'Unknown'} (${duration}ms)`);
+        console.log(`❌ API getconsumption: FAILED - ${error?.type || 'Unknown'} (${duration}ms)`);
         
         // Retry once if not Unauthorized
         if (error?.type !== 'Unauthorized' && error?.type !== 'Redirect') {
@@ -277,21 +277,21 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
                 results._apiSuccess.consumption = true;
                 results._apiErrors.consumption = null;
                 const retryDuration = Date.now() - retryStart;
-                console.log(`✅ API getconsumption retry succeeded (${retryDuration}ms)`);
+                console.log(`✅ API getconsumption: RETRY SUCCESS (${retryDuration}ms)`);
             } catch (retryError) {
                 results._apiErrors.consumption = retryError?.type || 'Unknown';
-                console.log(`❌ API getconsumption retry failed: ${retryError?.type || 'Unknown'}`);
+                console.log(`❌ API getconsumption: RETRY FAILED - ${retryError?.type || 'Unknown'}`);
             }
         }
     }
     
     // Process getmyservices
-    // CRITICAL: Check if Promise.race timeout won (9-second timeout)
+    // CRITICAL: Check if Promise.race timeout won (10-second timeout)
     if (servicesResult.status === 'fulfilled' && servicesResult.value._timedOut) {
-        // Timeout won - API took more than 9 seconds
+        // Timeout won - API took more than 10 seconds
         const cacheAge = cachedData && cachedData.timestamp ? Math.round((Date.now() - cachedData.timestamp) / 60000) : 'unknown';
         const cacheTime = cachedData && cachedData.timestamp ? new Date(cachedData.timestamp).toLocaleTimeString() : 'unknown';
-        console.log(`⏱️ API getmyservices timed out (>9s), using cached data from ${cacheTime} (${cacheAge}min ago)`);
+        console.log(`⏱️ API getmyservices timed out (>10s), using cached data from ${cacheTime} (${cacheAge}min ago)`);
         results._apiSuccess.services = false;
         results._apiErrors.services = 'Timeout';
         // Use cached services if available (raw API response)
@@ -307,7 +307,8 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         results.services = servicesResult.value.data;
         results._apiSuccess.services = true;
         results._apiErrors.services = null;
-        console.log(`✅ API getmyservices succeeded`);
+        const servicesDuration = Date.now() - startTime; // Approximate since we don't track it separately
+        console.log(`✅ API getmyservices: SUCCESS (${servicesDuration}ms)`);
     } else {
         // API failed (not timeout, but other error)
         const error = servicesResult.status === 'fulfilled' ? servicesResult.value.error : servicesResult.reason;
@@ -316,7 +317,7 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         
         const cacheAge = cachedData && cachedData.timestamp ? Math.round((Date.now() - cachedData.timestamp) / 60000) : 'unknown';
         const cacheTime = cachedData && cachedData.timestamp ? new Date(cachedData.timestamp).toLocaleTimeString() : 'unknown';
-        console.log(`❌ API getmyservices failed: ${error?.type || 'Unknown'}, using cached data from ${cacheTime} (${cacheAge}min ago)`);
+        console.log(`❌ API getmyservices: FAILED - ${error?.type || 'Unknown'} - using cached data from ${cacheTime} (${cacheAge}min ago)`);
         
         // Use cached services if available (for timeout or other errors)
         // Check for raw services API response in cache
@@ -346,7 +347,7 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         results._ushareSuccess = false;
         results._ushareError = error?.message || error?.toString() || 'Unknown error';
         const duration = Date.now() - ushareStartTime;
-        console.log(`❌ Ushare HTML fetch failed: ${results._ushareError} (${duration}ms)`);
+        console.log(`❌ Ushare HTML: FAILED - ${results._ushareError} (${duration}ms)`);
         
         // Skip retry if both HTTP and Puppeteer already failed (retry would just waste more time)
         // Only retry if it was a quick timeout that might succeed on retry
@@ -389,7 +390,16 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
     
     const totalDuration = Date.now() - startTime;
     const successCount = [results._apiSuccess.expiry, results._apiSuccess.consumption, results._apiSuccess.services].filter(Boolean).length;
-    console.log(`📊 All sources fetched: ${successCount}/3 APIs, ${results._ushareSuccess ? '1' : '0'}/1 HTML in ${totalDuration}ms`);
+    
+    // Detailed summary of all API calls
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`📊 Refresh Summary - ${successCount}/3 APIs successful, ${results._ushareSuccess ? '1' : '0'}/1 HTML successful`);
+    console.log(`   ✅ getexpirydate: ${results._apiSuccess.expiry ? 'SUCCESS' : 'FAILED'} ${results._apiErrors.expiry ? `(${results._apiErrors.expiry})` : ''}`);
+    console.log(`   ${results._apiSuccess.consumption ? '✅' : '❌'} getconsumption: ${results._apiSuccess.consumption ? 'SUCCESS' : 'FAILED'} ${results._apiErrors.consumption ? `(${results._apiErrors.consumption})` : ''}`);
+    console.log(`   ${results._apiSuccess.services ? '✅' : '❌'} getmyservices: ${results._apiSuccess.services ? 'SUCCESS' : 'FAILED'} ${results._apiErrors.services ? `(${results._apiErrors.services})` : ''}`);
+    console.log(`   ${results._ushareSuccess ? '✅' : '❌'} Ushare HTML: ${results._ushareSuccess ? 'SUCCESS' : 'FAILED'} ${results._ushareError ? `(${results._ushareError.substring(0, 50)})` : ''}`);
+    console.log(`   ⏱️  Total duration: ${totalDuration}ms (${(totalDuration / 1000).toFixed(2)}s)`);
+    console.log(`${'='.repeat(80)}\n`);
     
     return results;
 }
@@ -541,10 +551,13 @@ async function retryOnlyFailedApis(cookies, previousApiData) {
  * @returns {Promise<Object>} Dashboard data
  */
 async function fetchAlfaData(phone, password, adminId, identifier = null) {
-    const userId = adminId || phone;
+    const userId = identifier || adminId || phone;
     const startTime = Date.now();
     
-    console.log(`🚀 [${userId}] API-first refresh requested`);
+    console.log(`\n🚀 [${userId}] fetchAlfaData() - API-first refresh started`);
+    console.log(`   Phone: ${phone}`);
+    console.log(`   Admin ID: ${adminId || 'not provided'}`);
+    console.log(`   Identifier: ${userId}`);
 
     // Step 1: Check cache FIRST (instant return if available and fresh)
     // IMPROVEMENT: Return immediately if cache is < 1 minute old (very fresh)
@@ -711,15 +724,15 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             const cookieExpiry = await getCookieExpiry(userId);
             const now = Date.now();
             
-            // PROACTIVE KEEP-ALIVE: If cookies are about to expire (within 30 minutes), extend them NOW
+            // PROACTIVE KEEP-ALIVE: If cookies are about to expire (within 2 hours), extend them NOW
             // This prevents the "cookies expired" scenario and ensures keep-alive does its job
-            // BUT: Skip keep-alive if cookies expire in < 5 minutes (too risky, just let APIs fail and do login)
+            // BUT: Skip keep-alive if cookies expire in < 10 minutes (too risky, just let APIs fail and do login)
             if (cookieExpiry && cookies && cookies.length > 0) {
                 const timeUntilExpiry = cookieExpiry - now;
-                const thirtyMinutes = 30 * 60 * 1000; // 30 minutes in milliseconds
-                const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
+                const twoHours = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+                const tenMinutes = 10 * 60 * 1000; // 10 minutes in milliseconds
                 
-                if (timeUntilExpiry > fiveMinutes && timeUntilExpiry <= thirtyMinutes) {
+                if (timeUntilExpiry > tenMinutes && timeUntilExpiry <= twoHours) {
                     // Cookies expire in 5-30 minutes - proactively extend them (but with short timeout)
                     console.log(`🔔 [${userId}] Cookies expire in ${Math.round(timeUntilExpiry / 60000)} minutes - proactively extending via keep-alive...`);
                     
@@ -1447,7 +1460,12 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         // ALWAYS use Ushare HTML data when available (even if 0 subscribers) - it's the source of truth
         if (apiData.ushare) {
             // Ushare HTML was fetched (successfully or returned empty)
-            if (apiData.ushare.subscribers && apiData.ushare.subscribers.length > 0) {
+            // Ensure subscribers is an array
+            const ushareSubscribers = Array.isArray(apiData.ushare.subscribers) ? apiData.ushare.subscribers : (apiData.ushare.subscribers ? [apiData.ushare.subscribers] : []);
+            
+            console.log(`   📊 [DETECTION] Ushare subscribers array length: ${ushareSubscribers.length}`);
+            
+            if (ushareSubscribers.length > 0) {
                 console.log(`\n🎯 [${userId}] ✅ USING USHARE HTML PAGE DATA (NOT getconsumption API)`);
                 console.log(`   📊 Subscribers: ${apiData.ushare.totalCount} total (${apiData.ushare.activeCount} Active, ${apiData.ushare.requestedCount} Requested)`);
                 
@@ -1458,7 +1476,7 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 
                 // Convert ushare subscribers to secondarySubscribers format
                 // Keep consumption in GB (don't convert to MB) since frontend expects GB
-                const secondarySubscribers = apiData.ushare.subscribers.map(sub => {
+                const secondarySubscribers = ushareSubscribers.map(sub => {
                     return {
                         phoneNumber: sub.phoneNumber,
                         fullPhoneNumber: sub.fullPhoneNumber,
@@ -1476,38 +1494,113 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 
                 // DETECT SUBSCRIBERS REMOVED DIRECTLY FROM ALFA WEBSITE
                 // Compare current subscribers with previous ones to find missing Active subscribers
+                console.log(`   🔍 [DETECTION] Starting subscriber removal detection...`);
                 const previousAdminData = await getFullAdminData(adminId);
+                
+                if (!previousAdminData) {
+                    console.log(`   ⚠️ [DETECTION] getFullAdminData returned null - cannot detect removed subscribers`);
+                    console.log(`   ⚠️ [DETECTION] This may happen if admin data doesn't exist yet in Firebase`);
+                } else {
+                    console.log(`   ✅ [DETECTION] getFullAdminData returned data for admin ${adminId}`);
+                    console.log(`   🔍 [DETECTION] Previous admin data keys: ${Object.keys(previousAdminData).join(', ')}`);
+                    console.log(`   🔍 [DETECTION] previousAdminData.alfaData exists: ${!!previousAdminData.alfaData}`);
+                    if (previousAdminData.alfaData) {
+                        console.log(`   🔍 [DETECTION] alfaData keys: ${Object.keys(previousAdminData.alfaData).join(', ')}`);
+                        console.log(`   🔍 [DETECTION] alfaData.secondarySubscribers exists: ${!!previousAdminData.alfaData.secondarySubscribers}`);
+                        console.log(`   🔍 [DETECTION] alfaData.secondarySubscribers is array: ${Array.isArray(previousAdminData.alfaData.secondarySubscribers)}`);
+                    }
+                    console.log(`   🔍 [DETECTION] previousAdminData.removedActiveSubscribers exists: ${!!previousAdminData.removedActiveSubscribers}`);
+                    console.log(`   🔍 [DETECTION] previousAdminData.removedActiveSubscribers is array: ${Array.isArray(previousAdminData.removedActiveSubscribers)}`);
+                }
+                
                 const previousSecondarySubscribers = previousAdminData?.alfaData?.secondarySubscribers || [];
+                const existingRemovedActiveSubscribers = previousAdminData?.removedActiveSubscribers || [];
+                const existingRemovedPhoneNumbers = new Set(existingRemovedActiveSubscribers.map(sub => sub.phoneNumber));
+                
+                console.log(`   🔍 [DETECTION] Checking for externally removed subscribers:`);
+                console.log(`   🔍 [DETECTION] Previous subscribers count: ${previousSecondarySubscribers.length}, Current subscribers count: ${secondarySubscribers.length}`);
+                console.log(`      Previous subscribers: ${previousSecondarySubscribers.length} (${previousSecondarySubscribers.filter(s => s.status === 'Active').length} Active)`);
+                if (previousSecondarySubscribers.length > 0) {
+                    console.log(`      Previous subscriber phone numbers: ${previousSecondarySubscribers.map(s => s.phoneNumber).join(', ')}`);
+                    previousSecondarySubscribers.forEach(sub => {
+                        console.log(`         - ${sub.phoneNumber} (status: ${sub.status})`);
+                    });
+                } else {
+                    console.log(`      ⚠️ No previous subscribers found - this may indicate first refresh or data not yet saved`);
+                }
+                console.log(`      Current subscribers: ${secondarySubscribers.length} (${secondarySubscribers.filter(s => s.status === 'Active').length} Active)`);
+                if (secondarySubscribers.length > 0) {
+                    console.log(`      Current subscriber phone numbers: ${secondarySubscribers.map(s => s.phoneNumber).join(', ')}`);
+                }
+                console.log(`      Existing removed subscribers in Firebase: ${existingRemovedActiveSubscribers.length}`);
+                if (existingRemovedActiveSubscribers.length > 0) {
+                    console.log(`      Existing removed phones: ${existingRemovedActiveSubscribers.map(s => s.phoneNumber).join(', ')}`);
+                }
+                
+                // ALWAYS run detection to check for removed subscribers and preserve existing ones
+                const currentPhoneNumbers = new Set(secondarySubscribers.map(sub => sub.phoneNumber));
+                const newlyRemovedActiveSubscribers = [];
                 
                 if (previousSecondarySubscribers.length > 0) {
-                    const currentPhoneNumbers = new Set(secondarySubscribers.map(sub => sub.phoneNumber));
-                    const removedActiveSubscribers = [];
-                    
+                    console.log(`   🔍 [DETECTION] Comparing ${previousSecondarySubscribers.length} previous subscribers with ${secondarySubscribers.length} current subscribers...`);
                     previousSecondarySubscribers.forEach(prevSub => {
                         // Only check Active subscribers (Requested subscribers disappear naturally)
-                        if (prevSub.status === 'Active' && !currentPhoneNumbers.has(prevSub.phoneNumber)) {
-                            // This Active subscriber was in the previous list but is now missing
-                            // It was removed directly from Alfa website
-                            removedActiveSubscribers.push({
-                                phoneNumber: prevSub.phoneNumber,
-                                fullPhoneNumber: prevSub.fullPhoneNumber || prevSub.phoneNumber,
-                                consumption: prevSub.consumption || 0,
-                                limit: prevSub.quota || prevSub.limit || 0
-                            });
+                        if (prevSub.status === 'Active') {
+                            if (!currentPhoneNumbers.has(prevSub.phoneNumber)) {
+                                // This Active subscriber was in the previous list but is now missing
+                                // Check if it's not already in removedActiveSubscribers (avoid duplicates)
+                                if (!existingRemovedPhoneNumbers.has(prevSub.phoneNumber)) {
+                                    // It was removed directly from Alfa website
+                                    console.log(`   🔍 [DETECTION] Found removed subscriber: ${prevSub.phoneNumber} (was Active, now missing)`);
+                                    console.log(`      [Detection] Subscriber ${prevSub.phoneNumber} marked as Out for admin ${adminId}`);
+                                    newlyRemovedActiveSubscribers.push({
+                                        phoneNumber: prevSub.phoneNumber,
+                                        fullPhoneNumber: prevSub.fullPhoneNumber || prevSub.phoneNumber,
+                                        consumption: prevSub.consumption || 0,
+                                        limit: prevSub.quota || prevSub.limit || 0,
+                                        status: 'Active' // Always Active since we only store Active removed subscribers
+                                    });
+                                } else {
+                                    console.log(`   ℹ️ [DETECTION] Subscriber ${prevSub.phoneNumber} already in removedActiveSubscribers, skipping (duplicate prevention)`);
+                                }
+                            } else {
+                                console.log(`   ✅ [DETECTION] Subscriber ${prevSub.phoneNumber} still exists in current list`);
+                            }
+                        } else {
+                            console.log(`   ℹ️ [DETECTION] Subscriber ${prevSub.phoneNumber} has status "${prevSub.status}" (not Active), skipping`);
                         }
                     });
-                    
-                    // Add removed Active subscribers to Firebase (so they show as "Out" in view details)
-                    if (removedActiveSubscribers.length > 0) {
-                        console.log(`   🔍 Detected ${removedActiveSubscribers.length} Active subscriber(s) removed directly from Alfa website:`);
-                        for (const removedSub of removedActiveSubscribers) {
-                            console.log(`      ➖ ${removedSub.phoneNumber} (was Active, now missing from HTML)`);
-                            await addRemovedActiveSubscriber(adminId, removedSub).catch(error => {
-                                console.error(`      ❌ Failed to add removed subscriber ${removedSub.phoneNumber}:`, error.message);
-                            });
-                        }
+                } else {
+                    console.log(`   ⚠️ [DETECTION] No previous subscribers found - cannot detect removals`);
+                    console.log(`   ⚠️ [DETECTION] This may indicate first refresh or data not yet saved to Firebase`);
+                }
+                
+                // ALWAYS set detectedRemovedActiveSubscribers (either merged or existing) to preserve data
+                if (newlyRemovedActiveSubscribers.length > 0) {
+                    console.log(`   🔍 [DETECTION] Detected ${newlyRemovedActiveSubscribers.length} NEW Active subscriber(s) removed directly from Alfa website:`);
+                    for (const removedSub of newlyRemovedActiveSubscribers) {
+                        console.log(`      ➖ ${removedSub.phoneNumber} (was Active, now missing from HTML)`);
+                        console.log(`      [Detection] Subscriber ${removedSub.phoneNumber} marked as Out`);
+                    }
+                    // Merge with existing removedActiveSubscribers and store in dashboardData for updateDashboardData
+                    dashboardData.detectedRemovedActiveSubscribers = [...existingRemovedActiveSubscribers, ...newlyRemovedActiveSubscribers];
+                    console.log(`   ✅ [DETECTION] Stored ${dashboardData.detectedRemovedActiveSubscribers.length} total removed active subscriber(s) (${existingRemovedActiveSubscribers.length} existing + ${newlyRemovedActiveSubscribers.length} newly detected) in dashboardData`);
+                } else {
+                    console.log(`   ℹ️ [DETECTION] No NEW removed subscribers detected`);
+                    // CRITICAL: Always preserve existing removed subscribers (even if empty array)
+                    dashboardData.detectedRemovedActiveSubscribers = existingRemovedActiveSubscribers;
+                    if (existingRemovedActiveSubscribers.length > 0) {
+                        console.log(`   ✅ [DETECTION] Preserved ${existingRemovedActiveSubscribers.length} existing removed active subscriber(s) in dashboardData`);
+                    } else {
+                        console.log(`   ℹ️ [DETECTION] No existing removed subscribers to preserve (setting empty array)`);
                     }
                 }
+                
+                console.log(`   ✅ [DETECTION] Detection complete. detectedRemovedActiveSubscribers set: ${!!dashboardData.detectedRemovedActiveSubscribers}, length: ${dashboardData.detectedRemovedActiveSubscribers?.length || 0}`);
+                if (dashboardData.detectedRemovedActiveSubscribers && dashboardData.detectedRemovedActiveSubscribers.length > 0) {
+                    console.log(`   📋 [DETECTION] Removed subscribers list: ${dashboardData.detectedRemovedActiveSubscribers.map(s => s.phoneNumber).join(', ')}`);
+                }
+                console.log(``);
             } else {
                 // Ushare HTML returned 0 subscribers (valid - admin may have removed all subscribers)
                 console.log(`\n🎯 [${userId}] ✅ USING USHARE HTML PAGE DATA: 0 subscribers (all removed)`);
@@ -1518,36 +1611,123 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 console.log(`   ✅ Updated subscriber counts from ushare HTML page: 0 total (0 Active, 0 Requested)\n`);
                 
                 // DETECT SUBSCRIBERS REMOVED DIRECTLY FROM ALFA WEBSITE
-                // If all subscribers are gone, check if there were Active subscribers before
+                // CRITICAL: Always run detection when subscribers drop to 0
+                // Get previous data BEFORE comparing
+                console.log(`   🔍 [DETECTION] Starting detection for 0 current subscribers...`);
+                console.log(`   🔍 [DETECTION] Getting previous admin data from Firebase...`);
                 const previousAdminData = await getFullAdminData(adminId);
-                const previousSecondarySubscribers = previousAdminData?.alfaData?.secondarySubscribers || [];
+                
+                if (!previousAdminData) {
+                    console.log(`   ⚠️ [DETECTION] getFullAdminData returned null - cannot detect removed subscribers`);
+                    console.log(`   ⚠️ [DETECTION] This may happen if admin data doesn't exist yet in Firebase`);
+                } else {
+                    console.log(`   ✅ [DETECTION] getFullAdminData returned data for admin ${adminId}`);
+                    console.log(`   🔍 [DETECTION] Previous admin data keys: ${Object.keys(previousAdminData).join(', ')}`);
+                    console.log(`   🔍 [DETECTION] previousAdminData.alfaData exists: ${!!previousAdminData.alfaData}`);
+                    if (previousAdminData.alfaData) {
+                        console.log(`   🔍 [DETECTION] alfaData keys: ${Object.keys(previousAdminData.alfaData).join(', ')}`);
+                        console.log(`   🔍 [DETECTION] alfaData.secondarySubscribers exists: ${!!previousAdminData.alfaData.secondarySubscribers}`);
+                        console.log(`   🔍 [DETECTION] alfaData.secondarySubscribers is array: ${Array.isArray(previousAdminData.alfaData.secondarySubscribers)}`);
+                    }
+                    console.log(`   🔍 [DETECTION] previousAdminData.removedActiveSubscribers exists: ${!!previousAdminData.removedActiveSubscribers}`);
+                    console.log(`   🔍 [DETECTION] previousAdminData.removedActiveSubscribers is array: ${Array.isArray(previousAdminData.removedActiveSubscribers)}`);
+                }
+                
+                // CRITICAL: Ensure we get previousSecondarySubscribers correctly with proper null checking
+                let previousSecondarySubscribers = [];
+                if (previousAdminData && previousAdminData.alfaData && previousAdminData.alfaData.secondarySubscribers) {
+                    if (Array.isArray(previousAdminData.alfaData.secondarySubscribers)) {
+                        previousSecondarySubscribers = previousAdminData.alfaData.secondarySubscribers;
+                        console.log(`   ✅ [DETECTION] Successfully retrieved ${previousSecondarySubscribers.length} previous subscribers from Firebase alfaData.secondarySubscribers`);
+                    } else {
+                        console.log(`   ⚠️ [DETECTION] previousAdminData.alfaData.secondarySubscribers exists but is not an array: ${typeof previousAdminData.alfaData.secondarySubscribers}`);
+                    }
+                } else {
+                    console.log(`   ⚠️ [DETECTION] Cannot retrieve previousSecondarySubscribers - missing data structure`);
+                    if (!previousAdminData) console.log(`      - previousAdminData is null/undefined`);
+                    else if (!previousAdminData.alfaData) console.log(`      - previousAdminData.alfaData is null/undefined`);
+                    else if (!previousAdminData.alfaData.secondarySubscribers) console.log(`      - previousAdminData.alfaData.secondarySubscribers is null/undefined`);
+                }
+                
+                const existingRemovedActiveSubscribers = Array.isArray(previousAdminData?.removedActiveSubscribers) ? previousAdminData.removedActiveSubscribers : [];
+                const existingRemovedPhoneNumbers = new Set(existingRemovedActiveSubscribers.map(sub => sub.phoneNumber));
+                
+                console.log(`   🔍 [DETECTION] Checking for externally removed subscribers (0 current subscribers):`);
+                console.log(`   🔍 [DETECTION] Previous subscribers count: ${previousSecondarySubscribers.length}, Current subscribers count: 0`);
+                console.log(`      Previous subscribers in Firebase: ${previousSecondarySubscribers.length} (${previousSecondarySubscribers.filter(s => s.status === 'Active').length} Active)`);
+                if (previousSecondarySubscribers.length > 0) {
+                    console.log(`      Previous subscriber phones: ${previousSecondarySubscribers.map(s => s.phoneNumber).join(', ')}`);
+                    previousSecondarySubscribers.forEach(sub => {
+                        console.log(`         - ${sub.phoneNumber} (status: ${sub.status}, consumption: ${sub.consumption || 0}, quota: ${sub.quota || sub.limit || 0})`);
+                    });
+                } else {
+                    console.log(`      ⚠️ No previous subscribers found - this may indicate first refresh or data not yet saved`);
+                }
+                console.log(`      Existing removed subscribers in Firebase: ${existingRemovedActiveSubscribers.length}`);
+                if (existingRemovedActiveSubscribers.length > 0) {
+                    console.log(`      Existing removed phones: ${existingRemovedActiveSubscribers.map(s => s.phoneNumber).join(', ')}`);
+                }
+                
+                // Check if there were previous Active subscribers that are now missing
+                const newlyRemovedActiveSubscribers = [];
                 
                 if (previousSecondarySubscribers.length > 0) {
-                    const removedActiveSubscribers = [];
-                    
+                    console.log(`   🔍 [DETECTION] Comparing ${previousSecondarySubscribers.length} previous subscribers with 0 current subscribers...`);
                     previousSecondarySubscribers.forEach(prevSub => {
                         // Only check Active subscribers (Requested subscribers disappear naturally)
                         if (prevSub.status === 'Active') {
-                            removedActiveSubscribers.push({
-                                phoneNumber: prevSub.phoneNumber,
-                                fullPhoneNumber: prevSub.fullPhoneNumber || prevSub.phoneNumber,
-                                consumption: prevSub.consumption || 0,
-                                limit: prevSub.quota || prevSub.limit || 0
-                            });
+                            // Check if it's not already in removedActiveSubscribers (avoid duplicates)
+                            if (!existingRemovedPhoneNumbers.has(prevSub.phoneNumber)) {
+                                console.log(`   🔍 [DETECTION] Found removed Active subscriber: ${prevSub.phoneNumber} (was Active, now missing)`);
+                                console.log(`      [Detection] Subscriber ${prevSub.phoneNumber} marked as Out for admin ${adminId}`);
+                                newlyRemovedActiveSubscribers.push({
+                                    phoneNumber: prevSub.phoneNumber,
+                                    fullPhoneNumber: prevSub.fullPhoneNumber || prevSub.phoneNumber,
+                                    consumption: prevSub.consumption || 0,
+                                    limit: prevSub.quota || prevSub.limit || 0,
+                                    status: 'Active' // Always Active since we only store Active removed subscribers
+                                });
+                            } else {
+                                console.log(`   ℹ️ [DETECTION] Subscriber ${prevSub.phoneNumber} already in removedActiveSubscribers, skipping (duplicate prevention)`);
+                            }
+                        } else {
+                            console.log(`   ℹ️ [DETECTION] Subscriber ${prevSub.phoneNumber} has status "${prevSub.status}" (not Active), skipping`);
                         }
                     });
-                    
-                    // Add all removed Active subscribers to Firebase
-                    if (removedActiveSubscribers.length > 0) {
-                        console.log(`   🔍 Detected ${removedActiveSubscribers.length} Active subscriber(s) removed directly from Alfa website (all subscribers removed):`);
-                        for (const removedSub of removedActiveSubscribers) {
-                            console.log(`      ➖ ${removedSub.phoneNumber} (was Active, now missing from HTML)`);
-                            await addRemovedActiveSubscriber(adminId, removedSub).catch(error => {
-                                console.error(`      ❌ Failed to add removed subscriber ${removedSub.phoneNumber}:`, error.message);
-                            });
-                        }
+                } else {
+                    console.log(`   ⚠️ [DETECTION] No previous subscribers found - cannot detect removals`);
+                    console.log(`   ⚠️ [DETECTION] This may indicate:`);
+                    console.log(`      - First refresh (no previous data)`);
+                    console.log(`      - Previous data not yet saved to Firebase`);
+                    console.log(`      - Data structure issue in Firebase`);
+                }
+                
+                // ALWAYS set detectedRemovedActiveSubscribers (either merged or existing)
+                if (newlyRemovedActiveSubscribers.length > 0) {
+                    console.log(`   🔍 [DETECTION] Detected ${newlyRemovedActiveSubscribers.length} NEW Active subscriber(s) removed directly from Alfa website:`);
+                    for (const removedSub of newlyRemovedActiveSubscribers) {
+                        console.log(`      ➖ ${removedSub.phoneNumber} (was Active, now missing from HTML)`);
+                        console.log(`      [Detection] Subscriber ${removedSub.phoneNumber} marked as Out`);
+                    }
+                    // Merge with existing removedActiveSubscribers and store in dashboardData for updateDashboardData
+                    dashboardData.detectedRemovedActiveSubscribers = [...existingRemovedActiveSubscribers, ...newlyRemovedActiveSubscribers];
+                    console.log(`   ✅ [DETECTION] Stored ${dashboardData.detectedRemovedActiveSubscribers.length} total removed active subscriber(s) (${existingRemovedActiveSubscribers.length} existing + ${newlyRemovedActiveSubscribers.length} newly detected) in dashboardData`);
+                } else {
+                    console.log(`   ℹ️ [DETECTION] No NEW removed subscribers detected`);
+                    // CRITICAL: Always preserve existing removed subscribers (even if empty array)
+                    dashboardData.detectedRemovedActiveSubscribers = existingRemovedActiveSubscribers;
+                    if (existingRemovedActiveSubscribers.length > 0) {
+                        console.log(`   ✅ [DETECTION] Preserved ${existingRemovedActiveSubscribers.length} existing removed active subscriber(s) in dashboardData`);
+                    } else {
+                        console.log(`   ℹ️ [DETECTION] No existing removed subscribers to preserve (setting empty array)`);
                     }
                 }
+                
+                console.log(`   ✅ [DETECTION] Detection complete. detectedRemovedActiveSubscribers set: ${!!dashboardData.detectedRemovedActiveSubscribers}, length: ${dashboardData.detectedRemovedActiveSubscribers?.length || 0}`);
+                if (dashboardData.detectedRemovedActiveSubscribers && dashboardData.detectedRemovedActiveSubscribers.length > 0) {
+                    console.log(`   📋 [DETECTION] Removed subscribers list: ${dashboardData.detectedRemovedActiveSubscribers.map(s => s.phoneNumber).join(', ')}`);
+                }
+                console.log(``);
             }
         } else {
             // Ushare HTML fetch completely failed - DO NOT use stale data from getconsumption
@@ -1915,9 +2095,10 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         
         // Add completion marker for manual refresh (only for manual, not background)
         if (!background) {
-            console.log(`✅ [${userId}] API-first refresh completed in ${duration}ms (login: ${loginPerformed ? 'yes' : 'no'})`);
             console.log(`\n${'='.repeat(80)}`);
-            console.log(`✅ MANUAL REFRESH COMPLETED for ${userId} in ${duration}ms`);
+            console.log(`✅ REFRESH COMPLETED for ${userId}`);
+            console.log(`   ⏱️  Total time: ${duration}ms (${(duration / 1000).toFixed(2)}s)`);
+            console.log(`   🔐 Login performed: ${loginPerformed ? 'YES' : 'NO'}`);
             console.log(`${'='.repeat(80)}\n`);
         }
 

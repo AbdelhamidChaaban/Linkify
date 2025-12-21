@@ -117,6 +117,46 @@ class NavigationManager {
             } else {
                 link.classList.remove('active');
             }
+            
+            // Wrap text in span for animation if not already wrapped
+            const textNode = Array.from(link.childNodes).find(node => 
+                node.nodeType === Node.TEXT_NODE && node.textContent.trim()
+            );
+            if (textNode && !link.querySelector('span')) {
+                const span = document.createElement('span');
+                span.textContent = textNode.textContent.trim();
+                textNode.replaceWith(span);
+            }
+        });
+        
+        // Add ripple effect to nav links
+        mobileNavLinks.forEach(link => {
+            link.addEventListener('click', function(e) {
+                // Create ripple element
+                const ripple = document.createElement('span');
+                const rect = this.getBoundingClientRect();
+                const size = Math.max(rect.width, rect.height);
+                const x = e.clientX - rect.left - size / 2;
+                const y = e.clientY - rect.top - size / 2;
+                
+                ripple.style.cssText = `
+                    position: absolute;
+                    width: ${size}px;
+                    height: ${size}px;
+                    border-radius: 50%;
+                    background: rgba(139, 92, 246, 0.4);
+                    left: ${x}px;
+                    top: ${y}px;
+                    pointer-events: none;
+                    transform: scale(0);
+                    animation: ripple 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+                    z-index: 0;
+                `;
+                
+                this.appendChild(ripple);
+                
+                setTimeout(() => ripple.remove(), 600);
+            });
         });
         
         // Close sidebar when clicking overlay
@@ -132,7 +172,10 @@ class NavigationManager {
         mobileNavLinks.forEach(link => {
             link.addEventListener('click', () => {
                 if (mobileMenuCheck) {
-                    mobileMenuCheck.checked = false;
+                    // Delay closing to allow ripple animation to complete
+                    setTimeout(() => {
+                        mobileMenuCheck.checked = false;
+                    }, 200);
                 }
             });
         });
@@ -193,21 +236,31 @@ class NavigationManager {
     
     toggleTheme() {
         const body = document.body;
-        const isLightMode = body.classList.contains('light-mode');
+        const html = document.documentElement;
+        const isLightMode = body.classList.contains('light-mode') || html.classList.contains('light-mode');
         
         if (isLightMode) {
             body.classList.remove('light-mode');
+            html.classList.remove('light-mode');
             localStorage.setItem('theme', 'dark');
         } else {
             body.classList.add('light-mode');
+            html.classList.add('light-mode');
             localStorage.setItem('theme', 'light');
         }
     }
     
     loadTheme() {
+        // Theme is now loaded synchronously in HTML head, but we ensure it's applied
+        // This is a fallback in case the inline script didn't run
         const savedTheme = localStorage.getItem('theme');
         if (savedTheme === 'light') {
+            document.documentElement.classList.add('light-mode');
             document.body.classList.add('light-mode');
+        } else {
+            // Ensure dark mode is explicitly set if not light
+            document.documentElement.classList.remove('light-mode');
+            document.body.classList.remove('light-mode');
         }
     }
     

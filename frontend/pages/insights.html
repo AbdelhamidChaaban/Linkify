@@ -5,13 +5,37 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Cell Spott Manage - Insights</title>
     <link rel="icon" type="image/png" href="/assets/logo1.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/shared/layout.css">
     <link rel="stylesheet" href="/pages/insights.css">
     <link rel="stylesheet" href="/pages/add-subscribers-modal.css">
     <link rel="stylesheet" href="/pages/edit-subscribers-modal.css">
     <link rel="stylesheet" href="/shared/notification.css">
+    <!-- Theme Loader - Must run synchronously before page renders -->
+    <script>
+        (function() {
+            try {
+                const savedTheme = localStorage.getItem('theme');
+                if (savedTheme === 'light') {
+                    document.documentElement.classList.add('light-mode');
+                }
+            } catch (e) {
+                // Ignore errors if localStorage is not available
+            }
+        })();
+    </script>
 </head>
 <body class="insights-page">
+    <!-- Copy light-mode class from html to body immediately -->
+    <script>
+        (function() {
+            if (document.documentElement.classList.contains('light-mode')) {
+                document.body.classList.add('light-mode');
+            }
+        })();
+    </script>
     <!-- Mobile Menu Checkbox -->
     <input type="checkbox" id="mobileMenuCheck">
     
@@ -66,6 +90,15 @@
                         <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
                     </svg>
                     Admins
+                </a>
+            </li>
+            <li>
+                <a href="/pages/actions.html" class="mobile-nav-link" data-page="actions">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <path d="M9 12l2 2 4-4"/>
+                    </svg>
+                    Actions
                 </a>
             </li>
         </ul>
@@ -135,6 +168,13 @@
                             <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
                         </svg>
                         Admins
+                    </a></li>
+                    <li><a href="/pages/actions.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                            <path d="M9 12l2 2 4-4"/>
+                        </svg>
+                        Actions
                     </a></li>
                 </ul>
             </div>
@@ -253,11 +293,74 @@
                         </div>
                     </div>
                     <div class="filter-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" class="checkbox-input" id="availableServicesCheck" name="showFree">
-                            <span class="checkbox-custom"></span>
-                            <span class="checkbox-text">Available Services</span>
-                        </label>
+                        <div class="holo-checkbox-wrapper">
+                            <div class="holo-stars-container">
+                                <div class="holo-star-layer"></div>
+                                <div class="holo-star-layer"></div>
+                                <div class="holo-star-layer"></div>
+                            </div>
+                            <div class="holo-grid-plane"></div>
+                            <div class="holo-checkbox-container">
+                                <input class="holo-checkbox-input checkbox-input" id="availableServicesCheck" name="showFree" type="checkbox" />
+                                <label class="holo-checkbox checkbox-label" for="availableServicesCheck">
+                                    <div class="holo-box">
+                                        <div class="holo-inner"></div>
+                                        <div class="holo-scan-effect"></div>
+                                        <div class="holo-particles">
+                                            <div class="holo-particle"></div>
+                                            <div class="holo-particle"></div>
+                                            <div class="holo-particle"></div>
+                                            <div class="holo-particle"></div>
+                                            <div class="holo-particle"></div>
+                                            <div class="holo-particle"></div>
+                                        </div>
+                                        <div class="holo-activation-rings">
+                                            <div class="holo-activation-ring"></div>
+                                            <div class="holo-activation-ring"></div>
+                                            <div class="holo-activation-ring"></div>
+                                        </div>
+                                        <div class="holo-cube-transform">
+                                            <div class="holo-cube-face"></div>
+                                            <div class="holo-cube-face"></div>
+                                            <div class="holo-cube-face"></div>
+                                            <div class="holo-cube-face"></div>
+                                            <div class="holo-cube-face"></div>
+                                            <div class="holo-cube-face"></div>
+                                        </div>
+                                    </div>
+                                    <div class="holo-corner-accent"></div>
+                                    <div class="holo-corner-accent"></div>
+                                    <div class="holo-corner-accent"></div>
+                                    <div class="holo-corner-accent"></div>
+                                    <div class="holo-glow"></div>
+                                </label>
+                                <div class="holo-status-text">
+                                    <span class="checkbox-text">Available Services</span>
+                                </div>
+                                <div class="holo-frequency-spectrum">
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                    <div class="holo-frequency-bar"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -464,6 +567,10 @@
     <script src="/config.js"></script>
     
     <!-- Alfa API Service -->
+    <!-- Auth Helper for JWT -->
+    <script src="/shared/auth-helper.js"></script>
+    
+    <!-- API Service -->
     <script src="/shared/alfa-api.js"></script>
     
     <!-- Firebase SDK -->

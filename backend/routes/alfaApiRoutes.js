@@ -1,0 +1,512 @@
+/**
+ * Alfa API Routes
+ * Direct API endpoints for Alfa services
+ * All routes require JWT authentication
+ */
+
+const express = require('express');
+const router = express.Router();
+const { authenticateJWT } = require('../middleware/auth');
+const { getCookiesOrLogin } = require('../services/cookieManager');
+const { apiRequest } = require('../services/apiClient');
+const { getAdminData } = require('../services/firebaseDbService');
+
+// Response normalizer utilities
+function normalizeApiResponse(data, metadata = {}) {
+    return {
+        success: true,
+        data: data,
+        timestamp: Date.now(),
+        ...metadata
+    };
+}
+
+function createErrorResponse(message, error = null) {
+    const response = {
+        success: false,
+        error: message,
+        timestamp: Date.now()
+    };
+    
+    if (error && process.env.NODE_ENV !== 'production') {
+        response.errorDetails = {
+            message: error.message,
+            type: error.type || error.name
+        };
+    }
+    
+    return response;
+}
+
+const BASE_URL = 'https://www.alfa.com.lb';
+
+/**
+ * Helper: Get admin credentials and cookies
+ */
+async function getAdminCredentialsAndCookies(adminId, userId) {
+    // Get admin data from Firebase
+    const adminData = await getAdminData(adminId);
+    
+    if (!adminData) {
+        throw new Error('Admin not found');
+    }
+    
+    // Verify ownership
+    if (adminData.userId !== userId) {
+        throw new Error('Unauthorized: Admin does not belong to current user');
+    }
+    
+    if (!adminData.phone || !adminData.password) {
+        throw new Error('Admin credentials missing');
+    }
+    
+    // Get cookies (will login if needed)
+    const cookies = await getCookiesOrLogin(adminData.phone, adminData.password, adminId);
+    
+    return {
+        phone: adminData.phone,
+        password: adminData.password,
+        cookies: cookies
+    };
+}
+
+/**
+ * GET /api/getconsumption
+ * Get consumption data for an admin
+ */
+router.get('/getconsumption', authenticateJWT, async (req, res) => {
+    try {
+        const { adminId } = req.query;
+        
+        if (!adminId) {
+            return res.status(400).json(createErrorResponse('adminId is required'));
+        }
+        
+        const { cookies } = await getAdminCredentialsAndCookies(adminId, req.userId);
+        
+        const data = await apiRequest('/en/account/getconsumption', cookies, {
+            timeout: 15000,
+            maxRetries: 1
+        });
+        
+        res.json(normalizeApiResponse(data, { adminId }));
+    } catch (error) {
+        console.error('❌ Error in /api/getconsumption:', error);
+        res.status(500).json(createErrorResponse(error.message, error));
+    }
+});
+
+/**
+ * GET /api/getexpirydate
+ * Get expiry date for an admin
+ */
+router.get('/getexpirydate', authenticateJWT, async (req, res) => {
+    try {
+        const { adminId } = req.query;
+        
+        if (!adminId) {
+            return res.status(400).json(createErrorResponse('adminId is required'));
+        }
+        
+        const { cookies } = await getAdminCredentialsAndCookies(adminId, req.userId);
+        
+        const data = await apiRequest('/en/account/getexpirydate', cookies, {
+            timeout: 10000,
+            maxRetries: 1
+        });
+        
+        res.json(normalizeApiResponse(data, { adminId }));
+    } catch (error) {
+        console.error('❌ Error in /api/getexpirydate:', error);
+        res.status(500).json(createErrorResponse(error.message, error));
+    }
+});
+
+/**
+ * GET /api/getmyservices
+ * Get services data for an admin
+ */
+router.get('/getmyservices', authenticateJWT, async (req, res) => {
+    try {
+        const { adminId } = req.query;
+        
+        if (!adminId) {
+            return res.status(400).json(createErrorResponse('adminId is required'));
+        }
+        
+        const { cookies } = await getAdminCredentialsAndCookies(adminId, req.userId);
+        
+        const data = await apiRequest('/en/account/manage-services/getmyservices', cookies, {
+            timeout: 15000,
+            maxRetries: 1
+        });
+        
+        res.json(normalizeApiResponse(data, { adminId }));
+    } catch (error) {
+        console.error('❌ Error in /api/getmyservices:', error);
+        res.status(500).json(createErrorResponse(error.message, error));
+    }
+});
+
+/**
+ * GET /api/ushare
+ * Get Ushare subscriber data for an admin
+ * Fetches HTML via HTTP and parses server-side (no Puppeteer)
+ * Returns normalized JSON: { "number": "03295772", "results": [...] }
+ */
+router.get('/ushare', authenticateJWT, async (req, res) => {
+    try {
+        const { adminId } = req.query;
+        
+        if (!adminId) {
+            return res.status(400).json(createErrorResponse('adminId is required'));
+        }
+        
+        const { phone, cookies } = await getAdminCredentialsAndCookies(adminId, req.userId);
+        
+        // Fetch and parse Ushare HTML (HTTP-only, no Puppeteer)
+        const { fetchUshareHtml } = require('../services/ushareHtmlParser');
+        const result = await fetchUshareHtml(phone, cookies, true); // useCache = true
+        
+        if (result.success && result.data) {
+            // Normalize response format: { "number": adminPhone, "results": subscribers }
+            const normalized = {
+                number: phone,
+                results: result.data.subscribers || [],
+                summary: {
+                    totalCount: result.data.totalCount || 0,
+                    activeCount: result.data.activeCount || 0,
+                    requestedCount: result.data.requestedCount || 0
+                }
+            };
+            
+            return res.json(normalizeApiResponse(normalized, { adminId, source: 'http' }));
+        }
+        
+        // HTTP fetch failed
+        res.status(500).json(createErrorResponse(
+            result.error || 'Failed to fetch Ushare HTML',
+            result.error
+        ));
+    } catch (error) {
+        console.error('❌ Error in /api/ushare:', error);
+        res.status(500).json(createErrorResponse(error.message, error));
+    }
+});
+
+/**
+ * GET /api/refreshAdmins
+ * Composite route that calls all 4 APIs and aggregates responses
+ */
+router.get('/refreshAdmins', authenticateJWT, async (req, res) => {
+    const startTime = Date.now();
+    
+    try {
+        const { adminId } = req.query;
+        
+        if (!adminId) {
+            return res.status(400).json(createErrorResponse('adminId is required'));
+        }
+        
+        const { phone, cookies } = await getAdminCredentialsAndCookies(adminId, req.userId);
+        
+        // OPTIMIZATION: Fetch previous admin data in parallel with API calls to reduce total time
+        // This data is needed for subscriber removal detection, but we can fetch it while APIs are running
+        const { getFullAdminData } = require('../services/firebaseDbService');
+        const previousAdminDataPromise = getFullAdminData(adminId).catch(error => {
+            console.warn(`   ⚠️ [DETECTION] Error fetching previous admin data in parallel: ${error.message}`);
+            return null;
+        });
+        
+        // Fetch all APIs in parallel
+        // Increased timeouts to match Alfa's actual response times (they're very slow)
+        const [consumptionResult, expiryResult, servicesResult, previousAdminData] = await Promise.allSettled([
+            apiRequest('/en/account/getconsumption', cookies, { timeout: 15000, maxRetries: 1 })
+                .then(data => ({ success: true, data, error: null }))
+                .catch(error => ({ success: false, data: null, error })),
+            
+            apiRequest('/en/account/getexpirydate', cookies, { timeout: 10000, maxRetries: 1 })
+                .then(data => ({ success: true, data, error: null }))
+                .catch(error => ({ success: false, data: null, error })),
+            
+            apiRequest('/en/account/manage-services/getmyservices', cookies, { timeout: 15000, maxRetries: 1 })
+                .then(data => ({ success: true, data, error: null }))
+                .catch(error => ({ success: false, data: null, error })),
+            
+            previousAdminDataPromise
+        ]);
+        
+        // Extract previous admin data from Promise.allSettled result
+        const previousAdminDataResolved = previousAdminData.status === 'fulfilled' ? previousAdminData.value : null;
+        
+        // Fetch Ushare HTML (HTTP-only, no Puppeteer)
+        // IMPORTANT: Use useCache=false for refresh to ensure we get the latest data
+        // (cache is invalidated after add/edit/remove operations, but we want fresh data on refresh)
+        const { fetchUshareHtml } = require('../services/ushareHtmlParser');
+        const ushareResult = await fetchUshareHtml(phone, cookies, false).catch(error => ({
+            success: false,
+            data: null,
+            error: error.message
+        }));
+        
+        if (ushareResult.success && ushareResult.data) {
+            console.log(`✅ [Refresh] Ushare data fetched: ${ushareResult.data.totalCount || 0} total, ${ushareResult.data.activeCount || 0} active, ${ushareResult.data.requestedCount || 0} requested`);
+        } else {
+            console.warn(`⚠️ [Refresh] Ushare data fetch failed: ${ushareResult.error || 'Unknown error'}`);
+        }
+        
+        // Process raw API responses into frontend-expected format
+        const { extractFromGetConsumption, extractFromGetMyServices, extractExpiration } = require('../services/alfaApiDataExtraction');
+        const processedData = {};
+        
+        // Process consumption data
+        if (consumptionResult.status === 'fulfilled' && consumptionResult.value.success && consumptionResult.value.data) {
+            const extracted = extractFromGetConsumption(consumptionResult.value.data);
+            Object.assign(processedData, extracted);
+        }
+        
+        // Process services data
+        if (servicesResult.status === 'fulfilled' && servicesResult.value.success && servicesResult.value.data) {
+            const extracted = extractFromGetMyServices(servicesResult.value.data);
+            Object.assign(processedData, extracted);
+        }
+        
+        // Process expiry data
+        // getexpirydate returns a number directly (e.g., 30 for 30 days, or 0 if expired), not an object
+        if (expiryResult.status === 'fulfilled' && expiryResult.value.success && expiryResult.value.data !== undefined && expiryResult.value.data !== null) {
+            const rawExpiry = expiryResult.value.data;
+            // Convert to number if it's a string
+            let expiryNumber = typeof rawExpiry === 'number' ? rawExpiry : parseInt(rawExpiry);
+            
+            // Check if it's a valid number (including 0, which means expired)
+            if (!isNaN(expiryNumber)) {
+                // 0 is a valid value (means expired), negative values are invalid
+                if (expiryNumber >= 0) {
+                    processedData.expiration = expiryNumber;
+                    console.log(`✅ Processed expiration: ${expiryNumber} days`);
+                } else {
+                    console.warn(`⚠️ getexpirydate returned negative value: ${expiryNumber}`);
+                    processedData.expiration = null;
+                }
+            } else {
+                console.warn(`⚠️ getexpirydate returned invalid (NaN) data: ${rawExpiry}`);
+                processedData.expiration = null;
+            }
+        } else {
+            console.warn(`⚠️ getexpirydate API call failed or returned no data`);
+        }
+        
+        // Process ushare data (add subscribers info)
+        if (ushareResult.success && ushareResult.data) {
+            processedData.ushare = ushareResult.data;
+            if (ushareResult.data.subscribers) {
+                processedData.secondarySubscribers = ushareResult.data.subscribers;
+            }
+            // CRITICAL: Always set subscriber counts from Ushare data (even if 0)
+            // This ensures the frontend gets the latest counts after add/edit/remove operations
+            if (ushareResult.data.totalCount !== undefined && ushareResult.data.totalCount !== null) {
+                processedData.subscribersCount = ushareResult.data.totalCount;
+                console.log(`✅ [Refresh] Set subscribersCount: ${processedData.subscribersCount}`);
+            } else {
+                console.warn(`⚠️ [Refresh] totalCount is undefined/null, not setting subscribersCount`);
+            }
+            if (ushareResult.data.activeCount !== undefined && ushareResult.data.activeCount !== null) {
+                processedData.subscribersActiveCount = ushareResult.data.activeCount;
+                console.log(`✅ [Refresh] Set subscribersActiveCount: ${processedData.subscribersActiveCount}`);
+            }
+            if (ushareResult.data.requestedCount !== undefined && ushareResult.data.requestedCount !== null) {
+                processedData.subscribersRequestedCount = ushareResult.data.requestedCount;
+                console.log(`✅ [Refresh] Set subscribersRequestedCount: ${processedData.subscribersRequestedCount}`);
+            }
+        } else {
+            console.warn(`⚠️ [Refresh] Ushare data not available, subscriber counts will not be updated`);
+        }
+        
+        // Add raw API responses for backward compatibility
+        processedData.consumption = consumptionResult.status === 'fulfilled' ? consumptionResult.value.data : null;
+        processedData.expiry = expiryResult.status === 'fulfilled' ? expiryResult.value.data : null;
+        processedData.services = servicesResult.status === 'fulfilled' ? servicesResult.value.data : null;
+        
+        // Aggregate results (processed data at root level for frontend compatibility)
+        const aggregated = {
+            ...processedData, // Processed data at root level
+            adminId: adminId,
+            timestamp: Date.now(),
+            duration: Date.now() - startTime,
+            // Also include raw API responses for debugging
+            apis: {
+                consumption: {
+                    success: consumptionResult.status === 'fulfilled' && consumptionResult.value.success,
+                    data: consumptionResult.status === 'fulfilled' ? consumptionResult.value.data : null,
+                    error: consumptionResult.status === 'fulfilled' ? consumptionResult.value.error : consumptionResult.reason
+                },
+                expiry: {
+                    success: expiryResult.status === 'fulfilled' && expiryResult.value.success,
+                    data: expiryResult.status === 'fulfilled' ? expiryResult.value.data : null,
+                    error: expiryResult.status === 'fulfilled' ? expiryResult.value.error : expiryResult.reason
+                },
+                services: {
+                    success: servicesResult.status === 'fulfilled' && servicesResult.value.success,
+                    data: servicesResult.status === 'fulfilled' ? servicesResult.value.data : null,
+                    error: servicesResult.status === 'fulfilled' ? servicesResult.value.error : servicesResult.reason
+                },
+                ushare: {
+                    success: ushareResult.success,
+                    data: ushareResult.data || null,
+                    error: ushareResult.error || null,
+                    source: 'http' // HTTP-only, no Puppeteer
+                }
+            },
+            summary: {
+                successful: [
+                    consumptionResult.status === 'fulfilled' && consumptionResult.value.success ? 'consumption' : null,
+                    expiryResult.status === 'fulfilled' && expiryResult.value.success ? 'expiry' : null,
+                    servicesResult.status === 'fulfilled' && servicesResult.value.success ? 'services' : null,
+                    ushareResult.success ? 'ushare' : null
+                ].filter(Boolean),
+                failed: [
+                    consumptionResult.status !== 'fulfilled' || !consumptionResult.value.success ? 'consumption' : null,
+                    expiryResult.status !== 'fulfilled' || !expiryResult.value.success ? 'expiry' : null,
+                    servicesResult.status !== 'fulfilled' || !servicesResult.value.success ? 'services' : null,
+                    !ushareResult.success ? 'ushare' : null
+                ].filter(Boolean)
+            }
+        };
+        
+        // Determine overall success (at least one API succeeded)
+        const overallSuccess = aggregated.summary.successful.length > 0;
+        
+        // CRITICAL: DETECT SUBSCRIBERS REMOVED DIRECTLY FROM ALFA WEBSITE
+        // Compare current subscribers with previous ones to find missing Active subscribers
+        if (overallSuccess && aggregated.primaryData && ushareResult.success) {
+            console.log(`   🔍 [DETECTION] Starting subscriber removal detection in /api/refreshAdmins...`);
+            console.log(`   🔍 [DETECTION] Using previously fetched admin data from Firebase (fetched in parallel with APIs)...`);
+            
+            // Use the admin data that was fetched in parallel with API calls
+            const previousAdminData = previousAdminDataResolved;
+            
+            if (!previousAdminData) {
+                console.log(`   ⚠️ [DETECTION] getFullAdminData returned null - cannot detect removed subscribers`);
+                console.log(`   ⚠️ [DETECTION] This may happen if admin data doesn't exist yet in Firebase`);
+            } else {
+                console.log(`   ✅ [DETECTION] getFullAdminData returned data for admin ${adminId}`);
+            }
+            
+            // Get previous subscribers from Firebase
+            const previousSecondarySubscribers = previousAdminData?.alfaData?.secondarySubscribers || [];
+            const existingRemovedActiveSubscribers = previousAdminData?.removedActiveSubscribers || [];
+            const existingRemovedPhoneNumbers = new Set(existingRemovedActiveSubscribers.map(sub => sub.phoneNumber));
+            
+            // Get current subscribers from ushare data
+            const currentSubscribers = ushareResult.data?.subscribers || [];
+            const currentPhoneNumbers = new Set(currentSubscribers.map(sub => sub.phoneNumber));
+            
+            console.log(`   🔍 [DETECTION] Previous subscribers count: ${previousSecondarySubscribers.length}, Current subscribers count: ${currentSubscribers.length}`);
+            if (previousSecondarySubscribers.length > 0) {
+                console.log(`      Previous subscriber phones: ${previousSecondarySubscribers.map(s => s.phoneNumber).join(', ')}`);
+            }
+            if (currentSubscribers.length > 0) {
+                console.log(`      Current subscriber phones: ${currentSubscribers.map(s => s.phoneNumber).join(', ')}`);
+            }
+            console.log(`      Existing removed subscribers in Firebase: ${existingRemovedActiveSubscribers.length}`);
+            
+            // Detect newly removed Active subscribers
+            const newlyRemovedActiveSubscribers = [];
+            
+            if (previousSecondarySubscribers.length > 0) {
+                console.log(`   🔍 [DETECTION] Comparing ${previousSecondarySubscribers.length} previous subscribers with ${currentSubscribers.length} current subscribers...`);
+                previousSecondarySubscribers.forEach(prevSub => {
+                    // Only check Active subscribers (Requested subscribers disappear naturally)
+                    if (prevSub.status === 'Active') {
+                        if (!currentPhoneNumbers.has(prevSub.phoneNumber)) {
+                            // This Active subscriber was in the previous list but is now missing
+                            // Check if it's not already in removedActiveSubscribers (avoid duplicates)
+                            if (!existingRemovedPhoneNumbers.has(prevSub.phoneNumber)) {
+                                // It was removed directly from Alfa website
+                                console.log(`   🔍 [DETECTION] Found removed Active subscriber: ${prevSub.phoneNumber} (was Active, now missing)`);
+                                console.log(`      [Detection] Subscriber ${prevSub.phoneNumber} marked as Out for admin ${adminId}`);
+                                newlyRemovedActiveSubscribers.push({
+                                    phoneNumber: prevSub.phoneNumber,
+                                    fullPhoneNumber: prevSub.fullPhoneNumber || prevSub.phoneNumber,
+                                    consumption: prevSub.consumption || 0,
+                                    limit: prevSub.quota || prevSub.limit || 0,
+                                    status: 'Active' // Always Active since we only store Active removed subscribers
+                                });
+                            } else {
+                                console.log(`   ℹ️ [DETECTION] Subscriber ${prevSub.phoneNumber} already in removedActiveSubscribers, skipping (duplicate prevention)`);
+                            }
+                        } else {
+                            console.log(`   ✅ [DETECTION] Subscriber ${prevSub.phoneNumber} still exists in current list`);
+                        }
+                    } else {
+                        console.log(`   ℹ️ [DETECTION] Subscriber ${prevSub.phoneNumber} has status "${prevSub.status}" (not Active), skipping`);
+                    }
+                });
+            } else {
+                console.log(`   ⚠️ [DETECTION] No previous subscribers found - cannot detect removals`);
+                console.log(`   ⚠️ [DETECTION] This may indicate first refresh or data not yet saved to Firebase`);
+            }
+            
+            // ALWAYS set detectedRemovedActiveSubscribers (either merged or existing) to preserve data
+            if (newlyRemovedActiveSubscribers.length > 0) {
+                console.log(`   🔍 [DETECTION] Detected ${newlyRemovedActiveSubscribers.length} NEW Active subscriber(s) removed directly from Alfa website:`);
+                for (const removedSub of newlyRemovedActiveSubscribers) {
+                    console.log(`      ➖ ${removedSub.phoneNumber} (was Active, now missing from HTML)`);
+                    console.log(`      [Detection] Subscriber ${removedSub.phoneNumber} marked as Out`);
+                }
+                // Merge with existing removedActiveSubscribers and store in aggregated for updateDashboardData
+                aggregated.detectedRemovedActiveSubscribers = [...existingRemovedActiveSubscribers, ...newlyRemovedActiveSubscribers];
+                console.log(`   ✅ [DETECTION] Stored ${aggregated.detectedRemovedActiveSubscribers.length} total removed active subscriber(s) (${existingRemovedActiveSubscribers.length} existing + ${newlyRemovedActiveSubscribers.length} newly detected) in aggregated`);
+            } else {
+                console.log(`   ℹ️ [DETECTION] No NEW removed subscribers detected`);
+                // CRITICAL: Always preserve existing removed subscribers (even if empty array)
+                aggregated.detectedRemovedActiveSubscribers = existingRemovedActiveSubscribers;
+                if (existingRemovedActiveSubscribers.length > 0) {
+                    console.log(`   ✅ [DETECTION] Preserved ${existingRemovedActiveSubscribers.length} existing removed active subscriber(s) in aggregated`);
+                } else {
+                    console.log(`   ℹ️ [DETECTION] No existing removed subscribers to preserve (setting empty array)`);
+                }
+            }
+            
+            console.log(`   ✅ [DETECTION] Detection complete. detectedRemovedActiveSubscribers set: ${!!aggregated.detectedRemovedActiveSubscribers}, length: ${aggregated.detectedRemovedActiveSubscribers?.length || 0}`);
+            if (aggregated.detectedRemovedActiveSubscribers && aggregated.detectedRemovedActiveSubscribers.length > 0) {
+                console.log(`   📋 [DETECTION] Removed subscribers list: ${aggregated.detectedRemovedActiveSubscribers.map(s => s.phoneNumber).join(', ')}`);
+            }
+            console.log(``);
+        }
+        
+        // CRITICAL: Save to Firebase if we have valid data (especially primaryData for status determination)
+        // This ensures new admins are saved with proper structure and don't become inactive
+        if (overallSuccess && aggregated.primaryData) {
+            const { updateDashboardData } = require('../services/firebaseDbService');
+            // Save asynchronously (non-blocking) - don't wait for it
+            process.nextTick(() => {
+                (async () => {
+                    try {
+                        await updateDashboardData(adminId, aggregated);
+                        console.log(`✅ [Refresh] Data saved to Firebase for admin ${adminId}`);
+                    } catch (firebaseError) {
+                        console.warn(`⚠️ [Refresh] Firebase save failed (non-critical):`, firebaseError?.message);
+                    }
+                })();
+            });
+        } else if (overallSuccess && !aggregated.primaryData) {
+            console.warn(`⚠️ [Refresh] Skipping Firebase save - primaryData missing (would mark admin inactive)`);
+        }
+        
+        res.json({
+            success: overallSuccess,
+            data: aggregated,
+            message: overallSuccess 
+                ? `Refresh completed: ${aggregated.summary.successful.length}/4 APIs successful`
+                : 'All API calls failed'
+        });
+        
+    } catch (error) {
+        console.error('❌ Error in /api/refreshAdmins:', error);
+        res.status(500).json(createErrorResponse(error.message, error));
+    }
+});
+
+module.exports = router;
+

@@ -1185,7 +1185,7 @@ function scheduleNextDailyLogin() {
 
 // Silent keep-alive scheduler - dynamic scheduling based on __ACCOUNT expiry
 let keepAliveTimeoutId = null;
-const KEEP_ALIVE_BUFFER_MS = 20 * 60 * 1000; // 20 minutes before expiry
+const KEEP_ALIVE_BUFFER_MS = 60 * 60 * 1000; // 60 minutes (1 hour) before expiry - ensures cookies are refreshed well before expiration
 
 // Track last scheduled keep-alive times per admin (to avoid duplicate logs)
 // Map<adminId, { nextKeepAliveUTC: number, expiryUTC: number }>
@@ -1378,7 +1378,8 @@ async function runSilentKeepAliveCycle() {
             
             // Cookies exist and are valid - check if keep-alive time has arrived
             const nextKeepAliveUTC = await calculateNextKeepAliveTime(admin.id);
-            if (nextKeepAliveUTC && nextKeepAliveUTC <= nowUTC + 60000) { // Within 1 minute tolerance
+            // Use 5 minute tolerance to catch admins that need keep-alive soon (prevents missed cycles)
+            if (nextKeepAliveUTC && nextKeepAliveUTC <= nowUTC + (5 * 60 * 1000)) {
                 adminsToKeepAlive.push(admin);
             }
         }

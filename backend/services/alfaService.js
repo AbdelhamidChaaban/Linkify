@@ -1,3 +1,18 @@
+/**
+ * ⚠️ DEPRECATED — DO NOT USE ⚠️
+ * 
+ * This service uses Puppeteer and has been REPLACED by alfaServiceApiFirst.js
+ * 
+ * IMPORTANT: All new code MUST use alfaServiceApiFirst.js instead of this file.
+ * 
+ * This file is kept temporarily for reference only and will be deleted soon.
+ * 
+ * Migration: Replace all imports of './alfaService' with './alfaServiceApiFirst'
+ * 
+ * ESLint/Import Rule: Block imports of this file if possible.
+ * 
+ * @deprecated Use alfaServiceApiFirst.js for API-only (no Puppeteer) operations
+ */
 const browserPool = require('./browserPool');
 const cacheLayer = require('./cacheLayer');
 const { loginToAlfa, delay, AEFA_DASHBOARD_URL } = require('./alfaLogin');

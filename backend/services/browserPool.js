@@ -1,3 +1,8 @@
+// TODO: Replace Puppeteer login fallback with alternative CAPTCHA solution
+// This browser pool is only used for login fallback when HTTP login fails or CAPTCHA is detected
+// Once CAPTCHA handling is solved (e.g., CAPTCHA solving service, manual verification, etc.), 
+// this entire module can be removed along with Puppeteer dependencies
+
 // CRITICAL: Set Puppeteer cache directory BEFORE requiring puppeteer
 // This ensures Chromium persists from build to runtime on Render.com
 const path = require('path');
@@ -15,6 +20,7 @@ console.log(`📁 [BrowserPool] Puppeteer download path: ${process.env.PUPPETEER
 // NOW require puppeteer (after setting cache directory)
 // Use puppeteer (full package with bundled Chromium)
 // puppeteer-extra wraps it to add stealth capabilities
+// TODO: Remove Puppeteer dependencies once CAPTCHA handling is solved
 const puppeteerBase = require('puppeteer');
 const puppeteerExtra = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');

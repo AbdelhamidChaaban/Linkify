@@ -1,6 +1,7 @@
 const cron = require('node-cron');
-const { getFirestore, collection, query, where, getDocs } = require('firebase/firestore');
-const { fetchAlfaData } = require('./alfaService');
+const { getFirestore, collection, query, where, getDocs, doc, getDoc, setDoc } = require('firebase/firestore');
+// MIGRATED: Using API-first service (no Puppeteer) instead of legacy alfaService.js
+const { fetchAlfaData } = require('./alfaServiceApiFirst');
 const { updateDashboardData } = require('./firebaseDbService');
 const { getSession, deleteSession } = require('./sessionManager');
 const snapshotManager = require('./snapshotManager');
@@ -331,6 +332,151 @@ function startScheduledRefresh() {
 }
 
 /**
+ * Cleanup removed subscribers for admins whose validity date matches today
+ * Runs daily at 00:00:00 to clear removedActiveSubscribers (billing cycle reset)
+ */
+async function cleanupRemovedSubscribers() {
+    console.log('\n🧹 [Cleanup] Starting daily cleanup of removed subscribers at 00:00...');
+    console.log(`📅 [Cleanup] Date: ${new Date().toISOString()}`);
+    
+    if (!db || !app) {
+        if (!initializeFirebase()) {
+            console.warn('⚠️ [Cleanup] Cannot run cleanup: Firebase not initialized');
+            return;
+        }
+    }
+    
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = today.toISOString().split('T')[0]; // Format: "YYYY-MM-DD"
+        
+        // Get all admins
+        const allAdmins = await getActiveAdmins();
+        
+        if (allAdmins.length === 0) {
+            console.log('ℹ️ [Cleanup] No admins found to process');
+            return;
+        }
+        
+        console.log(`🔄 [Cleanup] Checking ${allAdmins.length} admin(s) for validity date cleanup...`);
+        
+        let cleanedCount = 0;
+        let skippedCount = 0;
+        
+        for (const admin of allAdmins) {
+            try {
+                const adminDocRef = doc(db, 'admins', admin.id);
+                const adminDoc = await getDoc(adminDocRef);
+                
+                if (!adminDoc.exists()) {
+                    continue;
+                }
+                
+                const data = adminDoc.data();
+                const validityDateStr = data.alfaData?.validityDate || 
+                                      data._cachedDates?.validityDate?.value;
+                
+                if (!validityDateStr || typeof validityDateStr !== 'string') {
+                    continue;
+                }
+                
+                // Parse validity date
+                const dateMatch = validityDateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+                if (!dateMatch) {
+                    continue;
+                }
+                
+                const [, day, month, year] = dateMatch;
+                const validityDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+                validityDate.setHours(0, 0, 0, 0);
+                
+                // Calculate the day AFTER validity date (cleanup day)
+                const cleanupDate = new Date(validityDate);
+                cleanupDate.setDate(cleanupDate.getDate() + 1);
+                
+                // Check if today is the day AFTER validity date (cleanup should happen at 00:00)
+                if (cleanupDate.getTime() === today.getTime()) {
+                    const lastCleanupDate = data._lastRemovedCleanupDate || null;
+                    const removedActiveSubscribers = Array.isArray(data.removedActiveSubscribers) ? data.removedActiveSubscribers : [];
+                    const removedSubscribers = Array.isArray(data.removedSubscribers) ? data.removedSubscribers : [];
+                    
+                    // Only cleanup if not already done today
+                    if (lastCleanupDate !== todayStr && (removedActiveSubscribers.length > 0 || removedSubscribers.length > 0)) {
+                        console.log(`🔄 [Cleanup] Cleaning up removed subscribers for admin ${admin.id} (${admin.name || admin.phone || 'Unknown'})`);
+                        console.log(`   [Cleanup] Validity date: ${validityDateStr} (ended yesterday), Removed subscribers: ${removedActiveSubscribers.length}`);
+                        
+                        // Clear removed subscribers
+                        await setDoc(adminDocRef, {
+                            removedActiveSubscribers: [],
+                            removedSubscribers: [],
+                            _lastRemovedCleanupDate: todayStr
+                        }, { merge: true });
+                        
+                        console.log(`   [Cleanup] Removed subscribers cleared for admin ${admin.id} at 00:00`);
+                        cleanedCount++;
+                    } else if (lastCleanupDate === todayStr) {
+                        skippedCount++;
+                    }
+                }
+            } catch (error) {
+                console.warn(`⚠️ [Cleanup] Failed to cleanup admin ${admin.id}:`, error.message);
+            }
+        }
+        
+        console.log(`✅ [Cleanup] Cleanup completed: ${cleanedCount} admin(s) cleaned, ${skippedCount} already cleaned today`);
+        console.log(`\n✅ [Cleanup] Daily cleanup completed at ${new Date().toISOString()}\n`);
+    } catch (error) {
+        console.error('❌ [Cleanup] Error during cleanup:', error.message);
+    }
+}
+
+/**
+ * Start the scheduled cleanup task
+ * Runs daily at 00:00:00
+ */
+function startScheduledCleanup() {
+    // Check if scheduled cleanup is disabled
+    if (process.env.DISABLE_SCHEDULED_CLEANUP === 'true') {
+        console.log('ℹ️ Scheduled cleanup is disabled via DISABLE_SCHEDULED_CLEANUP env var');
+        return null;
+    }
+    
+    // Initialize Firebase
+    if (!initializeFirebase()) {
+        console.warn('⚠️ Cannot start scheduled cleanup: Firebase not initialized');
+        return null;
+    }
+    
+    // Schedule task to run daily at 00:00:00
+    // Cron format: minute hour day month day-of-week
+    // '0 0 * * *' means: at minute 0 of hour 0, every day
+    const cronExpression = '0 0 * * *';
+    
+    console.log('⏰ [Cleanup] Setting up daily cleanup at 00:00:00...');
+    
+    const task = cron.schedule(cronExpression, async () => {
+        await cleanupRemovedSubscribers();
+    }, {
+        scheduled: true,
+        timezone: process.env.TZ || 'UTC' // Use TZ env var or default to UTC
+    });
+    
+    console.log(`✅ [Cleanup] Scheduled cleanup configured to run daily at 00:00:00 (${process.env.TZ || 'UTC'} timezone)`);
+    
+    // Log next run time
+    const now = new Date();
+    const nextRun = new Date(now);
+    nextRun.setHours(0, 0, 0, 0);
+    if (nextRun <= now) {
+        nextRun.setDate(nextRun.getDate() + 1);
+    }
+    console.log(`📅 [Cleanup] Next cleanup scheduled for: ${nextRun.toISOString()}`);
+    
+    return task;
+}
+
+/**
  * Manually trigger refresh (for testing)
  */
 async function manualRefresh() {
@@ -343,6 +489,8 @@ module.exports = {
     refreshAllActiveAdmins,
     getActiveAdmins,
     getAllAdmins,
-    manualRefresh
+    manualRefresh,
+    startScheduledCleanup,
+    cleanupRemovedSubscribers
 };
 

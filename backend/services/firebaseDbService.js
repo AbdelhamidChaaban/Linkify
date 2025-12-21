@@ -1,6 +1,38 @@
 // Import the functions you need from the SDKs you need
 const { initializeApp } = require("firebase/app");
-const { getFirestore, doc, getDoc, setDoc } = require("firebase/firestore");
+const { getFirestore, doc, getDoc, setDoc, collection, addDoc, query, orderBy, limit, getDocs, where, deleteDoc } = require("firebase/firestore");
+
+// Firebase Admin SDK for actionLogs (bypasses security rules)
+let adminDb = null;
+function initializeAdminDb() {
+    if (adminDb) return adminDb; // Already initialized
+    
+    try {
+        const admin = require('firebase-admin');
+        if (!admin.apps || admin.apps.length === 0) {
+            // Try to initialize Admin SDK if service account is available
+            const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
+                ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
+                : null;
+            
+            if (serviceAccount) {
+                admin.initializeApp({
+                    credential: admin.credential.cert(serviceAccount)
+                });
+                console.log('✅ Firebase Admin initialized for actionLogs');
+            } else {
+                return null;
+            }
+        }
+        
+        adminDb = admin.firestore();
+        return adminDb;
+    } catch (error) {
+        console.warn('⚠️ Firebase Admin not available for actionLogs:', error.message);
+        console.warn('   Will use client SDK (may require security rules)');
+        return null;
+    }
+}
 
 // Your web app's Firebase configuration (from environment variables)
 const firebaseConfig = {
@@ -156,9 +188,14 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       cleanDashboardData.apiResponses = apiResponsesBackup;
     }
     
+    // CRITICAL: Always preserve primaryData if it exists (needed for status determination)
+    // Don't require ServiceInformationValue - the API response structure may vary
+    // As long as primaryData is a valid object, preserve it (frontend can handle missing fields)
     if (primaryDataBackup && typeof primaryDataBackup === 'object' && Object.keys(primaryDataBackup).length > 0) {
-      if (primaryDataBackup.ServiceInformationValue && Array.isArray(primaryDataBackup.ServiceInformationValue)) {
-        cleanDashboardData.primaryData = primaryDataBackup;
+      cleanDashboardData.primaryData = primaryDataBackup;
+      // Ensure ServiceInformationValue is at least an empty array if missing (for compatibility)
+      if (!cleanDashboardData.primaryData.ServiceInformationValue || !Array.isArray(cleanDashboardData.primaryData.ServiceInformationValue)) {
+        cleanDashboardData.primaryData.ServiceInformationValue = [];
       }
     }
     
@@ -258,6 +295,102 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       };
     }
     
+    // CRITICAL: Preserve existing removedActiveSubscribers and merge with newly detected ones
+    // Start with existing removed subscribers from Firebase (always preserve them)
+    let removedActiveSubscribersToSave = Array.isArray(currentData.removedActiveSubscribers) ? currentData.removedActiveSubscribers : [];
+    let removedSubscribersToSave = Array.isArray(currentData.removedSubscribers) ? currentData.removedSubscribers : [];
+    
+    console.log(`🔄 [${adminId}] Current removedActiveSubscribers in Firebase: ${removedActiveSubscribersToSave.length}`);
+    
+    // If detected removed subscribers are provided, merge them with existing ones (avoid duplicates)
+    if (cleanDashboardData.detectedRemovedActiveSubscribers && Array.isArray(cleanDashboardData.detectedRemovedActiveSubscribers)) {
+      console.log(`🔄 [${adminId}] Processing detected removed subscribers: ${cleanDashboardData.detectedRemovedActiveSubscribers.length} total detected`);
+      
+      // The detected list already includes existing + newly detected, so use it directly
+      // But we need to ensure we don't lose any that might be in currentData but not in detected
+      // Since detection code already merges existing + newly detected, we can trust it
+      if (cleanDashboardData.detectedRemovedActiveSubscribers.length > 0) {
+        console.log(`🔄 [${adminId}] Using detected removed subscribers list (${cleanDashboardData.detectedRemovedActiveSubscribers.length} total)`);
+        removedActiveSubscribersToSave = cleanDashboardData.detectedRemovedActiveSubscribers;
+        
+        // Update removedSubscribers array (for backward compatibility) - extract phone numbers
+        const detectedPhoneNumbers = new Set(cleanDashboardData.detectedRemovedActiveSubscribers.map(sub => sub.phoneNumber));
+        removedSubscribersToSave = Array.from(detectedPhoneNumbers);
+        console.log(`   ✅ Updated removedSubscribers array to ${removedSubscribersToSave.length} phone number(s) (backward compatibility)`);
+        
+        console.log(`✅ [${adminId}] Successfully set ${removedActiveSubscribersToSave.length} removed active subscriber(s) to be saved`);
+      } else {
+        console.log(`ℹ️ [${adminId}] Detected list is empty, preserving existing ${removedActiveSubscribersToSave.length} removed subscriber(s)`);
+      }
+      
+      // Remove detectedRemovedActiveSubscribers from cleanDashboardData (it's a temporary field)
+      delete cleanDashboardData.detectedRemovedActiveSubscribers;
+    } else {
+      console.log(`ℹ️ [${adminId}] No detectedRemovedActiveSubscribers in dashboardData - preserving existing ${removedActiveSubscribersToSave.length} removed subscriber(s) from Firebase`);
+    }
+    
+    // CRITICAL: Clear removedActiveSubscribers at 00:00 of the day AFTER validity date (billing cycle reset)
+    // Cleanup happens ONCE at 00:00:00 when today is the day AFTER validity date
+    // Example: If validity date is 21/12/2025, cleanup happens at 00:00:00 on 22/12/2025
+    // Track last cleanup date to prevent multiple cleanups
+    const validityDateStr = cleanDashboardData.validityDate || 
+                           currentData.alfaData?.validityDate || 
+                           currentData._cachedDates?.validityDate?.value;
+    
+    if (validityDateStr && typeof validityDateStr === 'string' && validityDateStr.trim()) {
+      // Parse validity date (format: "DD/MM/YYYY" like "21/12/2025" or "DD-MM-YYYY")
+      const dateMatch = validityDateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+      if (dateMatch) {
+        const [, day, month, year] = dateMatch;
+        const validityDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+        validityDate.setHours(0, 0, 0, 0); // Reset time to start of day
+        
+        // Calculate the day AFTER validity date (cleanup day)
+        const cleanupDate = new Date(validityDate);
+        cleanupDate.setDate(cleanupDate.getDate() + 1); // Add 1 day
+        
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Reset time to start of day
+        
+        // Check if today is the day AFTER validity date (cleanup should happen at 00:00:00)
+        if (cleanupDate.getTime() === today.getTime()) {
+          // Get last cleanup date from currentData (format: "YYYY-MM-DD")
+          const lastCleanupDateStr = currentData._lastRemovedCleanupDate || null;
+          const todayStr = today.toISOString().split('T')[0]; // Format: "YYYY-MM-DD"
+          
+          // Get current hour to check if it's around 00:00 (within first 5 minutes of the day)
+          const currentHour = new Date().getHours();
+          const currentMinute = new Date().getMinutes();
+          const isEarlyMorning = currentHour === 0 && currentMinute < 5;
+          
+          // Only clear if cleanup hasn't happened today yet AND it's early morning (00:00-00:05)
+          // This ensures cleanup happens once at the start of the day AFTER validity date
+          if (lastCleanupDateStr !== todayStr && isEarlyMorning) {
+            if (removedActiveSubscribersToSave.length > 0 || removedSubscribersToSave.length > 0) {
+              console.log(`🔄 [${adminId}] [Cleanup] Validity date (${validityDateStr}) ended yesterday - clearing removed subscribers at 00:00 (billing cycle reset)`);
+              console.log(`   [Cleanup] Removed subscribers cleared for admin ${adminId} at 00:00`);
+              console.log(`   [Cleanup] Clearing ${removedActiveSubscribersToSave.length} removed active subscriber(s) and ${removedSubscribersToSave.length} removed subscriber phone(s)`);
+              removedActiveSubscribersToSave = []; // Clear the list for new billing cycle
+              removedSubscribersToSave = []; // Clear the list for new billing cycle
+              
+              // Track that cleanup happened today (will be saved to Firebase below)
+              currentData._lastRemovedCleanupDate = todayStr;
+              console.log(`   [Cleanup] Marked cleanup date as ${todayStr} to prevent duplicate cleanups`);
+            } else {
+              // No subscribers to clean, but still mark cleanup date to prevent repeated checks
+              currentData._lastRemovedCleanupDate = todayStr;
+              console.log(`ℹ️ [${adminId}] [Cleanup] Validity date (${validityDateStr}) ended yesterday, but no removed subscribers to clean`);
+            }
+          } else if (lastCleanupDateStr === todayStr) {
+            console.log(`ℹ️ [${adminId}] [Cleanup] Cleanup already performed today (${todayStr}) - skipping to prevent duplicate cleanups`);
+          } else if (!isEarlyMorning) {
+            // Not early morning yet, cleanup will happen at 00:00 via scheduled job
+            console.log(`ℹ️ [${adminId}] [Cleanup] Validity date (${validityDateStr}) ended yesterday, cleanup scheduled for 00:00 (current time: ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
+          }
+        }
+      }
+    }
+    
     // Preserve critical fields that should not be overwritten
     const preservedFields = {
       name: currentData.name,
@@ -267,7 +400,9 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       type: currentData.type,
       userId: currentData.userId || null, // CRITICAL: Preserve userId for data isolation
       pendingSubscribers: Array.isArray(currentData.pendingSubscribers) ? currentData.pendingSubscribers : [], // CRITICAL: Preserve pending subscribers (always array)
-      removedSubscribers: Array.isArray(currentData.removedSubscribers) ? currentData.removedSubscribers : [], // Preserve removed subscribers (always array)
+      removedSubscribers: removedSubscribersToSave, // Merged with detected removed subscribers (for backward compatibility)
+      removedActiveSubscribers: removedActiveSubscribersToSave, // Merged with detected removed subscribers, cleared if validity date matched
+      _lastRemovedCleanupDate: currentData._lastRemovedCleanupDate || null, // Track when removed subscribers were last cleaned up (prevents duplicate cleanups)
       createdAt: currentData.createdAt,
       updatedAt: currentData.updatedAt
     };
@@ -283,6 +418,13 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     if (!cleanPreservedFields.removedSubscribers) {
       cleanPreservedFields.removedSubscribers = [];
     }
+    if (!cleanPreservedFields.removedActiveSubscribers) {
+      cleanPreservedFields.removedActiveSubscribers = [];
+    }
+    
+    // CRITICAL: Remove fields from cleanCurrentData that are in preservedFields to prevent overwriting
+    // These fields should be set by preservedFields, not by currentData
+    const { removedActiveSubscribers: _, removedSubscribers: __, pendingSubscribers: ___, _lastRemovedCleanupDate: ____, ...cleanCurrentDataWithoutPreserved } = cleanCurrentData;
     
     // CRITICAL: Only save if primaryData exists (prevents admins becoming inactive)
     const hasPrimaryData = cleanDashboardData.primaryData && 
@@ -297,12 +439,17 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     // Update document
     try {
       await setDoc(userDocRef, {
-        ...cleanPreservedFields,
-        ...cleanCurrentData, // Include all other current data
+        ...cleanCurrentDataWithoutPreserved, // Include all other current data first
+        ...cleanPreservedFields, // Then apply preserved fields (these take precedence)
         alfaData: cleanDashboardData,
         alfaDataFetchedAt: new Date().toISOString(),
         lastDataFetch: new Date().toISOString()
       }, { merge: false });
+      
+      // Log removedActiveSubscribers for debugging
+      if (removedActiveSubscribersToSave.length > 0) {
+        console.log(`✅ [${adminId}] Saved ${removedActiveSubscribersToSave.length} removed active subscriber(s) to Firebase:`, removedActiveSubscribersToSave.map(s => s.phoneNumber).join(', '));
+      }
       
       // Log subscriber counts and totalConsumption for debugging
       const logParts = [];
@@ -372,6 +519,13 @@ async function getAdminData(adminId, expectedUserId = null) {
       return null; // Return null to prevent unauthorized access
     }
     
+    // Ensure alfaData.secondarySubscribers is properly structured
+    const alfaData = data.alfaData || null;
+    if (alfaData && !Array.isArray(alfaData.secondarySubscribers)) {
+      // Ensure secondarySubscribers is always an array
+      alfaData.secondarySubscribers = alfaData.secondarySubscribers || [];
+    }
+    
     return {
       phone: data.phone || '',
       password: data.password || '',
@@ -381,9 +535,13 @@ async function getAdminData(adminId, expectedUserId = null) {
       _cachedDates: data._cachedDates || null,
       _cachedExpiration: data._cachedExpiration || null,
       // Also include expiration from alfaData for backward compatibility
-      expiration: data.alfaData?.expiration || null,
-      // Include full alfaData for checking subscriber status
-      alfaData: data.alfaData || null
+      expiration: alfaData?.expiration || null,
+      // Include full alfaData for checking subscriber status (with guaranteed secondarySubscribers array)
+      alfaData: alfaData,
+      // Include removedActiveSubscribers for detection logic
+      removedActiveSubscribers: Array.isArray(data.removedActiveSubscribers) ? data.removedActiveSubscribers : [],
+      // Include removedSubscribers for backward compatibility
+      removedSubscribers: Array.isArray(data.removedSubscribers) ? data.removedSubscribers : []
     };
   } catch (error) {
     console.error(`❌ Error getting admin data for ${adminId}:`, error.message);
@@ -687,6 +845,363 @@ async function getBalanceHistory(adminId) {
   }
 }
 
+/**
+ * Log an action (add/edit/remove subscriber) to the action logs collection
+ * @param {string} userId - User ID (from Firebase auth)
+ * @param {string} adminId - Admin document ID
+ * @param {string} adminName - Admin name
+ * @param {string} adminPhone - Admin phone number
+ * @param {string} action - Action type: 'add', 'edit', 'remove'
+ * @param {string} subscriberPhone - Subscriber phone number
+ * @param {number} quota - Quota in GB (optional, for add/edit)
+ * @param {boolean} success - Whether the action succeeded
+ * @param {string} errorMessage - Error message if failed (optional)
+ * @returns {Promise<boolean>} Success status
+ */
+async function logAction(userId, adminId, adminName, adminPhone, action, subscriberPhone, quota = null, success = true, errorMessage = null) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    return false;
+  }
+  
+  try {
+    // Prefer Admin SDK (bypasses security rules) - initialize if needed
+    const adminDbInstance = initializeAdminDb();
+    if (adminDbInstance) {
+      const actionLog = {
+        userId,
+        adminId,
+        adminName: adminName || 'Unknown',
+        adminPhone: adminPhone || '',
+        action, // 'add', 'edit', 'remove'
+        subscriberPhone,
+        success,
+        timestamp: new Date().toISOString(),
+        createdAt: require('firebase-admin').firestore.FieldValue.serverTimestamp()
+      };
+      
+      if (quota !== null && quota !== undefined) {
+        actionLog.quota = quota;
+      }
+      if (errorMessage) {
+        actionLog.errorMessage = errorMessage;
+      }
+      
+      await adminDbInstance.collection('actionLogs').add(actionLog);
+      console.log(`✅ Logged action: ${action} subscriber ${subscriberPhone} for admin ${adminId} (${success ? 'success' : 'failed'})`);
+      return true;
+    }
+    
+    // Fallback to client SDK (requires security rules)
+    if (!db || !app) {
+      console.warn('⚠️ Firebase not initialized, cannot log action');
+      return false;
+    }
+    
+    const actionsCollection = collection(db, 'actionLogs');
+    const actionLog = {
+      userId,
+      adminId,
+      adminName: adminName || 'Unknown',
+      adminPhone: adminPhone || '',
+      action, // 'add', 'edit', 'remove'
+      subscriberPhone,
+      quota: quota !== null ? quota : undefined,
+      success,
+      errorMessage: errorMessage || undefined,
+      timestamp: new Date().toISOString(),
+      createdAt: new Date()
+    };
+    
+    // Remove undefined values
+    Object.keys(actionLog).forEach(key => {
+      if (actionLog[key] === undefined) {
+        delete actionLog[key];
+      }
+    });
+    
+    await addDoc(actionsCollection, actionLog);
+    console.log(`✅ Logged action: ${action} subscriber ${subscriberPhone} for admin ${adminId} (${success ? 'success' : 'failed'})`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error logging action:', error.message);
+    console.error('   Stack:', error.stack);
+    return false;
+  }
+}
+
+/**
+ * Get action logs for a user
+ * @param {string} userId - User ID (from Firebase auth)
+ * @param {Object} options - Query options
+ * @param {string} options.actionFilter - Filter by action type: 'all', 'add', 'edit', 'remove'
+ * @param {number} options.limit - Maximum number of logs to return
+ * @param {string} options.startAfter - Document ID to start after (for pagination)
+ * @returns {Promise<Array>} Array of action logs
+ */
+async function getActionLogs(userId, options = {}) {
+  const {
+    actionFilter = 'all',
+    limitCount = 100,
+    startAfter = null
+  } = options;
+  
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    return [];
+  }
+  
+  try {
+    // Prefer Admin SDK (bypasses security rules)
+    const adminDbInstance = initializeAdminDb();
+    if (adminDbInstance) {
+      try {
+        // Try query with orderBy first (requires composite index)
+        let query = adminDbInstance.collection('actionLogs')
+          .where('userId', '==', userId)
+          .orderBy('timestamp', 'desc')
+          .limit(limitCount);
+        
+        // Add action filter if not 'all'
+        if (actionFilter !== 'all') {
+          query = query.where('action', '==', actionFilter);
+        }
+        
+        const querySnapshot = await query.get();
+        const logs = [];
+        
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          logs.push({
+            id: doc.id,
+            ...data,
+            // Convert Firestore Timestamp to ISO string
+            timestamp: data.timestamp || (data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : (typeof data.createdAt === 'string' ? data.createdAt : new Date().toISOString()))
+          });
+        });
+        
+        console.log(`✅ Retrieved ${logs.length} action log(s) for user ${userId} (filter: ${actionFilter}) using Admin SDK`);
+        return logs;
+      } catch (indexError) {
+        // If index error, use simpler query and sort in memory
+        if (indexError.message && indexError.message.includes('index')) {
+          console.warn('⚠️ Composite index required. Using fallback query (sorted in memory)...');
+          console.warn('   Create index here:', indexError.message.match(/https:\/\/[^\s]+/)?.[0] || 'Firebase Console > Firestore > Indexes');
+          
+          let simpleQuery = adminDbInstance.collection('actionLogs')
+            .where('userId', '==', userId)
+            .limit(limitCount * 2); // Get more to account for filtering
+          
+          const querySnapshot = await simpleQuery.get();
+          let logs = [];
+          
+          querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            // Filter by action type in memory if needed
+            if (actionFilter === 'all' || data.action === actionFilter) {
+              logs.push({
+                id: doc.id,
+                ...data,
+                timestamp: data.timestamp || (data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : (typeof data.createdAt === 'string' ? data.createdAt : new Date().toISOString()))
+              });
+            }
+          });
+          
+          // Sort by timestamp descending in memory
+          logs.sort((a, b) => {
+            const dateA = new Date(a.timestamp).getTime();
+            const dateB = new Date(b.timestamp).getTime();
+            return dateB - dateA;
+          });
+          
+          // Limit after sorting
+          logs = logs.slice(0, limitCount);
+          
+          console.log(`✅ Retrieved ${logs.length} action log(s) using Admin SDK fallback (sorted in memory)`);
+          return logs;
+        }
+        throw indexError; // Re-throw if it's not an index error
+      }
+    }
+    
+    // Fallback to client SDK (requires security rules)
+    if (!db || !app) {
+      return [];
+    }
+    
+    const actionsCollection = collection(db, 'actionLogs');
+    
+    // Build query conditions array
+    const conditions = [
+      where('userId', '==', userId),
+      orderBy('timestamp', 'desc')
+    ];
+    
+    // Add action filter if not 'all'
+    if (actionFilter !== 'all') {
+      conditions.push(where('action', '==', actionFilter));
+    }
+    
+    // Add limit
+    conditions.push(limit(limitCount));
+    
+    // Build the query with all conditions at once
+    const q = query(actionsCollection, ...conditions);
+    
+    const querySnapshot = await getDocs(q);
+    const logs = [];
+    
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      logs.push({
+        id: doc.id,
+        ...data,
+        // Ensure timestamp is a string if it's a Firestore Timestamp
+        timestamp: data.timestamp ? (typeof data.timestamp === 'string' ? data.timestamp : (data.timestamp.toDate ? data.timestamp.toDate().toISOString() : new Date(data.timestamp).toISOString())) : (data.createdAt ? (typeof data.createdAt === 'string' ? data.createdAt : (data.createdAt.toDate ? data.createdAt.toDate().toISOString() : new Date(data.createdAt).toISOString())) : new Date().toISOString())
+      });
+    });
+    
+    console.log(`✅ Retrieved ${logs.length} action log(s) for user ${userId} (filter: ${actionFilter}) using client SDK`);
+    return logs;
+  } catch (error) {
+    console.error('❌ Error getting action logs:', error.message);
+    console.error('   Stack:', error.stack);
+    // If it's a composite index error, try a simpler query
+    if (error.message && (error.message.includes('index') || error.message.includes('permission'))) {
+      console.warn('⚠️ Query error detected. Trying simpler query...');
+      try {
+        // Try with Admin SDK fallback if available
+        const adminDbInstance = initializeAdminDb();
+        if (adminDbInstance) {
+          let simpleQuery = adminDbInstance.collection('actionLogs')
+            .where('userId', '==', userId)
+            .limit(limitCount);
+          
+          if (actionFilter !== 'all') {
+            simpleQuery = simpleQuery.where('action', '==', actionFilter);
+          }
+          
+          const snapshot = await simpleQuery.get();
+          const logs = [];
+          snapshot.forEach((doc) => {
+            const data = doc.data();
+            logs.push({
+              id: doc.id,
+              ...data,
+              timestamp: data.timestamp || (data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : new Date().toISOString())
+            });
+          });
+          // Sort in memory
+          logs.sort((a, b) => {
+            const dateA = new Date(a.timestamp).getTime();
+            const dateB = new Date(b.timestamp).getTime();
+            return dateB - dateA; // Descending
+          });
+          console.log(`✅ Retrieved ${logs.length} action log(s) using Admin SDK fallback`);
+          return logs;
+        }
+        
+        // Client SDK fallback
+        const actionsCollection = collection(db, 'actionLogs');
+        const simpleConditions = [where('userId', '==', userId)];
+        if (actionFilter !== 'all') {
+          simpleConditions.push(where('action', '==', actionFilter));
+        }
+        simpleConditions.push(limit(limitCount));
+        const simpleQuery = query(actionsCollection, ...simpleConditions);
+        const snapshot = await getDocs(simpleQuery);
+        const logs = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          logs.push({
+            id: doc.id,
+            ...data,
+            timestamp: data.timestamp ? (typeof data.timestamp === 'string' ? data.timestamp : (data.timestamp.toDate ? data.timestamp.toDate().toISOString() : new Date(data.timestamp).toISOString())) : (data.createdAt ? (typeof data.createdAt === 'string' ? data.createdAt : (data.createdAt.toDate ? data.createdAt.toDate().toISOString() : new Date(data.createdAt).toISOString())) : new Date().toISOString())
+          });
+        });
+        // Sort in memory
+        logs.sort((a, b) => {
+          const dateA = new Date(a.timestamp).getTime();
+          const dateB = new Date(b.timestamp).getTime();
+          return dateB - dateA; // Descending
+        });
+        console.log(`✅ Retrieved ${logs.length} action log(s) using client SDK fallback`);
+        return logs;
+      } catch (fallbackError) {
+        console.error('❌ Fallback query also failed:', fallbackError.message);
+      }
+    }
+    return [];
+  }
+}
+
+/**
+ * Delete an action log by ID
+ * @param {string} logId - Action log document ID
+ * @param {string} userId - User ID (for security validation)
+ * @returns {Promise<boolean>} Success status
+ */
+async function deleteActionLog(logId, userId) {
+  // Check if Firebase is disabled
+  if (process.env.DISABLE_FIREBASE === 'true') {
+    return false;
+  }
+  
+  try {
+    // Prefer Admin SDK (bypasses security rules)
+    const adminDbInstance = initializeAdminDb();
+    if (adminDbInstance) {
+      // Verify the log belongs to the user before deleting (security check)
+      const logDoc = await adminDbInstance.collection('actionLogs').doc(logId).get();
+      if (!logDoc.exists) {
+        console.warn(`⚠️ Action log ${logId} does not exist`);
+        return false;
+      }
+      
+      const logData = logDoc.data();
+      if (logData.userId !== userId) {
+        console.warn(`⚠️ Security: Action log ${logId} does not belong to user ${userId}`);
+        return false;
+      }
+      
+      // Delete the document
+      await adminDbInstance.collection('actionLogs').doc(logId).delete();
+      console.log(`✅ Deleted action log ${logId} for user ${userId}`);
+      return true;
+    }
+    
+    // Fallback to client SDK (requires security rules)
+    if (!db || !app) {
+      console.warn('⚠️ Firebase not initialized, cannot delete action log');
+      return false;
+    }
+    
+    // Verify ownership and delete
+    const logDocRef = doc(db, 'actionLogs', logId);
+    const logDoc = await getDoc(logDocRef);
+    
+    if (!logDoc.exists()) {
+      console.warn(`⚠️ Action log ${logId} does not exist`);
+      return false;
+    }
+    
+    const logData = logDoc.data();
+    if (logData.userId !== userId) {
+      console.warn(`⚠️ Security: Action log ${logId} does not belong to user ${userId}`);
+      return false;
+    }
+    
+    // Delete using client SDK
+    await deleteDoc(logDocRef);
+    console.log(`✅ Deleted action log ${logId} for user ${userId}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error deleting action log:', error.message);
+    console.error('   Stack:', error.stack);
+    return false;
+  }
+}
+
 module.exports = {
   updateDashboardData,
   getAdminData,
@@ -696,6 +1211,9 @@ module.exports = {
   removePendingSubscriber,
   addRemovedActiveSubscriber,
   addRemovedSubscriber,
-  getBalanceHistory
+  getBalanceHistory,
+  logAction,
+  getActionLogs,
+  deleteActionLog
 };
 

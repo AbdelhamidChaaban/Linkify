@@ -1,14 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="actions-page">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cell Spott Manage - Settings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cell Spott Manage - Actions</title>
     <link rel="icon" type="image/png" href="/assets/logo1.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/shared/layout.css">
+    <link rel="stylesheet" href="/pages/actions.css">
     <!-- Theme Loader - Must run synchronously before page renders -->
     <script>
         (function() {
@@ -22,98 +23,8 @@
             }
         })();
     </script>
-    <style>
-        .settings-container {
-            background: rgba(15, 15, 20, 0.6);
-            border-radius: 16px;
-            padding: 2rem;
-            border: 1px solid rgba(58, 10, 78, 0.2);
-            max-width: 600px;
-        }
-        
-        .settings-form {
-            margin-top: 2rem;
-        }
-        
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-        
-        .form-group label {
-            display: block;
-            color: #f8fafc;
-            font-size: 0.875rem;
-            font-weight: 500;
-            margin-bottom: 0.5rem;
-        }
-        
-        .form-group input {
-            width: 100%;
-            background: rgba(20, 20, 30, 0.8);
-            border: 1px solid rgba(58, 10, 78, 0.3);
-            color: #f8fafc;
-            padding: 0.75rem 1rem;
-            border-radius: 8px;
-            font-size: 0.9375rem;
-            font-family: inherit;
-            transition: all 0.2s ease;
-        }
-        
-        .form-group input:focus {
-            outline: none;
-            border-color: #8b5cf6;
-            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
-        }
-        
-        .error-message {
-            display: block;
-            color: #ef4444;
-            font-size: 0.8125rem;
-            margin-top: 0.5rem;
-            min-height: 1.25rem;
-        }
-        
-        .btn-save {
-            background: linear-gradient(135deg, #3a0a4e, #8b5cf6);
-            color: #f8fafc;
-            border: none;
-            padding: 0.75rem 2rem;
-            border-radius: 8px;
-            font-size: 0.9375rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 12px rgba(58, 10, 78, 0.4);
-        }
-        
-        .btn-save:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(58, 10, 78, 0.6);
-        }
-        
-        .btn-save:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        body.light-mode .settings-container {
-            background: rgba(255, 255, 255, 0.6);
-            border-color: rgba(58, 10, 78, 0.1);
-        }
-        
-        body.light-mode .form-group label {
-            color: #1e293b;
-        }
-        
-        body.light-mode .form-group input {
-            background: rgba(248, 250, 252, 0.8);
-            border-color: rgba(58, 10, 78, 0.2);
-            color: #1e293b;
-        }
-    </style>
 </head>
-<body>
+<body class="actions-page">
     <!-- Copy light-mode class from html to body immediately -->
     <script>
         (function() {
@@ -176,6 +87,15 @@
                         <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
                     </svg>
                     Admins
+                </a>
+            </li>
+            <li>
+                <a href="/pages/actions.html" class="mobile-nav-link active" data-page="actions">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <path d="M9 12l2 2 4-4"/>
+                    </svg>
+                    Actions
                 </a>
             </li>
         </ul>
@@ -246,6 +166,13 @@
                         </svg>
                         Admins
                     </a></li>
+                    <li><a href="/pages/actions.html" class="nav-link active">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                            <path d="M9 12l2 2 4-4"/>
+                        </svg>
+                        Actions
+                    </a></li>
                 </ul>
             </div>
             <div class="nav-right">
@@ -281,37 +208,83 @@
     <!-- Main Content -->
     <main class="main-content">
         <div class="page-header">
-            <h2>Settings</h2>
-            <p>Manage your account settings</p>
+            <h2>Action Logs</h2>
+            <p>View all subscriber management actions</p>
         </div>
 
-        <div class="settings-container">
-            <form id="settingsForm" class="settings-form">
-                <div class="form-group">
-                    <label for="currentPassword">Current Password *</label>
-                    <input type="password" id="currentPassword" name="currentPassword" required>
-                    <span class="error-message" id="currentPasswordError"></span>
+        <!-- Filters Section -->
+        <div class="actions-filters">
+            <div class="filter-group">
+                <div class="search-wrapper">
+                    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <path d="m21 21-4.35-4.35"/>
+                    </svg>
+                    <input type="text" id="searchInput" class="search-input" placeholder="Search admin, number...">
                 </div>
+            </div>
+            <div class="filter-group">
+                <select id="actionFilter" class="action-filter-select">
+                    <option value="all">All</option>
+                    <option value="add">Add</option>
+                    <option value="edit">Edit</option>
+                    <option value="remove">Remove</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <select id="dateFilter" class="action-filter-select">
+                    <option value="all">All Time</option>
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="7days">Last 7 Days</option>
+                    <option value="30days">Last 30 Days</option>
+                </select>
+            </div>
+        </div>
 
-                <div class="form-group">
-                    <label for="newPassword">New Password *</label>
-                    <input type="password" id="newPassword" name="newPassword" required>
-                    <span class="error-message" id="newPasswordError"></span>
-                </div>
+        <!-- Actions Table -->
+        <div class="actions-table-container">
+            <div class="actions-table-wrapper">
+                <table class="actions-table" id="actionsTable">
+                <thead>
+                    <tr>
+                        <th>Admin</th>
+                        <th>Action</th>
+                        <th>Numbers</th>
+                        <th>Quotas</th>
+                        <th class="sortable" data-sort="date">
+                            Date
+                            <svg class="sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 16V8M12 16l-4-4M12 16l4-4"/>
+                            </svg>
+                        </th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="actionsTableBody">
+                    <!-- Table rows will be populated by JavaScript -->
+                </tbody>
+            </table>
+            </div>
+        </div>
 
-                <div class="form-group">
-                    <label for="confirmPassword">Confirm New Password *</label>
-                    <input type="password" id="confirmPassword" name="confirmPassword" required>
-                    <span class="error-message" id="confirmPasswordError"></span>
-                </div>
-
-                <button type="submit" class="btn-save" id="saveBtn">
-                    Save Changes
-                </button>
-            </form>
+        <!-- Pagination -->
+        <div class="pagination-container">
+            <div class="pagination-info">
+                <span id="paginationInfo">Loading...</span>
+            </div>
+            <div class="pagination-controls">
+                <button id="prevPageBtn" class="pagination-btn" disabled>Previous</button>
+                <button id="nextPageBtn" class="pagination-btn">Next</button>
+            </div>
+            <label class="dense-toggle-label">
+                <input type="checkbox" id="denseModeToggle" class="dense-toggle-input">
+                <span class="dense-toggle-switch"></span>
+                <span class="dense-toggle-text">Dense</span>
+            </label>
         </div>
     </main>
-
+    
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
@@ -323,8 +296,9 @@
     <!-- Navigation Script -->
     <script src="/shared/nav.js"></script>
     
-    <!-- Settings Script -->
-    <script src="/pages/settings.js"></script>
+    <!-- Actions Script -->
+    <script src="/pages/actions.js"></script>
 </body>
 </html>
+
 

@@ -302,21 +302,76 @@ function calculateMinCookieExpiration(cookies) {
 }
 
 /**
+ * Filter cookies to only keep long-lived authentication cookies
+ * CRITICAL: Only save __ACCOUNT cookies (long-lived, 72 hours), exclude ASP.NET session cookies (short-lived)
+ * @param {Array} cookies - Array of cookie objects
+ * @returns {Array} Filtered array of cookies
+ */
+function filterCookies(cookies) {
+    if (!cookies || !Array.isArray(cookies)) {
+        return [];
+    }
+    
+    // CRITICAL: Only keep __ACCOUNT cookies (long-lived authentication cookies)
+    // Exclude ASP.NET session cookies (they expire quickly and cause issues)
+    const allowedCookies = cookies.filter(cookie => {
+        const name = cookie.name || '';
+        // Keep __ACCOUNT cookie (long-lived, 72 hours)
+        if (name === '__ACCOUNT') {
+            return true;
+        }
+        // Exclude ASP.NET session cookies (they expire quickly)
+        if (name.startsWith('ASP.NET_')) {
+            return false;
+        }
+        // Exclude other short-lived session cookies
+        if (name.includes('Session') || name.includes('SESSION') || name.includes('session')) {
+            return false;
+        }
+        // Keep other authentication cookies that might be needed (be conservative)
+        return true;
+    });
+    
+    if (allowedCookies.length !== cookies.length) {
+        const excluded = cookies.length - allowedCookies.length;
+        console.log(`🔍 [Cookie Filter] Filtered ${excluded} cookie(s) (kept ${allowedCookies.length} long-lived cookies, excluded ASP.NET/session cookies)`);
+    }
+    
+    // CRITICAL: Ensure __ACCOUNT cookie exists
+    const hasAccountCookie = allowedCookies.some(c => c.name === '__ACCOUNT');
+    if (!hasAccountCookie && cookies.length > 0) {
+        console.warn(`⚠️ [Cookie Filter] WARNING: No __ACCOUNT cookie found after filtering! Original cookies: ${cookies.map(c => c.name).join(', ')}`);
+    }
+    
+    return allowedCookies;
+}
+
+/**
  * Save cookies to Redis
+ * CRITICAL: Only saves __ACCOUNT cookies (long-lived), excludes ASP.NET session cookies
  * @param {string} userId - User ID
  * @param {Array} cookies - Array of cookie objects
  * @returns {Promise<void>}
  */
 async function saveCookies(userId, cookies) {
     try {
+        // CRITICAL: Filter cookies to only keep long-lived __ACCOUNT cookies
+        const filteredCookies = filterCookies(cookies);
+        
+        if (filteredCookies.length === 0) {
+            console.error(`❌ [${userId}] No cookies to save after filtering! Original: ${cookies.length} cookie(s)`);
+            throw new Error('No valid cookies to save (missing __ACCOUNT cookie)');
+        }
+        
         const key = getCookieKey(userId);
         const cookieData = {
-            cookies: cookies,
+            cookies: filteredCookies, // Use filtered cookies
             savedAt: Date.now()
         };
         
-        // Calculate actual cookie expiration from Alfa
-        const actualExpiration = calculateMinCookieExpiration(cookies);
+        // Calculate actual cookie expiration from Alfa (use filtered cookies)
+        // CRITICAL: Use __ACCOUNT cookie expiry (72 hours), not ASP.NET session cookie expiry
+        const actualExpiration = calculateMinCookieExpiration(filteredCookies);
         
         // Calculate cookie expiry timestamp in UTC (expiryUTC)
         // All expiry calculations use UTC timestamps
@@ -357,7 +412,9 @@ async function saveCookies(userId, cookies) {
         } else {
             const saveResult = await cacheLayer.set(key, JSON.stringify(cookieData), ttl);
             if (saveResult) {
-                console.log(`✅ Saved ${cookies.length} cookies to Redis for ${userId} (TTL: ${Math.round(ttl / 60)} minutes)`);
+                const accountCookie = filteredCookies.find(c => c.name === '__ACCOUNT');
+                const accountInfo = accountCookie ? ` (__ACCOUNT cookie saved)` : ` (⚠️ no __ACCOUNT cookie!)`;
+                console.log(`✅ Saved ${filteredCookies.length} cookie(s) to Redis for ${userId} (TTL: ${Math.round(ttl / 60)} minutes)${accountInfo}`);
             } else {
                 console.warn(`⚠️ Failed to save cookies to Redis for ${userId} - Redis may not be available`);
             }
@@ -505,9 +562,11 @@ async function saveLastVerified(userId) {
  * @returns {Promise<Array>} Array of cookie objects
  */
 async function loginAndSaveCookies(phone, password, userId) {
-    console.log(`🔐 Logging in to get fresh cookies for ${userId}...`);
+    const timestamp = new Date().toISOString();
+    console.log(`🔐 [${timestamp}] Logging in to get fresh cookies for ${userId}...`);
     
     const { loginViaHttp, loginToAlfa } = require('./alfaLogin');
+    const { solveCaptcha, isCaptchaServiceAvailable } = require('./captchaService');
     let context = null;
     let page = null;
 
@@ -536,14 +595,33 @@ async function loginAndSaveCookies(phone, password, userId) {
             }
         }
         
-        if (httpResult.fallback) {
-            // HTTP login failed or CAPTCHA detected, fallback to Puppeteer
-            console.log(`🔄 [Fast Login] HTTP login failed, falling back to Puppeteer...`);
-        } else {
-            throw new Error('HTTP login failed without fallback option');
+        // HTTP login failed or CAPTCHA detected
+        const needsCaptcha = httpResult.needsCaptcha === true;
+        const fallbackReason = needsCaptcha ? 'CAPTCHA detected' : 'HTTP login failed';
+        
+        // Try CAPTCHA service first (if available)
+        if (needsCaptcha && isCaptchaServiceAvailable()) {
+            console.log(`🔧 [LoginFallback] Attempting CAPTCHA solving service for admin ${userId} (${phone})...`);
+            try {
+                const captchaResult = await solveCaptcha(userId, phone, null, { httpResult });
+                if (captchaResult.success && captchaResult.cookies) {
+                    console.log(`✅ [LoginFallback] CAPTCHA solved successfully via service`);
+                    await saveCookies(userId, captchaResult.cookies);
+                    await saveLastVerified(userId);
+                    return captchaResult.cookies;
+                }
+                console.log(`⚠️ [LoginFallback] CAPTCHA service failed, falling back to Puppeteer`);
+            } catch (captchaError) {
+                console.warn(`⚠️ [LoginFallback] CAPTCHA service error: ${captchaError.message}, falling back to Puppeteer`);
+            }
         }
         
         // Fallback to Puppeteer (for CAPTCHA or if HTTP fails)
+        // TODO: Remove Puppeteer fallback once captchaService.js is fully implemented and tested
+        const timestamp2 = new Date().toISOString();
+        console.log(`⚠️ [LoginFallback] [${timestamp2}] Puppeteer triggered for admin ${userId} (${phone}) - Reason: ${fallbackReason}`);
+        console.log(`   TODO: Remove Puppeteer once captchaService.js is implemented`);
+        
         const contextData = await browserPool.getOrCreateContext();
         context = contextData.context;
         page = contextData.page;
@@ -566,7 +644,9 @@ async function loginAndSaveCookies(phone, password, userId) {
         await saveCookies(userId, cookies);
         await saveLastVerified(userId);
 
-        console.log(`✅ Login successful via Puppeteer, saved ${cookies.length} cookies`);
+        const timestamp3 = new Date().toISOString();
+        console.log(`✅ [LoginFallback] [${timestamp3}] Login successful via Puppeteer for admin ${userId} (${phone}), saved ${cookies.length} cookies`);
+        console.log(`   TODO: Remove Puppeteer once captchaService.js is fully implemented`);
         return cookies;
     } catch (error) {
         console.error(`❌ Login failed for ${userId}:`, error.message);
@@ -704,6 +784,7 @@ module.exports = {
     hasRefreshLock,
     getCookieExpiry,
     getNextRefresh,
-    storeNextRefresh
+    storeNextRefresh,
+    filterCookies // Export for testing
 };
 
