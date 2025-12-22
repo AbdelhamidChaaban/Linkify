@@ -107,8 +107,8 @@ class ActionsManager {
             // Get API base URL
             const apiBaseURL = window.AEFA_API_URL || 'http://localhost:3000';
             
-            // Fetch action logs
-            const response = await fetch(`${apiBaseURL}/api/actionLogs?actionFilter=${this.actionFilter}&limit=500`, {
+            // Fetch action logs with date filter for better performance
+            const response = await fetch(`${apiBaseURL}/api/actionLogs?actionFilter=${this.actionFilter}&dateFilter=${this.dateFilter}&limit=500`, {
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${token}`,

@@ -71,15 +71,56 @@ body {
 .nav-brand img {
     height: 60px;
     width: auto;
+    object-fit: contain;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: auto;
+    display: block;
+    transform: scale(1.5);
+    transform-origin: center;
 }
 
 .nav-brand h1 {
+    display: none;
+}
+
+.nav-brand-text {
     font-size: 1.5rem;
-    font-weight: 600;
-    background: linear-gradient(135deg, #3a0a4e, #8b5cf6);
+    font-weight: 700;
+    background: linear-gradient(135deg, #8b5cf6 0%, #3a0a4e 50%, #8b5cf6 100%);
+    background-size: 200% auto;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    animation: gradientFlow 3s ease infinite;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    position: relative;
+    filter: drop-shadow(0 2px 4px rgba(139, 92, 246, 0.3));
+    transition: all 0.3s ease;
+}
+
+@keyframes gradientFlow {
+    0%, 100% {
+        background-position: 0% center;
+    }
+    50% {
+        background-position: 100% center;
+    }
+}
+
+.nav-brand:hover .nav-brand-text {
+    filter: drop-shadow(0 4px 8px rgba(139, 92, 246, 0.5));
+    transform: scale(1.02);
+}
+
+html.light-mode .nav-brand-text,
+body.light-mode .nav-brand-text {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 2px 4px rgba(139, 92, 246, 0.2));
 }
 
 .nav-links {
@@ -514,24 +555,56 @@ body.light-mode .insights-section p {
 .mobile-sidebar-logo img {
     height: 52px;
     width: auto;
+    object-fit: contain;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: auto;
     filter: drop-shadow(0 4px 8px rgba(139, 92, 246, 0.3));
+    transform: scale(1.5);
+    transform-origin: center;
     transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .mobile-sidebar:hover .mobile-sidebar-logo img {
-    transform: scale(1.05) rotate(-2deg);
+    transform: scale(1.575) rotate(-2deg);
 }
 
 .mobile-sidebar-logo h1 {
+    display: none;
+}
+
+.mobile-sidebar-brand-text {
     font-size: 1.3rem;
     font-weight: 700;
     background: linear-gradient(135deg, var(--sidebar-primary) 0%, var(--sidebar-secondary) 50%, #a78bfa 100%);
+    background-size: 200% auto;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
-    background-size: 200% auto;
     animation: gradientShift 3s ease infinite;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
     filter: drop-shadow(0 2px 4px rgba(139, 92, 246, 0.2));
+    transition: all 0.3s ease;
+}
+
+@keyframes gradientShift {
+    0%, 100% {
+        background-position: 0% center;
+    }
+    50% {
+        background-position: 100% center;
+    }
+}
+
+.mobile-sidebar:hover .mobile-sidebar-brand-text {
+    filter: drop-shadow(0 4px 8px rgba(139, 92, 246, 0.4));
+    transform: scale(1.02);
+}
+
+@media (max-width: 768px) {
+    .mobile-sidebar-brand-text {
+        font-size: 1.1rem;
+    }
 }
 
 @keyframes gradientShift {
@@ -1070,10 +1143,7 @@ body.light-mode .mobile-sidebar-avatar-wrapper:hover {
     
     .mobile-sidebar-logo img {
         height: 48px;
-    }
-    
-    .mobile-sidebar-logo h1 {
-        font-size: 1.2rem;
+        transform: scale(1.5);
     }
     
     .mobile-sidebar-nav a {

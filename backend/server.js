@@ -38,7 +38,6 @@ const cors = require('cors');
 
 // Load services - Use API-first approach
 const { fetchAlfaData } = require('./services/alfaServiceApiFirst');
-const browserPool = require('./services/browserPool');
 const cacheLayer = require('./services/cacheLayer');
 const scheduledRefresh = require('./services/scheduledRefresh');
 const cookieRefreshWorker = require('./services/cookieRefreshWorker');
@@ -104,11 +103,6 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
         timestamp: new Date().toISOString(),
-        browserPool: {
-            // TODO: Remove Puppeteer health check once captchaService.js replaces login fallback
-            initialized: browserPool.isInitialized(),
-            activeContexts: browserPool.getActiveContextCount()
-        },
         cache: {
             enabled: cacheLayer.isAvailable(),
             ttl: cacheLayer.getTTL(),
@@ -725,10 +719,6 @@ async function startServer() {
             console.log(`Backend running on port ${PORT}`);
         });
         
-        // Defer heavy Puppeteer tasks - do not launch immediately at startup
-        // Browser pool will be initialized lazily when first needed
-        console.log('ℹ️ Browser pool will be initialized on first use (deferred for faster startup)');
-        
         // Start scheduled refresh service (non-blocking)
         console.log('🔧 Initializing scheduled refresh service...');
         scheduledRefresh.startScheduledRefresh();
@@ -769,8 +759,6 @@ async function gracefulShutdown(signal) {
             console.warn('⚠️ Error closing queues:', queueError.message);
         }
         
-        // Close browser pool
-        await browserPool.shutdown();
         console.log('✅ Graceful shutdown complete');
         process.exit(0);
     } catch (error) {
@@ -786,7 +774,6 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 // Handle uncaught exceptions
 process.on('uncaughtException', async (error) => {
     console.error('❌ Uncaught Exception:', error);
-    await browserPool.shutdown();
     process.exit(1);
 });
 

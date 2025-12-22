@@ -1,7 +1,7 @@
 {
   "name": "linkify-backend",
   "version": "1.0.0",
-  "description": "Backend service for Linkify Alfa automation. TODO: Remove puppeteer, puppeteer-extra, puppeteer-extra-plugin-stealth once captchaService.js is fully implemented.",
+  "description": "Backend service for Linkify Alfa automation. API-only backend with 2Captcha integration.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -25,10 +25,7 @@
     "firebase-admin": "^13.6.0",
     "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.3",
-    "node-cron": "^4.2.1",
-    "puppeteer": "^24.0.0",
-    "puppeteer-extra": "^3.3.4",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "node-cron": "^4.2.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.4",
