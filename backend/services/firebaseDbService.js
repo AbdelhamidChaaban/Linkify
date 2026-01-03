@@ -1014,9 +1014,38 @@ async function logAction(userId, adminId, adminName, adminPhone, action, subscri
 async function getActionLogs(userId, options = {}) {
   const {
     actionFilter = 'all',
+    dateFilter = 'all',
     limitCount = 100,
     startAfter = null
   } = options;
+  
+  // Calculate minimum timestamp based on date filter
+  let minTimestamp = null;
+  if (dateFilter !== 'all') {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    switch (dateFilter) {
+      case 'today':
+        minTimestamp = todayStart;
+        break;
+      case 'yesterday':
+        const yesterdayStart = new Date(todayStart);
+        yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+        minTimestamp = yesterdayStart;
+        break;
+      case '7days':
+        const sevenDaysAgo = new Date(now);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        minTimestamp = sevenDaysAgo;
+        break;
+      case '30days':
+        const thirtyDaysAgo = new Date(now);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        minTimestamp = thirtyDaysAgo;
+        break;
+    }
+  }
   
   // Check if Firebase is disabled
   if (process.env.DISABLE_FIREBASE === 'true') {
@@ -1028,9 +1057,15 @@ async function getActionLogs(userId, options = {}) {
     const adminDbInstance = initializeAdminDb();
     if (adminDbInstance) {
       try {
+        const admin = require('firebase-admin');
         // Query using composite index: action, userId, timestamp
         // When using composite indexes, where clauses should match index order
         let query = adminDbInstance.collection('actionLogs');
+        
+        // Add date filter if specified (filter by timestamp >= minTimestamp)
+        if (minTimestamp) {
+          query = query.where('timestamp', '>=', admin.firestore.Timestamp.fromDate(minTimestamp));
+        }
         
         // Build query based on filter - match index field order (action, userId, timestamp)
         if (actionFilter !== 'all') {
@@ -1041,10 +1076,28 @@ async function getActionLogs(userId, options = {}) {
         query = query.limit(limitCount);
         
         const querySnapshot = await query.get();
-        const logs = [];
+        let logs = [];
         
         querySnapshot.forEach((doc) => {
           const data = doc.data();
+          // Handle 'yesterday' filter in memory (needs upper bound check)
+          if (dateFilter === 'yesterday') {
+            const logTimestamp = data.timestamp || data.createdAt;
+            let logDate;
+            if (logTimestamp && logTimestamp.toDate) {
+              logDate = logTimestamp.toDate();
+            } else if (typeof logTimestamp === 'string') {
+              logDate = new Date(logTimestamp);
+            } else {
+              logDate = new Date();
+            }
+            const todayStart = new Date();
+            todayStart.setHours(0, 0, 0, 0);
+            if (logDate >= todayStart) {
+              return; // Skip logs from today
+            }
+          }
+          
           logs.push({
             id: doc.id,
             ...data,
@@ -1053,7 +1106,7 @@ async function getActionLogs(userId, options = {}) {
           });
         });
         
-        console.log(`✅ Retrieved ${logs.length} action log(s) for user ${userId} (filter: ${actionFilter}) using Admin SDK with composite index`);
+        console.log(`✅ Retrieved ${logs.length} action log(s) for user ${userId} (actionFilter: ${actionFilter}, dateFilter: ${dateFilter}) using Admin SDK with composite index`);
         return logs;
       } catch (indexError) {
         // If index error, use simpler query and sort in memory
@@ -1062,22 +1115,51 @@ async function getActionLogs(userId, options = {}) {
           console.log('ℹ️ Using fallback query for action logs (composite index not required, but recommended for better performance)');
           
           let simpleQuery = adminDbInstance.collection('actionLogs')
-            .where('userId', '==', userId)
-            .limit(limitCount * 2); // Get more to account for filtering
+            .where('userId', '==', userId);
+          
+          // Add date filter if specified
+          if (minTimestamp) {
+            const admin = require('firebase-admin');
+            simpleQuery = simpleQuery.where('timestamp', '>=', admin.firestore.Timestamp.fromDate(minTimestamp));
+          }
+          
+          // Get more documents to account for filtering
+          simpleQuery = simpleQuery.limit(limitCount * 3);
           
           const querySnapshot = await simpleQuery.get();
           let logs = [];
           
           querySnapshot.forEach((doc) => {
             const data = doc.data();
+            
             // Filter by action type in memory if needed
-            if (actionFilter === 'all' || data.action === actionFilter) {
-              logs.push({
-                id: doc.id,
-                ...data,
-                timestamp: data.timestamp || (data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : (typeof data.createdAt === 'string' ? data.createdAt : new Date().toISOString()))
-              });
+            if (actionFilter !== 'all' && data.action !== actionFilter) {
+              return; // Skip this document
             }
+            
+            // Handle 'yesterday' filter in memory (needs upper bound check)
+            if (dateFilter === 'yesterday') {
+              const logTimestamp = data.timestamp || data.createdAt;
+              let logDate;
+              if (logTimestamp && logTimestamp.toDate) {
+                logDate = logTimestamp.toDate();
+              } else if (typeof logTimestamp === 'string') {
+                logDate = new Date(logTimestamp);
+              } else {
+                logDate = new Date();
+              }
+              const todayStart = new Date();
+              todayStart.setHours(0, 0, 0, 0);
+              if (logDate >= todayStart) {
+                return; // Skip logs from today
+              }
+            }
+            
+            logs.push({
+              id: doc.id,
+              ...data,
+              timestamp: data.timestamp || (data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : (typeof data.createdAt === 'string' ? data.createdAt : new Date().toISOString()))
+            });
           });
           
           // Sort by timestamp descending in memory
@@ -1090,7 +1172,7 @@ async function getActionLogs(userId, options = {}) {
           // Limit after sorting
           logs = logs.slice(0, limitCount);
           
-          console.log(`✅ Retrieved ${logs.length} action log(s) using Admin SDK fallback (sorted in memory)`);
+          console.log(`✅ Retrieved ${logs.length} action log(s) using Admin SDK fallback (actionFilter: ${actionFilter}, dateFilter: ${dateFilter}, sorted in memory)`);
           return logs;
         }
         throw indexError; // Re-throw if it's not an index error
@@ -1106,11 +1188,19 @@ async function getActionLogs(userId, options = {}) {
     
     // Build query conditions array
     const conditions = [
-      where('userId', '==', userId),
-      orderBy('timestamp', 'desc')
+      where('userId', '==', userId)
     ];
     
+    // Add date filter if specified
+    if (minTimestamp) {
+      const { Timestamp } = require('firebase/firestore');
+      conditions.push(where('timestamp', '>=', Timestamp.fromDate(minTimestamp)));
+    }
+    
+    conditions.push(orderBy('timestamp', 'desc'));
+    
     // Add action filter if not 'all'
+    // Note: This may require a composite index when combined with date filter
     if (actionFilter !== 'all') {
       conditions.push(where('action', '==', actionFilter));
     }

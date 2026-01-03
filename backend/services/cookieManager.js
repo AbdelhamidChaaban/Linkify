@@ -568,8 +568,8 @@ async function loginAndSaveCookies(phone, password, userId) {
     const { solveCaptcha, isCaptchaServiceAvailable } = require('./captchaService');
 
     try {
-        // OPTIMIZATION: Try fast HTTP login first (2-5s vs 10-20s with Puppeteer)
-        console.log(`⚡ [Fast Login] Attempting HTTP-based login first...`);
+        // HTTP-based login with 2Captcha support
+        console.log(`⚡ [Login] Attempting HTTP-based login...`);
         const httpResult = await loginViaHttp(phone, password, userId);
         
         if (httpResult.success && httpResult.cookies && httpResult.cookies.length > 0) {
@@ -590,6 +590,16 @@ async function loginAndSaveCookies(phone, password, userId) {
                 console.log(`✅ Login successful via HTTP, saved ${httpResult.cookies.length} cookies`);
                 return httpResult.cookies;
             }
+            
+            // HTTP login succeeded and has __ACCOUNT cookie!
+            console.log(`✅ [Login] HTTP login successful! Saving ${httpResult.cookies.length} cookies (including __ACCOUNT)...`);
+            
+            // Save all cookies to Redis
+            await saveCookies(userId, httpResult.cookies);
+            await saveLastVerified(userId);
+            
+            console.log(`✅ Login successful via HTTP, saved ${httpResult.cookies.length} cookies`);
+            return httpResult.cookies;
         }
         
         // HTTP login failed or CAPTCHA detected

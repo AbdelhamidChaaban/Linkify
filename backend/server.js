@@ -747,10 +747,6 @@ async function startServer() {
             console.log(`Backend running on port ${PORT}`);
         });
         
-        // Defer heavy Puppeteer tasks - do not launch immediately at startup
-        // Browser pool will be initialized lazily when first needed
-        console.log('ℹ️ Browser pool will be initialized on first use (deferred for faster startup)');
-        
         // Start scheduled refresh service (non-blocking)
         console.log('🔧 Initializing scheduled refresh service...');
         scheduledRefresh.startScheduledRefresh();

@@ -66,10 +66,10 @@ router.delete('/actionLogs/:logId', authenticateJWT, async (req, res) => {
 router.get('/actionLogs', authenticateJWT, async (req, res) => {
     try {
         console.log('📋 [ActionLogs] Request received:', req.query);
-        const { actionFilter = 'all', limit: limitCount = 100 } = req.query;
+        const { actionFilter = 'all', limit: limitCount = 100, dateFilter = 'all' } = req.query;
         const userId = req.userId;
         
-        console.log('📋 [ActionLogs] UserId:', userId, 'ActionFilter:', actionFilter);
+        console.log('📋 [ActionLogs] UserId:', userId, 'ActionFilter:', actionFilter, 'DateFilter:', dateFilter);
         
         if (!userId) {
             console.warn('⚠️ [ActionLogs] No userId found in request');
@@ -81,6 +81,7 @@ router.get('/actionLogs', authenticateJWT, async (req, res) => {
         
         const logs = await getActionLogs(userId, {
             actionFilter,
+            dateFilter,
             limitCount: parseInt(limitCount, 10)
         });
         

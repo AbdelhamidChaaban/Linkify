@@ -21,19 +21,14 @@ const db = firebase.firestore();
 // Configure Firestore settings for better performance and resilience
 // Note: Using compat version syntax
 try {
-    // Set cache settings first (always available in compat version)
-    if (db.settings) {
-        db.settings({
-            cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED,
-            // Increase timeout for slow connections
-            // Note: Compat version may not support all settings, but we try
-        });
-    }
-    
-    // Enable offline persistence (caches data locally)
+    // Enable offline persistence for proper offline support and data caching
+    // Note: This will show a deprecation warning about enableIndexedDbPersistence(),
+    // but it's harmless and necessary for offline functionality. The warning indicates
+    // that Firebase will migrate to FirestoreSettings.cache in future versions, but
+    // the compat SDK doesn't support the new API yet. The functionality works correctly.
     if (db.enablePersistence) {
         db.enablePersistence({
-            synchronizeTabs: true
+            synchronizeTabs: false  // Set to false to avoid multi-tab persistence warning
         }).catch((err) => {
             if (err.code === 'failed-precondition') {
                 // Multiple tabs open, persistence can only be enabled in one tab at a time
@@ -46,6 +41,15 @@ try {
             }
         });
     }
+    
+    // Note: Removed db.settings() call to avoid "overriding original host" warning.
+    // Firebase uses default cache settings which are sufficient for most use cases.
+    // If you need unlimited cache, uncomment below (will show host override warning):
+    // if (db.settings) {
+    //     db.settings({
+    //         cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED
+    //     });
+    // }
 } catch (error) {
     console.warn('⚠️ Could not configure Firestore settings:', error.message);
 }
