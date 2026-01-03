@@ -241,8 +241,69 @@ body.light-mode .search-clear:hover {
     border-bottom: 2px solid rgba(58, 10, 78, 0.4);
 }
 
-.admins-table th:first-child {
-    width: 50px;
+.admins-table th.status-indicator-col {
+    width: 60px;
+    text-align: center;
+}
+
+.admins-table .status-indicator-cell {
+    text-align: center;
+    padding: 1rem 0.5rem !important;
+}
+
+.admins-table .status-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: help;
+    transition: all 0.2s ease;
+}
+
+.admins-table .status-indicator svg {
+    width: 18px;
+    height: 18px;
+    stroke-width: 2.5;
+}
+
+.admins-table .status-indicator.status-active {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+}
+
+body:not(.light-mode) .admins-table .status-indicator.status-active {
+    background: rgba(16, 185, 129, 0.25);
+    color: #34d399;
+}
+
+.admins-table .status-indicator.status-active:hover {
+    background: rgba(16, 185, 129, 0.25);
+    transform: scale(1.1);
+}
+
+body:not(.light-mode) .admins-table .status-indicator.status-active:hover {
+    background: rgba(16, 185, 129, 0.35);
+}
+
+.admins-table .status-indicator.status-inactive {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+body:not(.light-mode) .admins-table .status-indicator.status-inactive {
+    background: rgba(239, 68, 68, 0.25);
+    color: #f87171;
+}
+
+.admins-table .status-indicator.status-inactive:hover {
+    background: rgba(239, 68, 68, 0.25);
+    transform: scale(1.1);
+}
+
+body:not(.light-mode) .admins-table .status-indicator.status-inactive:hover {
+    background: rgba(239, 68, 68, 0.35);
 }
 
 .admins-table th:last-child {

@@ -213,7 +213,16 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
         const { phone: adminPhone, password: adminPassword, cookies } = await getAdminCredentialsAndCookies(adminId, req.userId);
         
         // Clean subscriber number (8 digits)
-        const cleanSubscriberNumber = subscriberNumber.replace(/\D/g, '').substring(0, 8);
+        let cleanSubscriberNumber = subscriberNumber.replace(/\D/g, '');
+        if (cleanSubscriberNumber.length === 11 && cleanSubscriberNumber.startsWith('961')) {
+            cleanSubscriberNumber = cleanSubscriberNumber.substring(3);
+        }
+        // Auto-fix: If 7 digits, prepend '0' to make it 8 digits
+        if (cleanSubscriberNumber.length === 7) {
+            cleanSubscriberNumber = '0' + cleanSubscriberNumber;
+            console.log(`ℹ️ [AddSubscriber] Auto-corrected 7-digit number to 8 digits: ${cleanSubscriberNumber}`);
+        }
+        cleanSubscriberNumber = cleanSubscriberNumber.substring(0, 8);
         if (cleanSubscriberNumber.length !== 8) {
             return res.status(400).json(createErrorResponse('Subscriber number must be 8 digits'));
         }
@@ -467,6 +476,11 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
         if (cleanSubscriberNumber.length === 11 && cleanSubscriberNumber.startsWith('961')) {
             cleanSubscriberNumber = cleanSubscriberNumber.substring(3);
         }
+        // Auto-fix: If 7 digits, prepend '0' to make it 8 digits
+        if (cleanSubscriberNumber.length === 7) {
+            cleanSubscriberNumber = '0' + cleanSubscriberNumber;
+            console.log(`ℹ️ [RemoveSubscriber] Auto-corrected 7-digit number to 8 digits: ${cleanSubscriberNumber}`);
+        }
         if (cleanSubscriberNumber.length !== 8) {
             return res.status(400).json(createErrorResponse('Subscriber number must be 8 digits'));
         }
@@ -631,7 +645,19 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                     }
                     
                     // Clean the phone number for comparison
-                    const cleanCardPhone = cardPhone ? cardPhone.replace(/^961/, '').replace(/\D/g, '').substring(0, 8) : '';
+                    let cleanCardPhone = cardPhone ? cardPhone.replace(/^961/, '').replace(/\D/g, '') : '';
+                    // Normalize: Ensure 8 digits (pad with leading zero if 7 digits)
+                    if (cleanCardPhone.length === 7) {
+                        cleanCardPhone = '0' + cleanCardPhone;
+                    }
+                    cleanCardPhone = cleanCardPhone.substring(0, 8);
+                    
+                    // Normalize cleanSubscriberNumber for comparison (should already be 8 digits, but ensure)
+                    let normalizedSubscriberNumber = cleanSubscriberNumber.replace(/\D/g, '');
+                    if (normalizedSubscriberNumber.length === 7) {
+                        normalizedSubscriberNumber = '0' + normalizedSubscriberNumber;
+                    }
+                    normalizedSubscriberNumber = normalizedSubscriberNumber.substring(0, 8);
                     
                     // Debug: Log card structure if phone not found
                     if (!cardPhone || cardPhone.length < 8) {
@@ -645,11 +671,17 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                         foundPhones.push(`(could not extract phone from card ${i})`);
                     }
                     
-                    // Match phone with or without 961 prefix
-                    if (cleanCardPhone === cleanSubscriberNumber || 
-                        cardPhone.replace(/\D/g, '') === cleanSubscriberNumber ||
-                        cardPhone.replace(/\D/g, '').includes(cleanSubscriberNumber) ||
-                        cleanSubscriberNumber.includes(cleanCardPhone)) {
+                    // Match phone with normalized comparison (handles leading zero differences)
+                    // Compare both with and without leading zeros to handle format mismatches
+                    const cardPhoneWithoutZero = cleanCardPhone.replace(/^0+/, '');
+                    const subscriberWithoutZero = normalizedSubscriberNumber.replace(/^0+/, '');
+                    
+                    if (cleanCardPhone === normalizedSubscriberNumber || 
+                        cardPhoneWithoutZero === subscriberWithoutZero ||
+                        cardPhone.replace(/\D/g, '').replace(/^961/, '') === normalizedSubscriberNumber ||
+                        cardPhone.replace(/\D/g, '').replace(/^961/, '').replace(/^0+/, '') === subscriberWithoutZero ||
+                        normalizedSubscriberNumber.includes(cleanCardPhone.replace(/^0+/, '')) ||
+                        cleanCardPhone.replace(/^0+/, '').includes(subscriberWithoutZero)) {
                         
                         // Find delete link in this card - try multiple selectors
                         // The delete link has class="remove" and href="/en/account/manage-services/ushare-delete?number=..."
@@ -667,7 +699,16 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                         
                         if (deleteLink.length > 0) {
                             deleteLinkHref = deleteLink.attr('href');
-                            console.log(`✅ [Delete] Found matching subscriber card: ${cardPhone} (clean: ${cleanCardPhone}) -> ${deleteLinkHref}`);
+                            // Extract pending status from the actual delete link (preserve what Alfa shows)
+                            const pendingMatch = deleteLinkHref.match(/pending=([^&]*)/i);
+                            const actualPendingStatus = pendingMatch ? pendingMatch[1] : null;
+                            console.log(`✅ [Delete] Found matching subscriber card: ${cardPhone} (clean: ${cleanCardPhone}) -> ${deleteLinkHref} (pending=${actualPendingStatus || 'not specified'})`);
+                            
+                            // Store the actual pending status to use it instead of overriding
+                            if (actualPendingStatus) {
+                                deleteLinkHref = deleteLinkHref.replace(/pending=[^&]*/i, `pending=${actualPendingStatus}`);
+                            }
+                            
                             return false; // Break the loop
                         } else {
                             console.warn(`⚠️ [Delete] Found subscriber card for ${cardPhone} but no delete link found`);
@@ -793,18 +834,22 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                 }
                 
                 // Ensure pending parameter is set correctly in the delete URL
-                // Alfa uses pending=True or pending=False in the delete link
-                const isPendingSubscriber = pending === 'true' || pending === true;
-                if (confirmationUrl.includes('pending=')) {
-                    // URL already has pending parameter, ensure it matches
-                    confirmationUrl = confirmationUrl.replace(/pending=[^&]*/i, `pending=${isPendingSubscriber ? 'True' : 'False'}`);
-                } else {
-                    // Add pending parameter
+                // IMPORTANT: Use the pending status from the actual delete link on the card (Alfa's source of truth)
+                // Only override if the URL doesn't have a pending parameter at all
+                if (!confirmationUrl.includes('pending=')) {
+                    // URL doesn't have pending parameter, add it based on user request
+                    const isPendingSubscriber = pending === 'true' || pending === true;
                     const separator = confirmationUrl.includes('?') ? '&' : '?';
                     confirmationUrl = `${confirmationUrl}${separator}pending=${isPendingSubscriber ? 'True' : 'False'}`;
+                    console.log(`✅ [Delete] Added pending parameter to URL: ${confirmationUrl}`);
+                } else {
+                    // URL already has pending parameter from the card - use it as-is (this is what Alfa expects)
+                    const pendingMatch = confirmationUrl.match(/pending=([^&]*)/i);
+                    const actualPendingStatus = pendingMatch ? pendingMatch[1] : null;
+                    console.log(`✅ [Delete] Using pending status from card's delete link: ${actualPendingStatus || 'not found'}`);
                 }
                 
-                console.log(`✅ [Delete] Found delete link: ${confirmationUrl}`);
+                console.log(`✅ [Delete] Final delete URL: ${confirmationUrl}`);
                 
                 // Step 1: GET confirmation page
                 console.log(`🔍 [Delete] Step 1: Fetching confirmation page...`);
@@ -944,11 +989,24 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                 const verification = await fetchUshareHtml(adminPhone, freshCookies, false);
                 
                 if (verification.success && verification.data && verification.data.subscribers) {
-                    const subscriberStillExists = verification.data.subscribers.some(
-                        sub => sub.phoneNumber === cleanSubscriberNumber || 
-                               sub.fullPhoneNumber === cleanSubscriberNumber ||
-                               sub.fullPhoneNumber === `961${cleanSubscriberNumber}`
-                    );
+                    // Normalize subscriber number for comparison (handle leading zero differences)
+                    const normalizedNumber = cleanSubscriberNumber.replace(/^0+/, '');
+                    const normalizedWithZero = normalizedNumber.length === 7 ? '0' + normalizedNumber : normalizedNumber;
+                    
+                    const subscriberStillExists = verification.data.subscribers.some(sub => {
+                        const subPhone = (sub.phoneNumber || '').replace(/\D/g, '').replace(/^961/, '').replace(/^0+/, '');
+                        const subFullPhone = (sub.fullPhoneNumber || '').replace(/\D/g, '').replace(/^961/, '').replace(/^0+/, '');
+                        const searchNormalized = normalizedNumber;
+                        const searchWithZero = normalizedWithZero;
+                        
+                        return subPhone === searchNormalized || 
+                               subPhone === searchWithZero ||
+                               subFullPhone === searchNormalized ||
+                               subFullPhone === searchWithZero ||
+                               (sub.phoneNumber || '') === cleanSubscriberNumber ||
+                               (sub.fullPhoneNumber || '') === cleanSubscriberNumber ||
+                               (sub.fullPhoneNumber || '') === `961${cleanSubscriberNumber}`;
+                    });
                     
                     if (subscriberStillExists) {
                         console.warn(`⚠️ [Delete] Background verification: Subscriber ${cleanSubscriberNumber} still exists (may be pending removal)`);
@@ -981,6 +1039,10 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                 let cleanSubscriberNumber = subscriberNumber.replace(/\D/g, '');
                 if (cleanSubscriberNumber.length === 11 && cleanSubscriberNumber.startsWith('961')) {
                     cleanSubscriberNumber = cleanSubscriberNumber.substring(3);
+                }
+                // Auto-fix: If 7 digits, prepend '0' to make it 8 digits
+                if (cleanSubscriberNumber.length === 7) {
+                    cleanSubscriberNumber = '0' + cleanSubscriberNumber;
                 }
                 const adminData = await getAdminData(adminId).catch(() => null);
                 const adminPhone = adminData?.phone || '';
@@ -1025,6 +1087,11 @@ router.put('/editSubscriber', authenticateJWT, async (req, res) => {
         let cleanSubscriberNumber = subscriberNumber.replace(/\D/g, '');
         if (cleanSubscriberNumber.length === 11 && cleanSubscriberNumber.startsWith('961')) {
             cleanSubscriberNumber = cleanSubscriberNumber.substring(3);
+        }
+        // Auto-fix: If 7 digits, prepend '0' to make it 8 digits
+        if (cleanSubscriberNumber.length === 7) {
+            cleanSubscriberNumber = '0' + cleanSubscriberNumber;
+            console.log(`ℹ️ [EditSubscriber] Auto-corrected 7-digit number to 8 digits: ${cleanSubscriberNumber}`);
         }
         if (cleanSubscriberNumber.length !== 8) {
             return res.status(400).json(createErrorResponse('Subscriber number must be 8 digits'));

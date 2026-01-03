@@ -10,112 +10,135 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/auth/auth.css">
 </head>
-<body>
-    <div class="neural-background">
-        <div class="neural-node"></div>
-        <div class="neural-node"></div>
-        <div class="neural-node"></div>
-        <div class="neural-node"></div>
-        <div class="neural-node"></div>
-    </div>
-
-    <div class="login-container">
-        <div class="login-card">
-            <div class="ai-glow"></div>
-            
-            <div class="login-header">
-                <div class="ai-logo">
-                    <img src="/assets/logo1.png" alt="Linkify Logo">
+<body class="signup-page">
+    <div class="auth-split-container">
+        <!-- Left Panel: Welcome Section -->
+        <div class="auth-left-panel">
+            <div class="left-panel-background"></div>
+            <div class="left-panel-content">
+                <div class="welcome-logo-container">
+                    <img src="/assets/logo1.png" alt="Cell Spott Manage Logo" class="welcome-logo">
+                    <h1>Drive productivity and control with Cell Spott Manage.</h1>
                 </div>
-                <h1>Create Account</h1>
-                <p>Join Cell Spott Manage today</p>
             </div>
-            
-            <form class="login-form" id="signupForm" novalidate>
-                <div class="smart-field" data-field="name">
-                    <div class="field-background"></div>
-                    <input type="text" id="name" name="name" required autocomplete="name">
-                    <label for="name">Full Name</label>
-                    <div class="ai-indicator">
-                        <div class="ai-pulse"></div>
-                    </div>
-                    <div class="field-completion"></div>
-                    <span class="error-message" id="nameError"></span>
+        </div>
+
+        <!-- Right Panel: Signup Form -->
+        <div class="auth-right-panel">
+            <div class="form-wrapper">
+                <div class="form-header">
+                    <h2>Create your account</h2>
+                    <p>Already have an account? <a href="/auth/login.html">Sign in</a></p>
                 </div>
 
-                <div class="smart-field" data-field="email">
-                    <div class="field-background"></div>
-                    <input type="email" id="email" name="email" required autocomplete="email">
-                    <label for="email">Email Address</label>
-                    <div class="ai-indicator">
-                        <div class="ai-pulse"></div>
-                    </div>
-                    <div class="field-completion"></div>
-                    <span class="error-message" id="emailError"></span>
-                </div>
-
-                <div class="smart-field" data-field="phone">
-                    <div class="field-background"></div>
-                    <input type="tel" id="phone" name="phone" required autocomplete="tel">
-                    <label for="phone">Phone Number</label>
-                    <div class="ai-indicator">
-                        <div class="ai-pulse"></div>
-                    </div>
-                    <div class="field-completion"></div>
-                    <span class="error-message" id="phoneError"></span>
-                </div>
-
-                <div class="smart-field" data-field="password">
-                    <div class="field-background"></div>
-                    <input type="password" id="password" name="password" required autocomplete="new-password">
-                    <label for="password">Password</label>
-                    <button type="button" class="smart-toggle" id="passwordToggle" aria-label="Toggle password visibility">
-                        <svg class="toggle-show" width="18" height="18" viewBox="0 0 18 18" fill="none">
-                            <path d="M9 3.75c-3.15 0-5.85 1.89-7.02 4.72a.75.75 0 000 .56c1.17 2.83 3.87 4.72 7.02 4.72s5.85-1.89 7.02-4.72a.75.75 0 000-.56C14.85 5.64 12.15 3.75 9 3.75zM9 12a3 3 0 110-6 3 3 0 010 6z" fill="currentColor"/>
-                        </svg>
-                        <svg class="toggle-hide" width="18" height="18" viewBox="0 0 18 18" fill="none">
-                            <path d="M3.53 2.47a.75.75 0 00-1.06 1.06l11 11a.75.75 0 101.06-1.06l-2.82-2.82c.8-.67 1.5-1.49 2.04-2.42a.75.75 0 000-.56C12.58 4.84 10.89 3.75 9 3.75c-.69 0-1.36.1-2 .29L3.53 2.47zM7.974 5.847L10.126 8a1.5 1.5 0 01-2.126-2.126l-.026-.027z" fill="currentColor"/>
-                        </svg>
-                    </button>
-                    <div class="ai-indicator">
-                        <div class="ai-pulse"></div>
-                    </div>
-                    <div class="field-completion"></div>
-                    <span class="error-message" id="passwordError"></span>
-                </div>
-
-                <button type="submit" class="neural-button">
-                    <div class="button-bg"></div>
-                    <span class="button-text">Create Account</span>
-                    <div class="button-loader">
-                        <div class="neural-spinner">
-                            <div class="spinner-segment"></div>
-                            <div class="spinner-segment"></div>
-                            <div class="spinner-segment"></div>
+                <form class="signup-form-modern" id="signupForm" novalidate>
+                    <div class="form-field-modern">
+                        <div class="input-poda">
+                            <div class="input-glow"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-white"></div>
+                            <div class="input-border"></div>
+                            <div class="input-main">
+                                <div class="input-icon">
+                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <path d="M10 10C11.3807 10 12.5 8.88071 12.5 7.5C12.5 6.11929 11.3807 5 10 5C8.61929 5 7.5 6.11929 7.5 7.5C7.5 8.88071 8.61929 10 10 10Z" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M16.6667 17.5C16.6667 14.7386 13.6819 12.5 10 12.5C6.3181 12.5 3.33334 14.7386 3.33334 17.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    </svg>
+                                </div>
+                                <input type="text" id="name" name="name" required autocomplete="name" placeholder="Full Name" class="input-field">
+                            </div>
                         </div>
+                        <span class="error-message" id="nameError"></span>
                     </div>
-                    <div class="button-glow"></div>
-                </button>
-            </form>
 
-            <div class="signup-section">
-                <span>Already have an account? </span>
-                <a href="/auth/login.html" class="neural-signup">Sign in</a>
-            </div>
-
-            <div class="success-neural" id="successMessage">
-                <div class="success-core">
-                    <div class="success-rings">
-                        <div class="success-ring"></div>
-                        <div class="success-ring"></div>
-                        <div class="success-ring"></div>
+                    <div class="form-field-modern">
+                        <div class="input-poda">
+                            <div class="input-glow"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-white"></div>
+                            <div class="input-border"></div>
+                            <div class="input-main">
+                                <div class="input-icon">
+                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <path d="M3.33334 5.83333L9.07534 10.05C9.63567 10.4333 10.3643 10.4333 10.9247 10.05L16.6667 5.83333M4.16667 15.8333H15.8333C16.7538 15.8333 17.5 15.0871 17.5 14.1667V5.83333C17.5 4.91286 16.7538 4.16667 15.8333 4.16667H4.16667C3.24619 4.16667 2.5 4.91286 2.5 5.83333V14.1667C2.5 15.0871 3.24619 15.8333 4.16667 15.8333Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                                <input type="email" id="email" name="email" required autocomplete="email" placeholder="Email Address" class="input-field">
+                            </div>
+                        </div>
+                        <span class="error-message" id="emailError"></span>
                     </div>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                        <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
+
+                    <div class="form-field-modern">
+                        <div class="input-poda">
+                            <div class="input-glow"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-white"></div>
+                            <div class="input-border"></div>
+                            <div class="input-main">
+                                <div class="input-icon">
+                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <path d="M13.3333 2.5H6.66667C5.74619 2.5 5 3.24619 5 4.16667V15.8333C5 16.7538 5.74619 17.5 6.66667 17.5H13.3333C14.2538 17.5 15 16.7538 15 15.8333V4.16667C15 3.24619 14.2538 2.5 13.3333 2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M10 13.3333H10.0083" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                                <input type="tel" id="phone" name="phone" required autocomplete="tel" placeholder="Phone Number" class="input-field">
+                            </div>
+                        </div>
+                        <span class="error-message" id="phoneError"></span>
+                    </div>
+
+                    <div class="form-field-modern">
+                        <div class="input-poda">
+                            <div class="input-glow"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-white"></div>
+                            <div class="input-border"></div>
+                            <div class="input-main">
+                                <div class="input-icon">
+                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <path d="M15.8333 9.16667V7.5C15.8333 5.11929 13.8807 3.16667 11.5 3.16667H8.5C6.11929 3.16667 4.16667 5.11929 4.16667 7.5V9.16667M15.8333 9.16667H4.16667M15.8333 9.16667V14.1667C15.8333 15.0871 15.0871 15.8333 14.1667 15.8333H5.83333C4.91286 15.8333 4.16667 15.0871 4.16667 14.1667V9.16667M10 12.5H10.0083" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                                <input type="password" id="password" name="password" required autocomplete="new-password" placeholder="Password" class="input-field">
+                                <button type="button" class="show-password-btn" id="passwordToggle" aria-label="Show password">
+                                    <svg class="eye-icon" width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <path d="M10 3.75C6.85 3.75 4.15 5.64 2.98 8.47C2.9 8.66 2.9 8.87 2.98 9.06C4.15 11.89 6.85 13.78 10 13.78C13.15 13.78 15.85 11.89 17.02 9.06C17.1 8.87 17.1 8.66 17.02 8.47C15.85 5.64 13.15 3.75 10 3.75ZM10 12.5C7.93 12.5 6.25 10.82 6.25 8.75C6.25 6.68 7.93 5 10 5C12.07 5 13.75 6.68 13.75 8.75C13.75 10.82 12.07 12.5 10 12.5ZM10 6.25C8.76 6.25 7.75 7.26 7.75 8.5C7.75 9.74 8.76 10.75 10 10.75C11.24 10.75 12.25 9.74 12.25 8.5C12.25 7.26 11.24 6.25 10 6.25Z" fill="currentColor"/>
+                                    </svg>
+                                    <svg class="eye-off-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" style="display: none;">
+                                        <path d="M3.92 2.5L16.42 15L15.42 16L13.25 13.83C12.6 14.22 11.82 14.5 11 14.66V16.25H9V14.66C8.18 14.5 7.4 14.22 6.73 13.83L2.92 17.64L1.92 16.64L3.92 14.64C2.25 13.22 1.25 11.16 1.25 8.75C1.25 6.34 2.25 4.28 3.92 2.92L3.92 2.5ZM5.42 4L4.42 5C3.46 5.96 2.75 7.28 2.75 8.75C2.75 11.57 4.68 13.89 7.25 14.33L5.42 12.5C4.53 11.61 4 10.24 4 8.75C4 7.26 4.53 5.89 5.42 5L5.42 4ZM10 4.25C10.82 4.41 11.6 4.69 12.27 5.08L11.27 6.08C10.62 5.69 9.84 5.41 9 5.25V4.25H10ZM12.75 6.08L11.75 7.08C12.64 7.97 13.25 9.34 13.25 10.75C13.25 12.24 12.72 13.61 11.83 14.5L10.83 15.5C11.48 15.89 12.26 16.17 13 16.33V17.75H15V16.33C17.82 15.89 19.75 13.57 19.75 10.75C19.75 9.28 19.04 7.96 18.08 7L17.08 6L16.08 7L15.08 8L14.08 7L13.08 6L12.75 6.08Z" fill="currentColor"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        <span class="error-message" id="passwordError"></span>
+                    </div>
+
+                    <button type="submit" class="submit-button-modern">
+                        <span class="button-text">Create Account</span>
+                        <div class="button-loader">
+                            <div class="spinner"></div>
+                        </div>
+                    </button>
+                </form>
+
+                <div class="success-message-modern" id="successMessage">
+                    <div class="success-icon-modern">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                            <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h3>Account Created</h3>
+                    <p>Redirecting to login...</p>
                 </div>
-                <h3>Account Created</h3>
-                <p>Redirecting to login...</p>
             </div>
         </div>
     </div>
@@ -128,19 +151,7 @@
     <!-- Firebase Config -->
     <script src="/auth/firebase-config.js"></script>
     
-    <!-- Theme Loader -->
-    <script>
-        // Load theme preference from localStorage
-        document.addEventListener('DOMContentLoaded', () => {
-            const savedTheme = localStorage.getItem('theme');
-            if (savedTheme === 'light') {
-                document.body.classList.add('light-mode');
-            }
-        });
-    </script>
-    
     <!-- Signup Script -->
     <script src="/auth/signup.js"></script>
 </body>
 </html>
-

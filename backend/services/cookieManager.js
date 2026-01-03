@@ -1,6 +1,5 @@
 const cacheLayer = require('./cacheLayer');
-const { loginToAlfa } = require('./alfaLogin');
-const browserPool = require('./browserPool');
+const { loginViaHttp } = require('./alfaLogin');
 
 // Cookie TTL: 24 hours (matching session storage to prevent unnecessary logins)
 // Alfa cookies may be valid for longer, but we refresh them daily at 6:00 AM
@@ -565,10 +564,8 @@ async function loginAndSaveCookies(phone, password, userId) {
     const timestamp = new Date().toISOString();
     console.log(`🔐 [${timestamp}] Logging in to get fresh cookies for ${userId}...`);
     
-    const { loginViaHttp, loginToAlfa } = require('./alfaLogin');
+    const { loginViaHttp } = require('./alfaLogin');
     const { solveCaptcha, isCaptchaServiceAvailable } = require('./captchaService');
-    let context = null;
-    let page = null;
 
     try {
         // OPTIMIZATION: Try fast HTTP login first (2-5s vs 10-20s with Puppeteer)
@@ -580,7 +577,7 @@ async function loginAndSaveCookies(phone, password, userId) {
             const hasAccountCookie = httpResult.cookies.some(c => c.name === '__ACCOUNT');
             
             if (!hasAccountCookie) {
-                console.log(`⚠️ [Fast Login] HTTP login got ${httpResult.cookies.length} cookies but missing __ACCOUNT cookie, falling back to Puppeteer for complete session...`);
+                console.log(`⚠️ [Fast Login] HTTP login got ${httpResult.cookies.length} cookies but missing __ACCOUNT cookie, will retry...`);
                 httpResult.fallback = true; // Force fallback
             } else {
                 // HTTP login succeeded and has __ACCOUNT cookie!
@@ -610,56 +607,17 @@ async function loginAndSaveCookies(phone, password, userId) {
                     await saveLastVerified(userId);
                     return captchaResult.cookies;
                 }
-                console.log(`⚠️ [LoginFallback] CAPTCHA service failed, falling back to Puppeteer`);
+                console.log(`⚠️ [LoginFallback] CAPTCHA service failed`);
             } catch (captchaError) {
-                console.warn(`⚠️ [LoginFallback] CAPTCHA service error: ${captchaError.message}, falling back to Puppeteer`);
+                console.warn(`⚠️ [LoginFallback] CAPTCHA service error: ${captchaError.message}`);
             }
         }
         
-        // Fallback to Puppeteer (for CAPTCHA or if HTTP fails)
-        // TODO: Remove Puppeteer fallback once captchaService.js is fully implemented and tested
-        const timestamp2 = new Date().toISOString();
-        console.log(`⚠️ [LoginFallback] [${timestamp2}] Puppeteer triggered for admin ${userId} (${phone}) - Reason: ${fallbackReason}`);
-        console.log(`   TODO: Remove Puppeteer once captchaService.js is implemented`);
-        
-        const contextData = await browserPool.getOrCreateContext();
-        context = contextData.context;
-        page = contextData.page;
-
-        // Perform login with Puppeteer
-        const loginResult = await loginToAlfa(page, phone, password, userId);
-        
-        if (!loginResult.success) {
-            throw new Error('Login failed');
-        }
-
-        // Get cookies after login
-        const cookies = await page.cookies();
-        
-        if (!cookies || cookies.length === 0) {
-            throw new Error('No cookies received after login');
-        }
-
-        // Save all cookies to Redis (Alfa may use various cookies for authentication)
-        await saveCookies(userId, cookies);
-        await saveLastVerified(userId);
-
-        const timestamp3 = new Date().toISOString();
-        console.log(`✅ [LoginFallback] [${timestamp3}] Login successful via Puppeteer for admin ${userId} (${phone}), saved ${cookies.length} cookies`);
-        console.log(`   TODO: Remove Puppeteer once captchaService.js is fully implemented`);
-        return cookies;
+        // No fallback available - throw error
+        throw new Error(`Login failed: ${fallbackReason}. HTTP login failed and CAPTCHA service ${needsCaptcha ? 'unavailable or failed' : 'not needed'}`);
     } catch (error) {
         console.error(`❌ Login failed for ${userId}:`, error.message);
         throw error;
-    } finally {
-        // Clean up browser context
-        if (context) {
-            try {
-                await browserPool.closeContext(context);
-            } catch (closeError) {
-                console.warn('⚠️ Error closing context:', closeError.message);
-            }
-        }
     }
 }
 

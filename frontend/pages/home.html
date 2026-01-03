@@ -10,6 +10,11 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/shared/layout.css">
     <link rel="stylesheet" href="/pages/home.css">
+    <link rel="stylesheet" href="/shared/mobile-enhancements.css">
+    <link rel="stylesheet" href="/shared/ui-polish.css">
+    <link rel="stylesheet" href="/shared/notification-panel.css">
+    <!-- Global Error Handler - Must load early to catch errors -->
+    <script src="/shared/error-handler.js"></script>
     <!-- Theme Loader - Must run synchronously before page renders -->
     <script>
         (function() {
@@ -98,6 +103,23 @@
                     Actions
                 </a>
             </li>
+            <li>
+                <a href="/pages/flow-manager.html" class="mobile-nav-link" data-page="flow-manager">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                        <path d="M12 8v8M8 12h8"/>
+                    </svg>
+                    Flow Manager
+                </a>
+            </li>
+            <li>
+                <a href="/pages/profit-engine.html" class="mobile-nav-link" data-page="profit-engine">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                    Profit Engine
+                </a>
+            </li>
         </ul>
         
         <div class="mobile-sidebar-footer">
@@ -173,6 +195,19 @@
                         </svg>
                         Actions
                     </a></li>
+                    <li><a href="/pages/flow-manager.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                            <path d="M12 8v8M8 12h8"/>
+                        </svg>
+                        Flow Manager
+                    </a></li>
+                    <li><a href="/pages/profit-engine.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                        </svg>
+                        Profit Engine
+                    </a></li>
                 </ul>
             </div>
             <div class="nav-right">
@@ -181,6 +216,13 @@
                         <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
                         <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
                     </svg>
+                </button>
+                <button class="notification-toggle" id="notificationToggle" aria-label="Notifications">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                    </svg>
+                    <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
                 </button>
                 <div class="avatar-container">
                     <div class="avatar" id="userAvatar"></div>
@@ -266,6 +308,45 @@
         </div>
     </main>
     
+    <!-- Notification Panel -->
+    <div id="notificationPanel" class="notification-panel">
+        <div class="notification-panel-header">
+            <h2>Notifications</h2>
+            <button class="notification-panel-close" id="notificationPanelClose">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        
+        <div class="notification-panel-content">
+            <!-- Push Notification Toggle -->
+            <div class="notification-toggle-section">
+                <div class="notification-toggle-header">
+                    <span>Push Notifications</span>
+                    <div class="toggle-switch-container">
+                        <input type="checkbox" id="pushNotificationToggle" class="toggle-switch-input">
+                        <label for="pushNotificationToggle" class="toggle-switch-label">
+                            <span class="toggle-switch-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <p class="notification-toggle-description">Receive notifications about expiring admins and high consumption even when you're away</p>
+            </div>
+            
+            <!-- Notification List -->
+            <div class="notification-list-section">
+                <h3>Recent Notifications</h3>
+                <div id="notificationList" class="notification-list">
+                    <div class="notification-empty">No notifications yet</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Panel Overlay -->
+    <div id="notificationPanelOverlay" class="notification-panel-overlay"></div>
+    
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
@@ -274,8 +355,16 @@
     <!-- Firebase Config -->
     <script src="/auth/firebase-config.js"></script>
     
+    <!-- Block Status Check - Must run immediately after Firebase loads -->
+    <script src="/shared/auth-check.js"></script>
+    
     <!-- Navigation Script -->
     <script src="/shared/nav.js"></script>
+    <script src="/shared/ui-helpers.js"></script>
+    <script src="/shared/mobile-enhancements.js"></script>
+    
+    <!-- Push Notifications -->
+    <script src="/shared/push-notifications.js"></script>
     
     <!-- Home Page Script -->
     <script src="/pages/home.js"></script>

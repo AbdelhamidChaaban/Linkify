@@ -13,6 +13,12 @@
     <link rel="stylesheet" href="/pages/add-subscribers-modal.css">
     <link rel="stylesheet" href="/pages/edit-subscribers-modal.css">
     <link rel="stylesheet" href="/shared/notification.css">
+    <link rel="stylesheet" href="/shared/mobile-enhancements.css">
+    <link rel="stylesheet" href="/shared/ui-polish.css">
+    <link rel="stylesheet" href="/shared/mobile-scroll-fix.css">
+    <link rel="stylesheet" href="/shared/notification-panel.css">
+    <!-- Global Error Handler - Must load early to catch errors -->
+    <script src="/shared/error-handler.js"></script>
     <!-- Theme Loader - Must run synchronously before page renders -->
     <script>
         (function() {
@@ -101,6 +107,23 @@
                     Actions
                 </a>
             </li>
+            <li>
+                <a href="/pages/flow-manager.html" class="mobile-nav-link" data-page="flow-manager">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                        <path d="M12 8v8M8 12h8"/>
+                    </svg>
+                    Flow Manager
+                </a>
+            </li>
+            <li>
+                <a href="/pages/profit-engine.html" class="mobile-nav-link" data-page="profit-engine">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                    Profit Engine
+                </a>
+            </li>
         </ul>
         
         <div class="mobile-sidebar-footer">
@@ -175,6 +198,19 @@
                             <path d="M9 12l2 2 4-4"/>
                         </svg>
                         Actions
+                    </a></li>
+                    <li><a href="/pages/flow-manager.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                            <path d="M12 8v8M8 12h8"/>
+                        </svg>
+                        Flow Manager
+                    </a></li>
+                    <li><a href="/pages/profit-engine.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                        </svg>
+                        Profit Engine
                     </a></li>
                 </ul>
             </div>
@@ -370,9 +406,7 @@
                         <table class="subscribers-table" id="subscribersTable">
                             <thead>
                                 <tr>
-                                    <th class="checkbox-col">
-                                        <input type="checkbox" id="selectAll" class="row-checkbox">
-                                    </th>
+                                    <th class="status-indicator-col"></th>
                                     <th>Name</th>
                                     <th>Total Consumption</th>
                                     <th>Subscription Date</th>
@@ -459,6 +493,11 @@
                         </ol>
                     </nav>
                 </div>
+                <button class="add-subscribers-close" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
             </div>
             
             <form id="addSubscribersForm" class="add-subscribers-form">
@@ -581,11 +620,22 @@
     <!-- Firebase Config -->
     <script src="/auth/firebase-config.js"></script>
     
+    <!-- Block Status Check - Must run immediately after Firebase loads -->
+    <script src="/shared/auth-check.js"></script>
+    
     <!-- Notification System -->
     <script src="/shared/notification.js"></script>
     
     <!-- Navigation Script -->
     <script src="/shared/nav.js"></script>
+    
+    <!-- UI Helpers -->
+    <script src="/shared/ui-helpers.js"></script>
+    <!-- Mobile Enhancements -->
+    <script src="/shared/mobile-enhancements.js"></script>
+    
+    <!-- Push Notifications Script -->
+    <script src="/shared/push-notifications.js"></script>
     
     <!-- Insights Script -->
     <script src="/pages/insights.js"></script>

@@ -1,0 +1,54 @@
+/* Mobile Scroll Fix - Prevent page scrolling, allow only table scrolling */
+
+/* Insights page - prevent body/html scrolling on mobile */
+@media (max-width: 768px) {
+    html.insights-page,
+    body.insights-page {
+        overflow: hidden !important;
+        position: fixed !important;
+        width: 100% !important;
+        height: 100% !important;
+        height: 100dvh !important;
+        touch-action: none !important;
+        overscroll-behavior: none !important;
+    }
+    
+    /* Prevent main content from scrolling */
+    body.insights-page .main-content {
+        overflow: hidden !important;
+        touch-action: none !important;
+        overscroll-behavior: none !important;
+    }
+    
+    /* Prevent container from scrolling */
+    body.insights-page .container {
+        overflow: hidden !important;
+        touch-action: none !important;
+        overscroll-behavior: none !important;
+    }
+    
+    /* Prevent card container from scrolling */
+    body.insights-page .card-container {
+        overflow: hidden !important;
+        touch-action: none !important;
+        overscroll-behavior: none !important;
+    }
+    
+    /* Only allow table container to scroll */
+    body.insights-page .table-container {
+        touch-action: pan-y pan-x !important;
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior: contain !important;
+    }
+    
+    /* Prevent any other scrolling */
+    body.insights-page .page-header-section,
+    body.insights-page .filters-section,
+    body.insights-page .tabs-container {
+        touch-action: none !important;
+        flex-shrink: 0;
+    }
+}
+

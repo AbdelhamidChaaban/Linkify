@@ -6,7 +6,7 @@ class AIAssistantSignupForm {
         this.phoneInput = document.getElementById('phone');
         this.passwordInput = document.getElementById('password');
         this.passwordToggle = document.getElementById('passwordToggle');
-        this.submitButton = this.form.querySelector('.neural-button');
+        this.submitButton = this.form.querySelector('.submit-button-modern');
         this.successMessage = document.getElementById('successMessage');
         
         this.init();
@@ -15,7 +15,6 @@ class AIAssistantSignupForm {
     init() {
         this.bindEvents();
         this.setupPasswordToggle();
-        this.setupAIEffects();
     }
     
     bindEvents() {
@@ -28,39 +27,16 @@ class AIAssistantSignupForm {
         this.emailInput.addEventListener('input', () => this.clearError('email'));
         this.phoneInput.addEventListener('input', () => this.clearError('phone'));
         this.passwordInput.addEventListener('input', () => this.clearError('password'));
-        
-        // Add placeholder for label animations
-        this.nameInput.setAttribute('placeholder', ' ');
-        this.emailInput.setAttribute('placeholder', ' ');
-        this.phoneInput.setAttribute('placeholder', ' ');
-        this.passwordInput.setAttribute('placeholder', ' ');
     }
     
     setupPasswordToggle() {
-        this.passwordToggle.addEventListener('click', () => {
-            const type = this.passwordInput.type === 'password' ? 'text' : 'password';
-            this.passwordInput.type = type;
-            this.passwordToggle.classList.toggle('toggle-active', type === 'text');
-        });
-    }
-    
-    setupAIEffects() {
-        // Add neural connection effect on input focus
-        [this.nameInput, this.emailInput, this.phoneInput, this.passwordInput].forEach(input => {
-            input.addEventListener('focus', (e) => {
-                this.triggerNeuralEffect(e.target.closest('.smart-field'));
+        if (this.passwordToggle) {
+            this.passwordToggle.addEventListener('click', () => {
+                const type = this.passwordInput.type === 'password' ? 'text' : 'password';
+                this.passwordInput.type = type;
+                this.passwordToggle.classList.toggle('active', type === 'text');
             });
-        });
-    }
-    
-    triggerNeuralEffect(field) {
-        // Add subtle AI processing effect
-        const indicator = field.querySelector('.ai-indicator');
-        indicator.style.opacity = '1';
-        
-        setTimeout(() => {
-            indicator.style.opacity = '';
-        }, 2000);
+        }
     }
     
     validateName() {
@@ -101,13 +77,11 @@ class AIAssistantSignupForm {
     validatePhone() {
         const phone = this.phoneInput.value.trim();
         
-        // Just check if phone number is provided, accept any format
         if (!phone) {
             this.showError('phone', 'Phone number is required');
             return false;
         }
         
-        // Clear any errors if phone is provided
         this.clearError('phone');
         return true;
     }
@@ -128,25 +102,33 @@ class AIAssistantSignupForm {
         this.clearError('password');
         return true;
     }
-    
+
     showError(field, message) {
-        const smartField = document.getElementById(field).closest('.smart-field');
+        const formField = document.getElementById(field)?.closest('.form-field-modern');
         const errorElement = document.getElementById(`${field}Error`);
         
-        smartField.classList.add('error');
-        errorElement.textContent = message;
-        errorElement.classList.add('show');
+        if (formField) {
+            formField.classList.add('error');
+        }
+        if (errorElement) {
+            errorElement.textContent = message;
+            errorElement.classList.add('show');
+        }
     }
     
     clearError(field) {
-        const smartField = document.getElementById(field).closest('.smart-field');
+        const formField = document.getElementById(field)?.closest('.form-field-modern');
         const errorElement = document.getElementById(`${field}Error`);
         
-        smartField.classList.remove('error');
-        errorElement.classList.remove('show');
-        setTimeout(() => {
-            errorElement.textContent = '';
-        }, 200);
+        if (formField) {
+            formField.classList.remove('error');
+        }
+        if (errorElement) {
+            errorElement.classList.remove('show');
+            setTimeout(() => {
+                errorElement.textContent = '';
+            }, 200);
+        }
     }
     
     async handleSubmit(e) {
@@ -178,6 +160,8 @@ class AIAssistantSignupForm {
                 name: name,
                 email: email,
                 phone: phone,
+                adminCount: 0, // Initialize admin count
+                isApproved: false, // New users require owner approval
                 createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
@@ -212,23 +196,24 @@ class AIAssistantSignupForm {
     }
     
     showNeuralSuccess() {
-        // Hide form with neural transition
-        this.form.style.transform = 'scale(0.95)';
+        // Hide form with transition
         this.form.style.opacity = '0';
+        this.form.style.transform = 'translateY(-20px)';
+        this.form.style.transition = 'all 0.3s ease';
         
         setTimeout(() => {
             this.form.style.display = 'none';
-            document.querySelector('.signup-section').style.display = 'none';
             
-            // Show neural success
-            this.successMessage.classList.add('show');
+            // Show success message
+            if (this.successMessage) {
+                this.successMessage.classList.add('show');
+            }
             
         }, 300);
         
         // Redirect to login page after success
         setTimeout(() => {
-            // Use absolute path from root (server serves from frontend/)
-            window.location.href = '/index.html';
+            window.location.href = '/auth/login.html';
         }, 2500);
     }
 }
@@ -237,4 +222,3 @@ class AIAssistantSignupForm {
 document.addEventListener('DOMContentLoaded', () => {
     new AIAssistantSignupForm();
 });
-

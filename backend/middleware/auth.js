@@ -227,6 +227,50 @@ async function authenticateJWT(req, res, next) {
         // Attach user info to request
         req.user = user;
         req.userId = user.uid;
+        req.userEmail = user.email; // Also attach email for convenience
+        
+        // Check if user is blocked (only for Firebase users, not custom JWT)
+        if (user.firebase) {
+            try {
+                const admin = require('firebase-admin');
+                let adminDb = null;
+                
+                // Try to get existing Firebase Admin instance
+                if (admin.apps.length > 0) {
+                    adminDb = admin.firestore();
+                } else {
+                    // Initialize if not already done
+                    const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
+                        ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
+                        : null;
+                    if (serviceAccount) {
+                        admin.initializeApp({
+                            credential: admin.credential.cert(serviceAccount)
+                        });
+                        adminDb = admin.firestore();
+                    }
+                }
+                
+                if (adminDb) {
+                    const userDoc = await adminDb.collection('users').doc(user.uid).get();
+                    if (userDoc.exists) {
+                        const userData = userDoc.data();
+                        if (userData.isBlocked === true) {
+                            console.warn(`🚫 [Auth] Blocked user attempted to access: ${user.uid}`);
+                            return res.status(403).json({
+                                success: false,
+                                error: 'Account blocked',
+                                message: 'Your account has been blocked. Please contact support.'
+                            });
+                        }
+                    }
+                }
+            } catch (blockCheckError) {
+                // If block check fails, log but don't block the request (fail open for now)
+                // This prevents blocking legitimate users if there's a database issue
+                console.warn('⚠️ [Auth] Could not check user block status:', blockCheckError.message);
+            }
+        }
         
         next();
     } catch (error) {

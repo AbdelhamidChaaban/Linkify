@@ -39,6 +39,9 @@ body.light-mode .add-subscribers-modal-container {
 }
 
 .add-subscribers-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
     margin-bottom: 2rem;
 }
 
@@ -58,6 +61,29 @@ body.light-mode .add-subscribers-modal-container {
 
 body.light-mode .add-subscribers-title {
     color: #1e293b;
+}
+
+.add-subscribers-close {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+    transition: all 0.2s;
+}
+
+.add-subscribers-close:hover {
+    background: rgba(139, 92, 246, 0.1);
+    color: #8b5cf6;
+}
+
+.add-subscribers-close svg {
+    width: 1.5rem;
+    height: 1.5rem;
 }
 
 .add-subscribers-breadcrumbs {

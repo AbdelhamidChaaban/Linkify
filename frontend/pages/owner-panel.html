@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en" class="owner-panel-page">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cell Spott Manage - Owner Panel</title>
+    <link rel="icon" type="image/png" href="/assets/logo1.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/shared/layout.css">
+    <link rel="stylesheet" href="/pages/owner-panel.css">
+    <link rel="stylesheet" href="/shared/mobile-enhancements.css">
+    <link rel="stylesheet" href="/shared/ui-polish.css">
+    <link rel="stylesheet" href="/shared/notification.css">
+    <!-- Theme Loader -->
+    <script>
+        (function() {
+            try {
+                const savedTheme = localStorage.getItem('theme');
+                if (savedTheme === 'light') {
+                    document.documentElement.classList.add('light-mode');
+                }
+            } catch (e) {}
+        })();
+    </script>
+</head>
+<body class="owner-panel-page">
+    <script>
+        (function() {
+            if (document.documentElement.classList.contains('light-mode')) {
+                document.body.classList.add('light-mode');
+            }
+        })();
+    </script>
+    
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-left">
+                <a href="/pages/home.html" class="nav-brand" style="text-decoration: none;">
+                    <img src="/assets/logo1.png" alt="Linkify Logo">
+                    <h1>Cell Spott Manage / Owner Panel</h1>
+                </a>
+            </div>
+            <div class="nav-right">
+                <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                    </svg>
+                </button>
+                <div class="avatar-container">
+                    <div class="avatar" id="userAvatar"></div>
+                    <div class="avatar-dropdown" id="avatarDropdown">
+                        <a href="#" class="dropdown-item logout" id="logoutLink">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
+                            </svg>
+                            Logout
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <div>
+                    <h2>Users Management</h2>
+                    <p>Manage users, admin limits, and access controls</p>
+                </div>
+            </div>
+
+            <!-- Navigation Tabs -->
+            <div class="owner-tabs">
+                <button class="owner-tab active" data-tab="dashboard">
+                    Dashboard
+                </button>
+                <button class="owner-tab" data-tab="user-management">
+                    Users Management
+                </button>
+                <button class="owner-tab" data-tab="limitations">
+                    Limitations
+                </button>
+                <button class="owner-tab" data-tab="approvements">
+                    Approvements
+                </button>
+                <button class="owner-tab" data-tab="deletion">
+                    Deletion
+                </button>
+            </div>
+
+            <!-- Dashboard Tab Content -->
+            <div id="dashboardTab" class="owner-tab-content active">
+                <div class="dashboard-container">
+                    <!-- Metrics Cards -->
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-icon">👥</div>
+                            <div class="metric-content">
+                                <div class="metric-label">Total Users</div>
+                                <div class="metric-value" id="metricTotalUsers">-</div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon">✅</div>
+                            <div class="metric-content">
+                                <div class="metric-label">Active Users</div>
+                                <div class="metric-value" id="metricActiveUsers">-</div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon">🚫</div>
+                            <div class="metric-content">
+                                <div class="metric-label">Blocked Users</div>
+                                <div class="metric-value" id="metricBlockedUsers">-</div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon">⏳</div>
+                            <div class="metric-content">
+                                <div class="metric-label">Pending Approvals</div>
+                                <div class="metric-value" id="metricPendingApprovals">-</div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon">✓</div>
+                            <div class="metric-content">
+                                <div class="metric-label">Approved Users</div>
+                                <div class="metric-value" id="metricApprovedUsers">-</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Charts Section -->
+                    <div class="charts-grid">
+                        <div class="chart-card">
+                            <h3>User Status Distribution</h3>
+                            <div class="chart-container">
+                                <canvas id="statusChart" width="400" height="300"></canvas>
+                            </div>
+                        </div>
+                        <div class="chart-card">
+                            <h3>Recent Activity</h3>
+                            <div class="activity-list" id="activityList">
+                                <div class="activity-item">Loading activity...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- User Management Tab Content -->
+            <div id="userManagementTab" class="owner-tab-content">
+                <!-- Users Table -->
+                <div class="owner-table-container">
+                <div class="table-header">
+                    <h3>All Users <span class="row-count" id="usersRowCount"></span></h3>
+                    <div class="table-controls">
+                        <select id="usersStatusFilter" class="filter-select">
+                            <option value="all">All Status</option>
+                            <option value="active">Active</option>
+                            <option value="blocked">Blocked</option>
+                        </select>
+                        <div class="search-box">
+                            <input type="text" id="usersSearchInput" class="search-input" placeholder="Search by email, name, or phone...">
+                            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <path d="m21 21-4.35-4.35"></path>
+                            </svg>
+                        </div>
+                        <button class="btn-secondary btn-refresh" id="refreshUsersBtn" title="Refresh">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="table-wrapper">
+                    <table class="owner-table">
+                        <thead>
+                            <tr>
+                                <th>Email</th>
+                                <th>Name</th>
+                                <th>Phone</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th class="actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersTableBody">
+                            <tr>
+                                <td colspan="6" class="loading-state">
+                                    <div class="skeleton-loader">
+                                        <div class="skeleton-row"></div>
+                                        <div class="skeleton-row"></div>
+                                        <div class="skeleton-row"></div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                </div>
+            </div>
+
+            <!-- Limitations Tab Content -->
+            <div id="limitationsTab" class="owner-tab-content">
+                <div class="owner-table-container">
+                    <div class="table-header">
+                        <h3>Admin Limitations <span class="row-count" id="limitationsRowCount"></span></h3>
+                        <div class="table-controls">
+                            <div class="search-box">
+                                <input type="text" id="limitationsSearchInput" class="search-input" placeholder="Search by user name or email...">
+                                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <path d="m21 21-4.35-4.35"></path>
+                                </svg>
+                            </div>
+                            <button class="btn-primary btn-sync" id="syncAdminCountsBtnLimitations">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                                </svg>
+                                Sync Admin Counts
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="owner-table">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Admins</th>
+                                    <th>Admin Limit</th>
+                                </tr>
+                            </thead>
+                            <tbody id="limitationsTableBody">
+                                <tr>
+                                    <td colspan="3" class="loading-state">
+                                        <div class="skeleton-loader">
+                                            <div class="skeleton-row"></div>
+                                            <div class="skeleton-row"></div>
+                                            <div class="skeleton-row"></div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Approvements Tab Content -->
+            <div id="approvementsTab" class="owner-tab-content">
+                <div class="owner-table-container">
+                    <div class="table-header">
+                        <h3>Pending Approvals <span class="row-count" id="approvementsRowCount"></span></h3>
+                        <div class="table-controls">
+                            <div class="search-box">
+                                <input type="text" id="approvementsSearchInput" class="search-input" placeholder="Search by email, name, or phone...">
+                                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <path d="m21 21-4.35-4.35"></path>
+                                </svg>
+                            </div>
+                            <button class="btn-secondary btn-refresh" id="refreshApprovementsBtn" title="Refresh">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="owner-table">
+                            <thead>
+                                <tr>
+                                    <th>Email</th>
+                                    <th>Name</th>
+                                    <th>Phone</th>
+                                    <th>Created</th>
+                                    <th class="actions-col">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="approvementsTableBody">
+                                <tr>
+                                    <td colspan="5" class="loading-state">
+                                        <div class="skeleton-loader">
+                                            <div class="skeleton-row"></div>
+                                            <div class="skeleton-row"></div>
+                                            <div class="skeleton-row"></div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Deletion Tab Content -->
+            <div id="deletionTab" class="owner-tab-content">
+                <div class="owner-table-container">
+                    <div class="table-header">
+                        <h3>Approved Users <span class="row-count" id="deletionRowCount"></span></h3>
+                        <div class="table-controls">
+                            <div class="search-box">
+                                <input type="text" id="deletionSearchInput" class="search-input" placeholder="Search by email, name, or phone...">
+                                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <path d="m21 21-4.35-4.35"></path>
+                                </svg>
+                            </div>
+                            <button class="btn-secondary btn-refresh" id="refreshDeletionBtn" title="Refresh">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="owner-table">
+                            <thead>
+                                <tr>
+                                    <th>Email</th>
+                                    <th>Name</th>
+                                    <th>Phone</th>
+                                    <th>Created</th>
+                                    <th class="actions-col">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="deletionTableBody">
+                                <tr>
+                                    <td colspan="5" class="loading-state">
+                                        <div class="skeleton-loader">
+                                            <div class="skeleton-row"></div>
+                                            <div class="skeleton-row"></div>
+                                            <div class="skeleton-row"></div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Admin Limit Modal -->
+    <div id="adminLimitModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Set Admin Limit</h3>
+                <button class="modal-close" id="adminLimitModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>User: <strong id="adminLimitUserEmail"></strong></p>
+                <div class="form-field">
+                    <label for="adminLimitInput">Admin Limit</label>
+                    <input type="number" id="adminLimitInput" min="0" placeholder="Leave empty for unlimited">
+                    <small>Leave empty or set to 0 for unlimited admins</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" id="adminLimitCancel">Cancel</button>
+                <button type="button" class="btn-primary" id="adminLimitSave">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Details Modal -->
+    <div id="userDetailsModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>User Details</h3>
+                <button class="modal-close" id="userDetailsModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="userDetailsContent">
+                    <div class="loading-state">Loading user details...</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" id="userDetailsClose">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Modal -->
+    <div id="confirmModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content modal-small">
+            <div class="modal-header">
+                <h3 id="confirmModalTitle">Confirm Action</h3>
+                <button class="modal-close" id="confirmModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmModalMessage"></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" id="confirmModalCancel">Cancel</button>
+                <button type="button" class="btn-primary btn-danger" id="confirmModalConfirm">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/shared/notification.js"></script>
+    <script src="/pages/owner-panel.js"></script>
+    <script>
+        // Initialize theme toggle and avatar menu (owner panel doesn't need Firebase/nav.js)
+        document.addEventListener('DOMContentLoaded', () => {
+            // Theme toggle
+            const themeToggle = document.getElementById('themeToggle');
+            if (themeToggle) {
+                themeToggle.addEventListener('click', () => {
+                    const html = document.documentElement;
+                    const isLight = html.classList.toggle('light-mode');
+                    document.body.classList.toggle('light-mode', isLight);
+                    localStorage.setItem('theme', isLight ? 'light' : 'dark');
+                });
+            }
+            
+            // Update avatar (just show owner icon)
+            const avatar = document.getElementById('userAvatar');
+            if (avatar) {
+                avatar.textContent = '👑';
+                avatar.style.fontSize = '1.5rem';
+                
+                // Avatar dropdown toggle
+                const avatarDropdown = document.getElementById('avatarDropdown');
+                avatar.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    avatarDropdown?.classList.toggle('show');
+                });
+                
+                // Close dropdown when clicking outside
+                document.addEventListener('click', () => {
+                    avatarDropdown?.classList.remove('show');
+                });
+            }
+        });
+    </script>
+</body>
+</html>

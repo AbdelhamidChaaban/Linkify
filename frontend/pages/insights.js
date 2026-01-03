@@ -5,7 +5,7 @@ class InsightsManager {
         this.rowsPerPage = 25;
         this.subscribers = [];
         this.filteredSubscribers = [];
-        this.selectedRows = new Set();
+        // Removed selectedRows - using status indicators instead
         this.denseMode = false;
         // Default to 'all' to show all admins, but will be set from HTML on init
         this.activeTab = 'all';
@@ -1172,14 +1172,12 @@ class InsightsManager {
                 });
             }
             
-            // Use requestAnimationFrame for non-blocking operations
-            requestAnimationFrame(() => {
-                this.applyFilters();
-                this.updateTabCounts();
-                this.renderTable();
-                this.updatePagination();
-                this.updatePageInfo();
-            });
+            // Update immediately for better responsiveness (no animation delay)
+            this.applyFilters();
+            this.updateTabCounts();
+            this.renderTable();
+            this.updatePagination();
+            this.updatePageInfo();
         } catch (error) {
             console.error('Error processing subscribers:', error);
             this.subscribers = [];
@@ -1195,8 +1193,52 @@ class InsightsManager {
         if (tbody) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="12" style="text-align: center; padding: 3rem; color: #ef4444;">
-                        ${message}
+                    <td colspan="12" style="text-align: center; padding: 3rem;">
+                        ${window.UIHelpers ? window.UIHelpers.createEmptyState({
+                            icon: 'error',
+                            title: 'Error Loading Data',
+                            description: message
+                        }) : `<div style="color: #ef4444;">${message}</div>`}
+                    </td>
+                </tr>
+            `;
+        }
+    }
+    
+    showLoading() {
+        const tbody = document.getElementById('subscribersTableBody');
+        if (tbody && window.UIHelpers) {
+            tbody.innerHTML = window.UIHelpers.createSkeletonScreen('table', 5);
+        } else if (tbody) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="12" style="text-align: center; padding: 3rem;">
+                        <div class="loading-spinner" style="margin: 0 auto;"></div>
+                    </td>
+                </tr>
+            `;
+        }
+    }
+    
+    showEmptyState() {
+        const tbody = document.getElementById('subscribersTableBody');
+        if (tbody && window.UIHelpers) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="12" style="padding: 0;">
+                        ${window.UIHelpers.createEmptyState({
+                            icon: 'no-data',
+                            title: 'No Subscribers Found',
+                            description: 'There are no subscribers to display. Try adjusting your filters or add a new subscriber.'
+                        })}
+                    </td>
+                </tr>
+            `;
+        } else if (tbody) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="12" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No subscribers found
                     </td>
                 </tr>
             `;
@@ -1228,6 +1270,24 @@ class InsightsManager {
             console.error('Firebase initialization error:', error);
             this.showError('Error loading data. Please refresh the page.');
         });
+    }
+    
+    async forceRefresh() {
+        // Force refresh all subscribers data
+        console.log('🔄 [Insights] Force refresh triggered');
+        // Don't show loading state - keep existing data visible during refresh
+        // The real-time listener will update the table when data arrives
+        
+        try {
+            // Reload subscribers from Firebase
+            if (this.unsubscribe) {
+                this.unsubscribe();
+            }
+            await this.loadSubscribers();
+        } catch (error) {
+            console.error('❌ [Insights] Force refresh error:', error);
+            this.showError('Error refreshing data. Please try again.');
+        }
     }
     
     startCacheCleanup() {
@@ -1314,11 +1374,13 @@ class InsightsManager {
     
     showLoading() {
         const tbody = document.getElementById('subscribersTableBody');
-        if (tbody) {
+        if (tbody && window.UIHelpers) {
+            tbody.innerHTML = window.UIHelpers.createSkeletonScreen('table', 5);
+        } else if (tbody) {
             tbody.innerHTML = `
                 <tr>
                     <td colspan="12" style="text-align: center; padding: 3rem; color: #94a3b8;">
-                        <div style="display: inline-block; width: 40px; height: 40px; border: 4px solid rgba(58, 10, 78, 0.2); border-top-color: #3a0a4e; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                        <div class="loading-spinner" style="margin: 0 auto;"></div>
                         <p style="margin-top: 1rem;">Loading admins...</p>
                     </td>
                 </tr>
@@ -1399,21 +1461,6 @@ class InsightsManager {
         if (neededBtn) {
             neededBtn.addEventListener('click', () => {
                 console.log('Needed clicked');
-            });
-        }
-        
-        // Select all checkbox
-        const selectAll = document.getElementById('selectAll');
-        if (selectAll) {
-            selectAll.addEventListener('change', (e) => {
-                const checked = e.target.checked;
-                this.selectedRows.clear();
-                if (checked) {
-                    this.getCurrentPageSubscribers().forEach(sub => {
-                        this.selectedRows.add(sub.id);
-                    });
-                }
-                this.renderTable();
             });
         }
         
@@ -1542,17 +1589,53 @@ class InsightsManager {
             
             // Available Services filter - same logic as home page
             if (this.filters.availableServices) {
-                // TERM 1 & 2: Admin must have less than 3 total subscribers (active + removed "Out" subscribers)
-                // Count active subscribers
-                const activeSubscribersCount = sub.subscribersActiveCount || 0;
-                
-                // Count "Out" subscribers (removedActiveSubscribers) - these are counted in Alfa website logic
+                // Count subscribers by status (Active, Requested, Out)
+                const activeCount = sub.subscribersActiveCount || 0;
+                const requestedCount = sub.subscribersRequestedCount || 0;
                 const removedActiveSubscribers = sub.removedActiveSubscribers || [];
-                const removedSubscribersCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
+                const outCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
                 
-                // Total subscribers count (active + removed) must be < 3
-                // If admin has 2 active + 1 removed = 3 total, they should NOT be displayed
-                const totalSubscribersCount = activeSubscribersCount + removedSubscribersCount;
+                // NEW EXCLUSION LOGIC: Check if admin matches any of the 9 exclusion conditions
+                // 1. One active and two requested
+                if (activeCount === 1 && requestedCount === 2 && outCount === 0) {
+                    return false; // Exclude this admin
+                }
+                // 2. Three requested
+                if (activeCount === 0 && requestedCount === 3 && outCount === 0) {
+                    return false; // Exclude this admin
+                }
+                // 3. Three active
+                if (activeCount === 3 && requestedCount === 0 && outCount === 0) {
+                    return false; // Exclude this admin
+                }
+                // 4. Two active and one requested
+                if (activeCount === 2 && requestedCount === 1 && outCount === 0) {
+                    return false; // Exclude this admin
+                }
+                // 5. One active and two out
+                if (activeCount === 1 && requestedCount === 0 && outCount === 2) {
+                    return false; // Exclude this admin
+                }
+                // 6. Two active and one out
+                if (activeCount === 2 && requestedCount === 0 && outCount === 1) {
+                    return false; // Exclude this admin
+                }
+                // 7. One active and one requested and one out
+                if (activeCount === 1 && requestedCount === 1 && outCount === 1) {
+                    return false; // Exclude this admin
+                }
+                // 8. Two requested and one out
+                if (activeCount === 0 && requestedCount === 2 && outCount === 1) {
+                    return false; // Exclude this admin
+                }
+                // 9. Two out and one requested
+                if (activeCount === 0 && requestedCount === 1 && outCount === 2) {
+                    return false; // Exclude this admin
+                }
+                
+                // TERM 1 & 2: Admin must have less than 3 total subscribers (active + removed "Out" subscribers)
+                // Total subscribers count (active + requested + removed) must be < 3
+                const totalSubscribersCount = activeCount + requestedCount + outCount;
                 if (totalSubscribersCount >= 3) {
                     return false; // Exclude this admin
                 }
@@ -1746,13 +1829,41 @@ class InsightsManager {
         }
         
         if (currentSubscribers.length === 0) {
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan="12" style="text-align: center; padding: 3rem; color: #94a3b8;">
-                        No subscribers found
-                    </td>
-                </tr>
-            `;
+            if (window.UIHelpers && this.filteredSubscribers.length === 0 && this.subscribers.length > 0) {
+                // No results after filtering
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="12" style="padding: 0;">
+                            ${window.UIHelpers.createEmptyState({
+                                icon: 'no-results',
+                                title: 'No Results Found',
+                                description: 'No subscribers match your current filters. Try adjusting your search or filter criteria.'
+                            })}
+                        </td>
+                    </tr>
+                `;
+            } else if (window.UIHelpers && this.subscribers.length === 0) {
+                // No subscribers at all
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="12" style="padding: 0;">
+                            ${window.UIHelpers.createEmptyState({
+                                icon: 'no-data',
+                                title: 'No Subscribers Found',
+                                description: 'There are no subscribers to display. Add a new subscriber to get started.'
+                            })}
+                        </td>
+                    </tr>
+                `;
+            } else {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="12" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No subscribers found
+                        </td>
+                    </tr>
+                `;
+            }
             return;
         }
         
@@ -1778,12 +1889,6 @@ class InsightsManager {
         
         // Bind event listeners to action buttons
         this.bindActionButtons();
-        
-        // Update select all checkbox
-        const selectAll = document.getElementById('selectAll');
-        const allSelected = currentSubscribers.every(sub => this.selectedRows.has(sub.id));
-        selectAll.checked = allSelected && currentSubscribers.length > 0;
-        selectAll.indeterminate = !allSelected && currentSubscribers.some(sub => this.selectedRows.has(sub.id));
     }
     
     renderRow(subscriber) {
@@ -2052,7 +2157,8 @@ class InsightsManager {
             adminProgressClass += ' warning';
         }
         
-        const isSelected = this.selectedRows.has(subscriber.id);
+        // Get status indicator based on admin status and expiration
+        const statusIndicator = this.getStatusIndicator(subscriber);
         
         // CRITICAL: Validate lastUpdate before formatting - ensure it belongs to this subscriber
         let lastUpdateToFormat = subscriber.lastUpdate;
@@ -2074,9 +2180,8 @@ class InsightsManager {
         
         return `
             <tr>
-                <td>
-                    <input type="checkbox" class="row-checkbox" ${isSelected ? 'checked' : ''} 
-                           data-subscriber-id="${subscriber.id}">
+                <td class="status-indicator-cell">
+                    ${statusIndicator}
                 </td>
                 <td>
                     <div>
@@ -2136,20 +2241,59 @@ class InsightsManager {
         `;
     }
     
-    bindActionButtons() {
-        // Row checkboxes
-        document.querySelectorAll('.row-checkbox[data-subscriber-id]').forEach(checkbox => {
-            checkbox.addEventListener('change', (e) => {
-                const id = e.target.dataset.subscriberId;
-                if (e.target.checked) {
-                    this.selectedRows.add(id);
-                } else {
-                    this.selectedRows.delete(id);
-                }
-                this.updateSelectAll();
-            });
-        });
+    getStatusIndicator(subscriber) {
+        // Determine status based on admin status and expiration days
+        const isInactive = subscriber.status === 'inactive';
+        const expirationDays = typeof subscriber.expiration === 'number' ? subscriber.expiration : parseInt(subscriber.expiration) || 0;
         
+        // Determine status color and icon
+        let statusClass = 'status-indicator';
+        let statusIcon = '';
+        let tooltipText = '';
+        
+        if (isInactive) {
+            // Red: Inactive
+            statusClass += ' status-inactive';
+            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="15" y1="9" x2="9" y2="15"/>
+                <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>`;
+            tooltipText = 'Inactive';
+        } else if (expirationDays <= 0) {
+            // Red: Expired
+            statusClass += ' status-expired';
+            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>`;
+            tooltipText = 'Expired';
+        } else if (expirationDays < 7) {
+            // Yellow: Expiring soon
+            statusClass += ' status-warning';
+            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>`;
+            tooltipText = `Expiring in ${expirationDays} day${expirationDays !== 1 ? 's' : ''}`;
+        } else {
+            // Green: Active and healthy
+            statusClass += ' status-active';
+            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>`;
+            tooltipText = `Active (${expirationDays} days remaining)`;
+        }
+        
+        return `<div class="${statusClass}" title="${tooltipText}">
+            ${statusIcon}
+        </div>`;
+    }
+    
+    bindActionButtons() {
         // View buttons
         document.querySelectorAll('.view-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -2170,13 +2314,7 @@ class InsightsManager {
         });
     }
     
-    updateSelectAll() {
-        const selectAll = document.getElementById('selectAll');
-        const currentSubscribers = this.getCurrentPageSubscribers();
-        const allSelected = currentSubscribers.every(sub => this.selectedRows.has(sub.id));
-        selectAll.checked = allSelected && currentSubscribers.length > 0;
-        selectAll.indeterminate = !allSelected && currentSubscribers.some(sub => this.selectedRows.has(sub.id));
-    }
+    // Removed updateSelectAll - using status indicators instead
     
     viewSubscriber(id) {
         const subscriber = this.subscribers.find(s => s.id === id);
@@ -2517,6 +2655,13 @@ class InsightsManager {
             existingModal.remove();
         }
         
+        // Calculate stats
+        const activeCount = data.subscribers.filter(s => s.status === 'Active' || !s.status).length;
+        const requestedCount = data.subscribers.filter(s => s.status === 'Requested').length;
+        // Count unique removed subscribers (removedActiveSubscribers are the source of truth)
+        const removedCount = (data.removedActiveSubscribers || []).length;
+        const totalSubscribers = data.subscribers.length + removedCount;
+        
         // Create modal
         const modal = document.createElement('div');
         modal.id = 'viewDetailsModal';
@@ -2525,23 +2670,79 @@ class InsightsManager {
             <div class="view-details-modal">
                 <div class="view-details-modal-inner">
                     <div class="view-details-modal-header">
-                        <h2>View Details</h2>
+                        <div class="modal-header-content">
+                            <div class="modal-header-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="8.5" cy="7" r="4"></circle>
+                                    <path d="M20 8v6M23 11h-6"></path>
+                                </svg>
+                            </div>
+                            <div class="modal-header-text">
+                                <h2>Consumption Details</h2>
+                                <p class="modal-header-subtitle">${data.adminPhone}</p>
+                            </div>
+                        </div>
+                        <button class="modal-close-btn" onclick="this.closest('.view-details-modal-overlay').remove()" aria-label="Close">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="view-details-modal-stats">
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-admin">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="12" cy="7" r="4"></circle>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-label">Admin Usage</div>
+                                <div class="stat-value">${data.adminConsumption.toFixed(2)} / ${data.adminLimit} GB</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-total">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="9" cy="7" r="4"></circle>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-label">Total Usage</div>
+                                <div class="stat-value">${data.totalConsumption.toFixed(2)} / ${data.totalLimit} GB</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon stat-icon-users">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="9" cy="7" r="4"></circle>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-label">Subscribers</div>
+                                <div class="stat-value">${totalSubscribers} <span class="stat-detail">${activeCount} active</span></div>
+                            </div>
+                        </div>
                     </div>
                     <div class="view-details-modal-body">
-                        <table class="view-details-table">
-                            <thead>
-                                <tr>
-                                    <th>User Number</th>
-                                    <th>Consumption</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${this.generateViewDetailsRows(data)}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="view-details-modal-footer">
-                        <button class="btn-cancel" onclick="this.closest('.view-details-modal-overlay').remove()">Cancel</button>
+                        <div class="table-wrapper">
+                            <table class="view-details-table">
+                                <thead>
+                                    <tr>
+                                        <th>User Number</th>
+                                        <th>Consumption</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${this.generateViewDetailsRows(data)}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2607,7 +2808,16 @@ class InsightsManager {
             const uniqueId = `copy-btn-${sub.phoneNumber.replace(/\s/g, '-')}`;
             
             if (isRemoved) {
-                // Show removed Active subscriber as "Out" in red with hashed styling
+                // Show removed Active subscriber as "Out" in red with hashed styling and progress bar
+                // Handle both field name formats: consumption/limit or usedConsumption/totalQuota
+                const removedConsumption = sub.consumption !== undefined ? sub.consumption : 
+                                          (sub.usedConsumption !== undefined ? sub.usedConsumption : 0);
+                const removedLimit = sub.limit !== undefined ? sub.limit :
+                                    (sub.quota !== undefined ? sub.quota :
+                                    (sub.totalQuota !== undefined ? sub.totalQuota : 0));
+                const removedPercent = removedLimit > 0 ? (removedConsumption / removedLimit) * 100 : 0;
+                const removedProgressClass = removedPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+                
                 rows += `
                     <tr style="opacity: 0.5; text-decoration: line-through;">
                         <td>
@@ -2619,8 +2829,11 @@ class InsightsManager {
                             </div>
                         </td>
                         <td>
-                            <div style="padding: 0.5rem 0; color: #64748b;">
-                                ${sub.consumption.toFixed(2)} / ${sub.limit} GB
+                            <div class="progress-container" style="opacity: 0.5;">
+                                <div class="progress-bar">
+                                    <div class="${removedProgressClass}" style="width: ${Math.min(100, removedPercent)}%"></div>
+                                </div>
+                                <div class="progress-text" style="color: #64748b;">${removedConsumption.toFixed(2)} / ${removedLimit} GB</div>
                             </div>
                         </td>
                     </tr>
@@ -2634,9 +2847,9 @@ class InsightsManager {
                 // Display status badge for both Active and Requested
                 let statusBadge = '';
                 if (status === 'Requested') {
-                    statusBadge = '<span style="color: #f59e0b; font-weight: bold; margin-left: 0.5rem;">[Requested]</span>';
+                    statusBadge = '<span style="color: #f59e0b; font-weight: bold; margin-left: 0.5rem;" class="status-badge status-requested">Requested</span>';
                 } else if (status === 'Active') {
-                    statusBadge = '<span style="color: #10b981; font-weight: bold; margin-left: 0.5rem;">[Active]</span>';
+                    statusBadge = '<span style="color: #10b981; font-weight: bold; margin-left: 0.5rem;" class="status-badge status-active">Active</span>';
                 }
                 
                 // Debug: Log subscriber data being rendered
@@ -2685,20 +2898,33 @@ class InsightsManager {
                     const whatsappNumber = fullPhoneNumber.startsWith('961') ? fullPhoneNumber : `961${fullPhoneNumber}`;
                     const uniqueId = `copy-btn-removed-${removedSub.phoneNumber.replace(/\s/g, '-')}`;
                     
-                    // Show removed Active subscriber as "Out" in red with hashed styling
+                    // Calculate progress for removed subscriber using last stored consumption from Firebase
+                    // Handle both field name formats: consumption/limit or usedConsumption/totalQuota (for backward compatibility)
+                    const removedConsumption = removedSub.consumption !== undefined ? removedSub.consumption : 
+                                              (removedSub.usedConsumption !== undefined ? removedSub.usedConsumption : 0);
+                    const removedLimit = removedSub.limit !== undefined ? removedSub.limit :
+                                        (removedSub.quota !== undefined ? removedSub.quota :
+                                        (removedSub.totalQuota !== undefined ? removedSub.totalQuota : 0));
+                    const removedPercent = removedLimit > 0 ? (removedConsumption / removedLimit) * 100 : 0;
+                    const removedProgressClass = removedPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+                    
+                    // Show removed Active subscriber as "Out" in red with hashed styling and progress bar
                     rows += `
                         <tr style="opacity: 0.5; text-decoration: line-through;">
                             <td>
                                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                                     <img src="/assets/wlogo.png" alt="WhatsApp" style="width: 18px; height: 18px; object-fit: contain;" />
                                     <span style="color: #ef4444;">${removedSub.phoneNumber}</span>
-                                    <span style="color: #ef4444; font-weight: bold;">Out</span>
+                                    <span style="color: #ef4444; font-weight: bold;" class="status-badge status-out">Out</span>
                                     <button onclick="navigator.clipboard.writeText('${removedSub.phoneNumber}').then(() => { const btn = document.getElementById('${uniqueId}'); if (btn) { const img = btn.querySelector('img'); if (img) { img.style.opacity = '0.5'; setTimeout(() => { img.style.opacity = '1'; }, 2000); } } })" id="${uniqueId}" style="background: rgba(100, 116, 139, 0.1); border: none; padding: 0.375rem; border-radius: 50%; cursor: pointer; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; margin-left: 0.5rem; transition: all 0.2s ease;" title="Copy phone number" onmouseover="this.style.background='rgba(100, 116, 139, 0.2)'" onmouseout="this.style.background='rgba(100, 116, 139, 0.1)'"><img src="/assets/copy.png" alt="Copy" style="width: 16px; height: 16px; object-fit: contain; transition: opacity 0.2s ease;" /></button>
                                 </div>
                             </td>
                             <td>
-                                <div style="padding: 0.5rem 0; color: #64748b;">
-                                    ${(removedSub.consumption || 0).toFixed(2)} / ${removedSub.limit || 0} GB
+                                <div class="progress-container" style="opacity: 0.5;">
+                                    <div class="progress-bar">
+                                        <div class="${removedProgressClass}" style="width: ${Math.min(100, removedPercent)}%"></div>
+                                    </div>
+                                    <div class="progress-text" style="color: #64748b;">${removedConsumption.toFixed(2)} / ${removedLimit} GB</div>
                                 </div>
                             </td>
                         </tr>
@@ -3770,6 +3996,18 @@ class InsightsManager {
     }
     
     bindEditSubscribersEvents() {
+        // Close button - ensure it works properly
+        const closeBtn = document.querySelector('.edit-subscribers-close');
+        if (closeBtn) {
+            // Remove onclick attribute and use event listener instead
+            closeBtn.removeAttribute('onclick');
+            closeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.closeEditSubscribersModal();
+            }, { capture: true });
+        }
+        
         // Remove subscriber button
         document.querySelectorAll('.edit-subscriber-remove-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -3949,6 +4187,17 @@ class InsightsManager {
         }
         
         this.populateAdminSelector(activeAdmins);
+        
+        // Bind close button
+        const closeBtn = modal?.querySelector('.admin-selector-close');
+        if (closeBtn) {
+            closeBtn.removeAttribute('onclick');
+            closeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.closeAdminSelector();
+            }, { capture: true });
+        }
         
         // Show the modal
         if (modal) {
@@ -4131,15 +4380,27 @@ class InsightsManager {
                     }
                 }
                 
-                // Process removals
-                for (const phone of removals) {
-                    try {
-                        await window.AlfaAPIService.removeSubscriber(adminId, phone, true);
-                        results.removals.push({ phone, success: true });
-                    } catch (error) {
-                        console.error(`❌ Failed to remove subscriber ${phone}:`, error);
-                        results.removals.push({ phone, success: false, error: error.message });
-                    }
+                // Process removals in parallel for better performance
+                // IMPORTANT: Start all deletion requests simultaneously, don't wait for one to finish before starting the next
+                if (removals.length > 0) {
+                    console.log(`🔄 [Delete] Starting ${removals.length} deletion(s) in parallel...`);
+                    // Create all promises immediately - they all start executing right away
+                    const removalPromises = removals.map((phone, index) => {
+                        console.log(`🚀 [Delete] Starting deletion ${index + 1}/${removals.length} for ${phone}`);
+                        // Return the promise directly - don't await here, let Promise.all handle it
+                        return window.AlfaAPIService.removeSubscriber(adminId, phone, true)
+                            .then(() => {
+                                console.log(`✅ [Delete] Completed deletion ${index + 1}/${removals.length} for ${phone}`);
+                                return { phone, success: true };
+                            })
+                            .catch((error) => {
+                                console.error(`❌ Failed to remove subscriber ${phone}:`, error);
+                                return { phone, success: false, error: error.message };
+                            });
+                    });
+                    // Wait for all deletions to complete (they run in parallel)
+                    results.removals = await Promise.all(removalPromises);
+                    console.log(`✅ [Delete] All ${removals.length} deletion(s) completed`);
                 }
                 
                 // Check if all operations succeeded
@@ -4271,6 +4532,17 @@ class InsightsManager {
                 e.preventDefault();
                 this.handleAddSubscribersSubmit();
             };
+        }
+        
+        // Bind close button
+        const closeBtn = document.querySelector('.add-subscribers-close');
+        if (closeBtn) {
+            closeBtn.removeAttribute('onclick');
+            closeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.closeAddSubscribersModal();
+            }, { capture: true });
         }
         
         // Close modal on overlay click
@@ -4416,12 +4688,53 @@ class InsightsManager {
             return false;
         }
         
-        // TERM 1 & 2: Admin must have less than 3 total subscribers (active + removed "Out" subscribers)
-        // This matches the logic in applyFilters() when availableServices filter is checked
-        const activeSubscribersCount = admin.subscribersActiveCount || 0;
+        // Count subscribers by status (Active, Requested, Out)
+        const activeCount = admin.subscribersActiveCount || 0;
+        const requestedCount = admin.subscribersRequestedCount || 0;
         const removedActiveSubscribers = admin.removedActiveSubscribers || [];
-        const removedSubscribersCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
-        const totalSubscribersCount = activeSubscribersCount + removedSubscribersCount;
+        const outCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
+        
+        // NEW EXCLUSION LOGIC: Check if admin matches any of the 9 exclusion conditions
+        // 1. One active and two requested
+        if (activeCount === 1 && requestedCount === 2 && outCount === 0) {
+            return false; // Exclude this admin
+        }
+        // 2. Three requested
+        if (activeCount === 0 && requestedCount === 3 && outCount === 0) {
+            return false; // Exclude this admin
+        }
+        // 3. Three active
+        if (activeCount === 3 && requestedCount === 0 && outCount === 0) {
+            return false; // Exclude this admin
+        }
+        // 4. Two active and one requested
+        if (activeCount === 2 && requestedCount === 1 && outCount === 0) {
+            return false; // Exclude this admin
+        }
+        // 5. One active and two out
+        if (activeCount === 1 && requestedCount === 0 && outCount === 2) {
+            return false; // Exclude this admin
+        }
+        // 6. Two active and one out
+        if (activeCount === 2 && requestedCount === 0 && outCount === 1) {
+            return false; // Exclude this admin
+        }
+        // 7. One active and one requested and one out
+        if (activeCount === 1 && requestedCount === 1 && outCount === 1) {
+            return false; // Exclude this admin
+        }
+        // 8. Two requested and one out
+        if (activeCount === 0 && requestedCount === 2 && outCount === 1) {
+            return false; // Exclude this admin
+        }
+        // 9. Two out and one requested
+        if (activeCount === 0 && requestedCount === 1 && outCount === 2) {
+            return false; // Exclude this admin
+        }
+        
+        // TERM 1 & 2: Admin must have less than 3 total subscribers (active + requested + removed "Out" subscribers)
+        // This matches the logic in applyFilters() when availableServices filter is checked
+        const totalSubscribersCount = activeCount + requestedCount + outCount;
         if (totalSubscribersCount >= 3) {
             return false; // Exclude this admin
         }
@@ -4510,6 +4823,17 @@ class InsightsManager {
                     const searchTerm = e.target.value.toLowerCase().trim();
                     this.filterAdminSelector(searchTerm, activeAdmins);
                 };
+            }
+            
+            // Bind close button
+            const closeBtn = modal.querySelector('.admin-selector-close');
+            if (closeBtn) {
+                closeBtn.removeAttribute('onclick');
+                closeBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.closeAdminSelector();
+                }, { capture: true });
             }
             
             // Close on overlay click
@@ -5032,8 +5356,8 @@ class InsightsManager {
 let insightsManager;
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-        insightsManager = new InsightsManager();
+        window.insightsManager = new InsightsManager();
     });
 } else {
-    insightsManager = new InsightsManager();
+    window.insightsManager = new InsightsManager();
 }

@@ -272,11 +272,11 @@ class NavigationManager {
             }
             
             // Redirect to login page (use absolute path)
-            window.location.href = '/index.html';
+            window.location.href = '/auth/login.html';
         } catch (error) {
             console.error('Logout error:', error);
             // Still redirect even if logout fails (use absolute path)
-            window.location.href = '/index.html';
+            window.location.href = '/auth/login.html';
         }
     }
 }

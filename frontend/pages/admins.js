@@ -5,7 +5,7 @@ class AdminsManager {
         this.admins = []; // Will be populated from Firebase/API
         this.filteredAdmins = []; // Filtered admins based on search
         this.searchQuery = ''; // Current search query
-        this.selectedRows = new Set();
+        // Removed selectedRows - using status indicators instead
         this.denseMode = false;
         this.modal = null;
         this.form = null;
@@ -19,6 +19,19 @@ class AdminsManager {
     getCurrentUserId() {
         if (typeof auth !== 'undefined' && auth && auth.currentUser) {
             return auth.currentUser.uid;
+        }
+        return null;
+    }
+    
+    // Get Firebase auth token for API calls
+    async getAuthToken() {
+        if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+            try {
+                return await auth.currentUser.getIdToken();
+            } catch (error) {
+                console.error('Error getting auth token:', error);
+                return null;
+            }
         }
         return null;
     }
@@ -114,12 +127,10 @@ class AdminsManager {
             // Apply search filter if there's a search query
             this.applySearchFilter();
             
-            // Use requestAnimationFrame for non-blocking render
-            requestAnimationFrame(() => {
-                this.renderTable();
-                this.updatePagination();
-                this.updatePageInfo();
-            });
+            // Update immediately for better responsiveness (no animation delay)
+            this.renderTable();
+            this.updatePagination();
+            this.updatePageInfo();
         } catch (error) {
             console.error('Error loading admins:', error);
             this.admins = [];
@@ -465,26 +476,40 @@ class AdminsManager {
                 adminData.password = password;
             }
             
+            // Get auth token for API call
+            const token = await this.getAuthToken();
+            if (!token) {
+                alert('⚠️ You must be logged in to create or edit admins.');
+                this.setLoading(false);
+                return;
+            }
+            
+            // Get API base URL
+            const apiBaseURL = window.AEFA_API_URL || window.location.origin;
+            
             if (this.editingAdminId) {
-                // CRITICAL: Verify ownership before updating
-                const adminToUpdate = this.admins.find(a => a.id === this.editingAdminId);
-                if (!adminToUpdate) {
-                    alert('Error: Admin not found.');
-                    this.setLoading(false);
-                    return;
+                // Update existing admin via API
+                const response = await fetch(`${apiBaseURL}/api/admins/${this.editingAdminId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        name: name,
+                        phone: phone,
+                        type: type,
+                        password: password, // Only included if not empty
+                        quota: quota,
+                        notUShare: notUShare
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (!result.success) {
+                    throw new Error(result.error || 'Failed to update admin');
                 }
-                
-                if (adminToUpdate.userId !== currentUserId) {
-                    alert('Error: You do not have permission to update this admin.');
-                    this.setLoading(false);
-                    return;
-                }
-                
-                // Ensure userId is preserved (not overwritten)
-                adminData.userId = currentUserId;
-                
-                // Update existing admin
-                await db.collection('admins').doc(this.editingAdminId).update(adminData);
                 
                 // Close modal and refresh list
                 this.closeModal();
@@ -492,10 +517,37 @@ class AdminsManager {
                 
                 alert(`Admin "${name}" has been updated successfully!`);
             } else {
-                // Create new admin
-                adminData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-                const docRef = await db.collection('admins').add(adminData);
-                const newAdminId = docRef.id;
+                // Create new admin via API (enforces admin limit)
+                const response = await fetch(`${apiBaseURL}/api/admins`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        name: name,
+                        phone: phone,
+                        type: type,
+                        password: password,
+                        quota: quota,
+                        notUShare: notUShare
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (!result.success) {
+                    // Check if it's an admin limit error
+                    if (response.status === 403 && result.error && result.error.includes('admin limit')) {
+                        alert(`❌ ${result.error}`);
+                    } else {
+                        throw new Error(result.error || 'Failed to create admin');
+                    }
+                    this.setLoading(false);
+                    return;
+                }
+                
+                const newAdminId = result.adminId;
                 
                 // Close modal first
                 this.closeModal();
@@ -545,12 +597,136 @@ class AdminsManager {
         }
     }
     
-    bindEvents() {
-        // Select all checkbox
-        document.getElementById('selectAll').addEventListener('change', (e) => {
-            this.selectAllRows(e.target.checked);
-        });
+    getStatusIndicator(admin) {
+        // Determine status using the same logic as insights.js
+        // RULE 1: Admin is active if ServiceNameValue contains "U-share Main"
+        // RULE 2 (EXCEPTION): Admin is active if ServiceNameValue is "Mobile Internet" AND ValidityDateValue has a valid date
+        // Otherwise, admin is inactive
+        let status = 'inactive'; // Default to inactive
+        const hasAlfaData = admin.alfaData && typeof admin.alfaData === 'object';
         
+        if (hasAlfaData && admin.alfaData.primaryData) {
+            try {
+                const apiData = admin.alfaData.primaryData;
+                
+                // Check ServiceInformationValue array
+                if (apiData.ServiceInformationValue && Array.isArray(apiData.ServiceInformationValue)) {
+                    for (const service of apiData.ServiceInformationValue) {
+                        if (service.ServiceNameValue) {
+                            const serviceName = String(service.ServiceNameValue).trim();
+                            
+                            // RULE 1: Check if ServiceNameValue is "U-share Main" (case-insensitive)
+                            if (serviceName.toLowerCase() === 'u-share main') {
+                                status = 'active';
+                                break;
+                            }
+                            
+                            // RULE 2 (EXCEPTION): Check if ServiceNameValue is "Mobile Internet" AND has valid ValidityDateValue
+                            if (serviceName.toLowerCase() === 'mobile internet') {
+                                // Check ServiceDetailsInformationValue for ValidityDateValue
+                                if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                    for (const details of service.ServiceDetailsInformationValue) {
+                                        const validityDate = details.ValidityDateValue;
+                                        // Check if ValidityDateValue exists and is not empty/null
+                                        if (validityDate && String(validityDate).trim() !== '' && String(validityDate).trim() !== 'null') {
+                                            // Check if it looks like a valid date (e.g., "22/11/2025")
+                                            const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+                                            if (datePattern.test(String(validityDate).trim())) {
+                                                status = 'active';
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (status === 'active') break;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (statusError) {
+                console.warn(`⚠️ Error checking status from primaryData for admin ${admin.id}:`, statusError);
+            }
+        }
+        
+        // Fallback: Also check apiResponses if primaryData not available
+        if (status === 'inactive' && hasAlfaData && admin.alfaData.apiResponses && Array.isArray(admin.alfaData.apiResponses)) {
+            const getConsumptionResponse = admin.alfaData.apiResponses.find(resp => 
+                resp.url && resp.url.includes('getconsumption')
+            );
+            if (getConsumptionResponse && getConsumptionResponse.data) {
+                try {
+                    const responseData = getConsumptionResponse.data;
+                    if (responseData.ServiceInformationValue && Array.isArray(responseData.ServiceInformationValue)) {
+                        for (const service of responseData.ServiceInformationValue) {
+                            if (service.ServiceNameValue) {
+                                const serviceName = String(service.ServiceNameValue).trim();
+                                
+                                // RULE 1: Check for "U-share Main"
+                                if (serviceName.toLowerCase() === 'u-share main') {
+                                    status = 'active';
+                                    break;
+                                }
+                                
+                                // RULE 2 (EXCEPTION): Check for "Mobile Internet" with valid ValidityDateValue
+                                if (serviceName.toLowerCase() === 'mobile internet') {
+                                    if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                        for (const details of service.ServiceDetailsInformationValue) {
+                                            const validityDate = details.ValidityDateValue;
+                                            if (validityDate && String(validityDate).trim() !== '' && String(validityDate).trim() !== 'null') {
+                                                const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
+                                                if (datePattern.test(String(validityDate).trim())) {
+                                                    status = 'active';
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if (status === 'active') break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // Ignore errors
+                }
+            }
+        }
+        
+        // Fallback: Check direct status field if alfaData check didn't work
+        if (status === 'inactive' && admin.status && String(admin.status).toLowerCase() === 'active') {
+            status = 'active';
+        }
+        
+        // Determine status color and icon
+        let statusClass = 'status-indicator';
+        let statusIcon = '';
+        let tooltipText = '';
+        
+        if (status === 'inactive') {
+            // Red: Inactive
+            statusClass += ' status-inactive';
+            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="15" y1="9" x2="9" y2="15"/>
+                <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>`;
+            tooltipText = 'Inactive';
+        } else {
+            // Green: Active
+            statusClass += ' status-active';
+            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>`;
+            tooltipText = 'Active';
+        }
+        
+        return `<div class="${statusClass}" title="${tooltipText}">
+            ${statusIcon}
+        </div>`;
+    }
+    
+    bindEvents() {
         // Search input
         const searchInput = document.getElementById('adminSearch');
         const searchClear = document.getElementById('searchClear');
@@ -681,9 +857,8 @@ class AdminsManager {
         
         tbody.innerHTML = pageAdmins.map(admin => `
             <tr>
-                <td>
-                    <input type="checkbox" class="row-checkbox" data-id="${admin.id}" 
-                           ${this.selectedRows.has(admin.id) ? 'checked' : ''}>
+                <td class="status-indicator-cell">
+                    ${this.getStatusIndicator(admin)}
                 </td>
                 <td>${admin.name}</td>
                 <td>${admin.phone}</td>
@@ -706,19 +881,6 @@ class AdminsManager {
             </tr>
         `).join('');
         
-        // Bind row checkbox events
-        tbody.querySelectorAll('.row-checkbox').forEach(checkbox => {
-            checkbox.addEventListener('change', (e) => {
-                const id = e.target.dataset.id;
-                if (e.target.checked) {
-                    this.selectedRows.add(id);
-                } else {
-                    this.selectedRows.delete(id);
-                }
-                this.updateSelectAll();
-            });
-        });
-        
         // Bind edit button events
         tbody.querySelectorAll('.action-btn.edit').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -738,29 +900,7 @@ class AdminsManager {
         });
     }
     
-    selectAllRows(checked) {
-        const startIndex = (this.currentPage - 1) * this.rowsPerPage;
-        const endIndex = startIndex + this.rowsPerPage;
-        const pageAdmins = this.filteredAdmins.slice(startIndex, endIndex);
-        
-        pageAdmins.forEach(admin => {
-            if (checked) {
-                this.selectedRows.add(admin.id);
-            } else {
-                this.selectedRows.delete(admin.id);
-            }
-        });
-        
-        this.renderTable();
-    }
-    
-    updateSelectAll() {
-        const startIndex = (this.currentPage - 1) * this.rowsPerPage;
-        const endIndex = startIndex + this.rowsPerPage;
-        const pageAdmins = this.admins.slice(startIndex, endIndex);
-        const allSelected = pageAdmins.length > 0 && pageAdmins.every(admin => this.selectedRows.has(admin.id));
-        document.getElementById('selectAll').checked = allSelected;
-    }
+    // Removed selectAllRows - using status indicators instead
     
     updatePagination() {
         const totalPages = Math.ceil(this.filteredAdmins.length / this.rowsPerPage);
@@ -790,13 +930,6 @@ class AdminsManager {
     }
     
     async deleteAdmin(id) {
-        // CRITICAL: Get current user ID and verify ownership
-        const currentUserId = this.getCurrentUserId();
-        if (!currentUserId) {
-            alert('Error: You must be logged in to delete admins.');
-            return;
-        }
-        
         const admin = this.admins.find(a => a.id === id);
         if (!admin) {
             console.error('Admin not found with id:', id);
@@ -804,29 +937,46 @@ class AdminsManager {
             return;
         }
         
-        // CRITICAL: Verify ownership before deleting
-        if (admin.userId !== currentUserId) {
-            alert('Error: You do not have permission to delete this admin.');
+        if (!confirm(`Are you sure you want to delete "${admin.name}"?`)) {
             return;
         }
         
-        if (confirm(`Are you sure you want to delete "${admin.name}"?`)) {
-            try {
-                await db.collection('admins').doc(id).delete();
-                await this.loadAdmins();
-                alert(`Admin "${admin.name}" has been deleted successfully!`);
-            } catch (error) {
-                console.error('Error deleting admin:', error);
-                let errorMessage = 'Failed to delete admin. Please try again.';
-                
-                if (error.code === 'permission-denied') {
-                    errorMessage = 'Permission denied. Please check your Firebase rules.';
-                } else if (error.message) {
-                    errorMessage = error.message;
-                }
-                
-                alert(errorMessage);
+        try {
+            // Get auth token for API call
+            const token = await this.getAuthToken();
+            if (!token) {
+                alert('⚠️ You must be logged in to delete admins.');
+                return;
             }
+            
+            // Get API base URL
+            const apiBaseURL = window.AEFA_API_URL || window.location.origin;
+            
+            // Delete admin via API (also updates adminCount)
+            const response = await fetch(`${apiBaseURL}/api/admins/${id}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
+            const result = await response.json();
+            
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to delete admin');
+            }
+            
+            await this.loadAdmins();
+            alert(`Admin "${admin.name}" has been deleted successfully!`);
+        } catch (error) {
+            console.error('Error deleting admin:', error);
+            let errorMessage = 'Failed to delete admin. Please try again.';
+            
+            if (error.message) {
+                errorMessage = error.message;
+            }
+            
+            alert(errorMessage);
         }
     }
     

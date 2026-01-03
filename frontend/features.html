@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Features - Cell Spott Manage</title>
+    <link rel="icon" type="image/png" href="/assets/logo1.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/landing.css">
+</head>
+<body>
+    <!-- Wave Background -->
+    <div class="wave-background">
+        <svg class="wave-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320" preserveAspectRatio="none">
+            <path fill="rgba(58, 10, 78, 0.3)" d="M0,96L48,112C96,128,192,160,288,160C384,160,480,128,576,112C672,96,768,96,864,112C960,128,1056,160,1152,160C1248,160,1344,128,1392,112L1440,96L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"></path>
+        </svg>
+        <svg class="wave-svg wave-svg-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320" preserveAspectRatio="none">
+            <path fill="rgba(139, 92, 246, 0.2)" d="M0,224L48,213.3C96,203,192,181,288,181.3C384,181,480,203,576,208C672,213,768,203,864,197.3C960,192,1056,192,1152,181.3C1248,171,1344,149,1392,138.7L1440,128L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"></path>
+        </svg>
+        <svg class="wave-svg wave-svg-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320" preserveAspectRatio="none">
+            <path fill="rgba(58, 10, 78, 0.15)" d="M0,160L48,154.7C96,149,192,139,288,138.7C384,139,480,149,576,165.3C672,181,768,203,864,197.3C960,192,1056,160,1152,154.7C1248,149,1344,171,1392,181.3L1440,192L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"></path>
+        </svg>
+    </div>
+
+    <!-- Navigation Bar -->
+    <nav class="landing-nav">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <img src="/assets/logo1.png" alt="Cell Spott Manage Logo">
+                <h1>Cell Spott Manage</h1>
+            </div>
+            <ul class="nav-links">
+                <li><a href="/about.html" class="nav-link">ABOUT</a></li>
+                <li><a href="/pricing.html" class="nav-link">PRICING</a></li>
+                <li><a href="/features.html" class="nav-link active">FEATURES</a></li>
+                <li><a href="/contact.html" class="nav-link">CONTACT</a></li>
+            </ul>
+            <a href="/auth/login.html" class="sign-in-btn">SIGN IN</a>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="landing-main features-main">
+        <div class="features-container">
+            <div class="features-header">
+                <h1 class="features-title">Features</h1>
+                <p class="features-subtitle">Powerful tools designed for efficiency and control</p>
+            </div>
+            
+            <div class="features-grid">
+                <div class="feature-card" data-feature="1">
+                    <div class="feature-icon-wrapper">
+                        <div class="feature-icon hexagon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 2L2 7v10l10 5 10-5V7L12 2z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <h3 class="feature-title">Fast Performance</h3>
+                    <p class="feature-description">Lightning-fast response times and seamless user experience across all devices.</p>
+                </div>
+
+                <div class="feature-divider"></div>
+
+                <div class="feature-card" data-feature="2">
+                    <div class="feature-icon-wrapper">
+                        <div class="feature-icon circle">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <path d="M12 6v6l4 2"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <h3 class="feature-title">Real-Time Monitoring</h3>
+                    <p class="feature-description">Track consumption patterns and expiration dates with instant updates and alerts.</p>
+                </div>
+
+                <div class="feature-divider"></div>
+
+                <div class="feature-card" data-feature="3">
+                    <div class="feature-icon-wrapper">
+                        <div class="feature-icon triangle">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 2L2 22h20L12 2z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <h3 class="feature-title">Smart Automation</h3>
+                    <p class="feature-description">Automate workflows and receive intelligent notifications to stay ahead.</p>
+                </div>
+
+                <div class="feature-divider"></div>
+
+                <div class="feature-card" data-feature="4">
+                    <div class="feature-icon-wrapper">
+                        <div class="feature-icon hexagon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <h3 class="feature-title">Secure & Reliable</h3>
+                    <p class="feature-description">Enterprise-grade security with encrypted data and reliable infrastructure.</p>
+                </div>
+
+                <div class="feature-divider"></div>
+
+                <div class="feature-card" data-feature="5">
+                    <div class="feature-icon-wrapper">
+                        <div class="feature-icon circle">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 3v18h18"/>
+                                <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <h3 class="feature-title">Advanced Analytics</h3>
+                    <p class="feature-description">Gain valuable insights with comprehensive analytics and detailed reporting.</p>
+                </div>
+            </div>
+        </div>
+    </main>
+</body>
+</html>
+

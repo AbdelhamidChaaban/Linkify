@@ -26,9 +26,11 @@
     "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.3",
     "node-cron": "^4.2.1",
+    "nodemailer": "^6.9.8",
     "puppeteer": "^24.0.0",
     "puppeteer-extra": "^3.3.4",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.4",

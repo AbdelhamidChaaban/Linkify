@@ -705,6 +705,61 @@ class HomeManager {
             const removedActiveSubscribers = data.removedActiveSubscribers || [];
             const removedSubscribersCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
             
+            // NEW EXCLUSION LOGIC: Count subscribers by status (Active, Requested, Out)
+            let activeCount = 0;
+            let requestedCount = 0;
+            let outCount = removedSubscribersCount; // Out subscribers come from removedActiveSubscribers
+            
+            // Count Active and Requested from secondarySubscribers
+            if (Array.isArray(activeSubscribers)) {
+                activeSubscribers.forEach(sub => {
+                    const status = sub.status || 'Active'; // Default to Active if status is missing
+                    if (status === 'Requested') {
+                        requestedCount++;
+                    } else {
+                        activeCount++; // Count as Active if status is 'Active' or missing/undefined
+                    }
+                });
+            }
+            
+            // Check if admin matches any of the exclusion conditions
+            // 1. One active and two requested
+            if (activeCount === 1 && requestedCount === 2 && outCount === 0) {
+                return; // Skip this admin
+            }
+            // 2. Three requested
+            if (activeCount === 0 && requestedCount === 3 && outCount === 0) {
+                return; // Skip this admin
+            }
+            // 3. Three active
+            if (activeCount === 3 && requestedCount === 0 && outCount === 0) {
+                return; // Skip this admin
+            }
+            // 4. Two active and one requested
+            if (activeCount === 2 && requestedCount === 1 && outCount === 0) {
+                return; // Skip this admin
+            }
+            // 5. One active and two out
+            if (activeCount === 1 && requestedCount === 0 && outCount === 2) {
+                return; // Skip this admin
+            }
+            // 6. Two active and one out
+            if (activeCount === 2 && requestedCount === 0 && outCount === 1) {
+                return; // Skip this admin
+            }
+            // 7. One active and one requested and one out
+            if (activeCount === 1 && requestedCount === 1 && outCount === 1) {
+                return; // Skip this admin
+            }
+            // 8. Two requested and one out
+            if (activeCount === 0 && requestedCount === 2 && outCount === 1) {
+                return; // Skip this admin
+            }
+            // 9. Two out and one requested
+            if (activeCount === 0 && requestedCount === 1 && outCount === 2) {
+                return; // Skip this admin
+            }
+            
             // Total subscribers count (active + removed) must be < 3
             // If admin has 2 active + 1 removed = 3 total, they should NOT be displayed
             const totalSubscribersCount = activeSubscribersCount + removedSubscribersCount;
@@ -1110,27 +1165,39 @@ class HomeManager {
                 <div class="view-details-modal-inner">
                     <div class="view-details-modal-header">
                         <h2>View Details - ${this.escapeHtml(subscriber.name)}</h2>
+                        <button class="modal-close-btn" onclick="this.closest('.view-details-modal-overlay').remove()" aria-label="Close">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
                     </div>
                     <div class="view-details-modal-body">
-                        <table class="view-details-table">
-                            <thead>
-                                <tr>
-                                    <th>User Number</th>
-                                    <th>Consumption</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${this.buildViewDetailsRows(viewData)}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="view-details-modal-footer">
-                        <button class="btn-cancel" onclick="this.closest('.view-details-modal-overlay').remove()">Close</button>
+                        <div class="table-wrapper">
+                            <table class="view-details-table">
+                                <thead>
+                                    <tr>
+                                        <th>User Number</th>
+                                        <th>Consumption</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${this.buildViewDetailsRows(viewData)}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
         `;
         document.body.appendChild(modal);
+
+        // Close button event listener
+        const closeBtn = modal.querySelector('.modal-close-btn');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => {
+                modal.remove();
+            });
+        }
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
@@ -1138,6 +1205,15 @@ class HomeManager {
                 modal.remove();
             }
         });
+        
+        // Close on Escape key
+        const escapeHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escapeHandler);
+            }
+        };
+        document.addEventListener('keydown', escapeHandler);
     }
 
     extractViewDetailsData(subscriber) {

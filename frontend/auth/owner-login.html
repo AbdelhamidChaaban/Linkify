@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Owner Login - Cell Spott Manage</title>
+    <link rel="icon" type="image/png" href="/assets/logo1.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/auth/auth.css">
+    <style>
+        body {
+            background-image: url('/assets/auth.png');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+        
+        .owner-login-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        
+        .owner-login-card {
+            background: rgba(13, 17, 32, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 3rem;
+            width: 100%;
+            max-width: 450px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+        
+        body.light-mode .owner-login-card {
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+        }
+        
+        .owner-login-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .owner-login-header img {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 1rem;
+        }
+        
+        .owner-login-header h1 {
+            font-size: 1.875rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #3a0a4e, #8b5cf6, #3a0a4e);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: gradientShift 3s ease infinite;
+            background-size: 200% 200%;
+        }
+        
+        .owner-login-header p {
+            color: #94a3b8;
+            font-size: 0.875rem;
+        }
+        
+        .owner-login-form {
+            margin-top: 2rem;
+        }
+        
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            font-size: 0.875rem;
+            display: none;
+        }
+        
+        .error-message.show {
+            display: block;
+        }
+        
+        .password-toggle-btn {
+            position: absolute;
+            right: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+            transition: color 0.2s;
+        }
+        
+        .password-toggle-btn:hover {
+            color: #f8fafc;
+        }
+        
+        .password-toggle-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+        
+        .form-field-modern {
+            position: relative;
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-field-modern label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #f8fafc;
+            font-size: 0.875rem;
+        }
+        
+        body.light-mode .form-field-modern label {
+            color: #1e293b;
+        }
+        
+        .form-field-modern input {
+            width: 100%;
+            padding: 0.875rem 1rem;
+            background: rgba(58, 10, 78, 0.2);
+            border: 1px solid rgba(58, 10, 78, 0.3);
+            border-radius: 8px;
+            color: #f8fafc;
+            font-size: 1rem;
+            transition: all 0.2s;
+        }
+        
+        body.light-mode .form-field-modern input {
+            background: rgba(255, 255, 255, 0.8);
+            border-color: rgba(90, 33, 182, 0.2);
+            color: #1e293b;
+        }
+        
+        .form-field-modern input:focus {
+            outline: none;
+            border-color: #8b5cf6;
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2);
+        }
+        
+        .form-field-modern input[type="password"] {
+            padding-right: 3.5rem;
+        }
+        
+        .submit-button-modern {
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, #3a0a4e, #8b5cf6);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            background-size: 200% 200%;
+            animation: gradientShift 3s ease infinite;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        
+        .submit-button-modern:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+        }
+        
+        .submit-button-modern:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        @keyframes gradientShift {
+            0%, 100% {
+                background-position: 0% 50%;
+            }
+            50% {
+                background-position: 100% 50%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="owner-login-container">
+        <div class="owner-login-card">
+            <div class="owner-login-header">
+                <img src="/assets/logo1.png" alt="Cell Spott Manage Logo">
+                <h1>Owner Portal</h1>
+                <p>Access the owner management panel</p>
+            </div>
+            
+            <div class="error-message" id="errorMessage"></div>
+            
+            <form class="owner-login-form" id="ownerLoginForm">
+                <div class="form-field-modern">
+                    <label for="ownerUsername">Username</label>
+                    <input type="text" id="ownerUsername" name="username" required autocomplete="username" placeholder="Enter your username">
+                </div>
+                
+                <div class="form-field-modern">
+                    <label for="ownerPassword">Password</label>
+                    <div style="position: relative;">
+                        <input type="password" id="ownerPassword" name="password" required autocomplete="current-password" placeholder="Enter your password">
+                        <button type="button" class="password-toggle-btn" id="passwordToggle" aria-label="Toggle password visibility">
+                            <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                            <svg class="eye-off-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                                <line x1="1" y1="1" x2="23" y2="23"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                
+                <button type="submit" class="submit-button-modern" id="submitBtn">
+                    <span class="btn-text">Login</span>
+                    <span class="btn-loader" style="display: none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                        </svg>
+                    </span>
+                </button>
+            </form>
+        </div>
+    </div>
+    
+    <script src="/auth/owner-login.js"></script>
+</body>
+</html>

@@ -30,7 +30,7 @@ body {
     align-items: center;
     justify-content: space-between;
     position: relative;
-    gap: 2rem;
+    gap: 1rem;
 }
 
 .nav-left {
@@ -46,6 +46,8 @@ body {
     justify-content: center;
     flex: 1 1 auto;
     margin: 0 auto;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .nav-right {
@@ -76,29 +78,55 @@ body {
 .nav-brand h1 {
     font-size: 1.5rem;
     font-weight: 600;
-    background: linear-gradient(135deg, #3a0a4e, #8b5cf6);
+    background: linear-gradient(135deg, #3a0a4e, #8b5cf6, #3a0a4e);
+    background-size: 200% 200%;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    animation: gradientShift 3s ease infinite;
+    letter-spacing: 0.5px;
+    position: relative;
+    transition: transform 0.3s ease;
+}
+
+.nav-brand:hover h1 {
+    transform: scale(1.05);
+}
+
+@keyframes gradientShift {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
 }
 
 .nav-links {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.25rem;
     list-style: none;
+    flex-wrap: nowrap;
+    white-space: nowrap;
 }
 
 .nav-link {
-    padding: 0.75rem 1.5rem;
+    padding: 0.625rem 1rem;
     border-radius: 8px;
     text-decoration: none;
     color: #94a3b8;
     font-weight: 500;
+    font-size: 0.9375rem;
     transition: all 0.3s ease;
     position: relative;
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .nav-link:hover {
@@ -136,9 +164,9 @@ body {
 
 /* Theme Toggle (Gear Icon) */
 .theme-toggle {
-    background: transparent;
-    border: 1px solid rgba(58, 10, 78, 0.3);
-    color: #94a3b8;
+    background: rgba(30, 30, 40, 0.95);
+    border: 2px solid rgba(58, 10, 78, 0.4);
+    color: #e2e8f0;
     width: 40px;
     height: 40px;
     border-radius: 50%;
@@ -147,17 +175,22 @@ body {
     align-items: center;
     justify-content: center;
     transition: all 0.3s ease;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .theme-toggle:hover {
-    background: rgba(58, 10, 78, 0.2);
-    border-color: #3a0a4e;
-    color: #f8fafc;
+    background: rgba(58, 10, 78, 0.6);
+    border-color: #8b5cf6;
+    color: #ffffff;
+    transform: scale(1.05);
+    box-shadow: 0 4px 16px rgba(139, 92, 246, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 .theme-toggle svg {
     width: 20px;
     height: 20px;
+    stroke-width: 2.5;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
 }
 
 /* Avatar */
@@ -308,14 +341,19 @@ body.light-mode .nav-link.active {
 
 html.light-mode .theme-toggle,
 body.light-mode .theme-toggle {
-    border-color: rgba(58, 10, 78, 0.2);
-    color: #64748b;
+    background: rgba(255, 255, 255, 0.95);
+    border: 2px solid rgba(58, 10, 78, 0.3);
+    color: #334155;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 html.light-mode .theme-toggle:hover,
 body.light-mode .theme-toggle:hover {
-    background: rgba(58, 10, 78, 0.05);
+    background: rgba(58, 10, 78, 0.15);
+    border-color: #8b5cf6;
     color: #1e293b;
+    transform: scale(1.05);
+    box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 html.light-mode .avatar-dropdown,
@@ -532,11 +570,36 @@ body.light-mode .insights-section p {
     background-size: 200% auto;
     animation: gradientShift 3s ease infinite;
     filter: drop-shadow(0 2px 4px rgba(139, 92, 246, 0.2));
+    letter-spacing: 0.5px;
+    position: relative;
+    transition: transform 0.3s ease;
 }
 
-@keyframes gradientShift {
-    0%, 100% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
+.mobile-sidebar-logo:hover h1 {
+    transform: scale(1.05);
+}
+
+/* Light mode adjustments for animated text - very dark purple for visibility on white background */
+body.light-mode .nav-brand h1,
+html.light-mode .nav-brand h1 {
+    background: linear-gradient(90deg, #3c1a75 0%, #4c1d95 50%, #5b21b6 100%);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: gradientShift 3s ease infinite;
+    filter: none;
+}
+
+body.light-mode .mobile-sidebar-logo h1,
+html.light-mode .mobile-sidebar-logo h1 {
+    background: linear-gradient(90deg, #3c1a75 0%, #4c1d95 50%, #5b21b6 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: gradientShift 3s ease infinite;
+    filter: drop-shadow(0 1px 2px rgba(60, 26, 117, 0.4));
 }
 
 .mobile-sidebar-close {
@@ -737,6 +800,47 @@ body.light-mode .insights-section p {
     display: flex;
     flex-direction: column;
     gap: 1rem;
+}
+
+.mobile-sidebar-notification {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background: rgba(58, 10, 78, 0.1);
+    border: 2px solid rgba(58, 10, 78, 0.3);
+    border-radius: 12px;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.mobile-sidebar-notification:hover {
+    background: rgba(58, 10, 78, 0.2);
+    border-color: rgba(139, 92, 246, 0.5);
+    color: #f8fafc;
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.mobile-sidebar-notification svg {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+}
+
+body.light-mode .mobile-sidebar-notification {
+    background: rgba(139, 92, 246, 0.05);
+    border-color: rgba(58, 10, 78, 0.15);
+    color: #64748b;
+}
+
+body.light-mode .mobile-sidebar-notification:hover {
+    background: rgba(139, 92, 246, 0.1);
+    border-color: rgba(139, 92, 246, 0.3);
+    color: #1e293b;
 }
 
 .mobile-sidebar-theme {
@@ -1157,16 +1261,67 @@ body.light-mode .mobile-sidebar-nav-link.logout:hover {
     }
     
     .navbar {
-        padding: 1rem 1rem 1rem 4rem;
+        padding: 0.75rem 1rem 0.75rem 4rem;
     }
     
-    .nav-center,
-    .nav-right {
+    .nav-center {
         display: none;
+    }
+    
+    /* Show nav-right on mobile with theme, notification, and avatar icons */
+    .nav-right {
+        display: flex !important;
+        gap: 0.8rem;
+        align-items: center;
     }
     
     .nav-left {
         flex: 1;
+    }
+    
+    /* Hide "Cell Spott Manage" text on mobile to save space for icons */
+    .nav-brand h1 {
+        display: none;
+    }
+    
+    /* Make icons clearly visible on mobile */
+    .theme-toggle {
+        width: 40px;
+        height: 40px;
+        background: rgba(30, 30, 40, 0.98);
+        border: 2.5px solid rgba(139, 92, 246, 0.6);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    }
+    
+    .theme-toggle svg {
+        width: 20px;
+        height: 20px;
+        stroke-width: 2.5;
+        color: #e2e8f0;
+        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
+    }
+    
+    .theme-toggle:hover {
+        background: rgba(58, 10, 78, 0.8);
+        border-color: #8b5cf6;
+        color: #ffffff;
+        transform: scale(1.05);
+        box-shadow: 0 4px 18px rgba(139, 92, 246, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    }
+    
+    .avatar {
+        width: 40px;
+        height: 40px;
+        font-size: 18px;
+        border-width: 2.5px;
+        border-color: rgba(139, 92, 246, 0.5);
+        box-shadow: 0 3px 12px rgba(139, 92, 246, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    }
+    
+    .avatar-dropdown {
+        right: 0;
+        min-width: 180px;
     }
     
     .main-content {
@@ -1186,6 +1341,17 @@ body.light-mode .mobile-sidebar-nav-link.logout:hover {
         vertical-align: middle;
         opacity: 1;
         visibility: visible;
+    }
+    
+    /* Hide theme toggle and avatar from mobile sidebar since they're in navbar */
+    .mobile-sidebar-theme,
+    .mobile-sidebar-avatar-wrapper {
+        display: none;
+    }
+    
+    /* Show notification button in mobile sidebar */
+    .mobile-sidebar-notification {
+        display: flex;
     }
 }
 

@@ -247,6 +247,7 @@ function makeRequest(options, timeout) {
                 'Timeout',
                 null
             ));
+
         });
 
         req.setTimeout(timeout);
@@ -362,4 +363,5 @@ module.exports = {
     ApiError,
     formatCookiesForHeader
 };
+
 

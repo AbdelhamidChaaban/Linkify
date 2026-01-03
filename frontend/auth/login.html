@@ -10,89 +10,100 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/auth/auth.css">
 </head>
-<body>
-    <div class="neural-background">
-        <div class="neural-node"></div>
-        <div class="neural-node"></div>
-        <div class="neural-node"></div>
-        <div class="neural-node"></div>
-        <div class="neural-node"></div>
-    </div>
-
-    <div class="login-container">
-        <div class="login-card">
-            <div class="ai-glow"></div>
-            
-            <div class="login-header">
-                <div class="ai-logo">
-                    <img src="/assets/logo1.png" alt="Linkify Logo">
+<body class="login-page">
+    <div class="auth-split-container">
+        <!-- Left Panel: Welcome Section -->
+        <div class="auth-left-panel">
+            <div class="left-panel-background"></div>
+            <div class="left-panel-content">
+                <div class="welcome-logo-container">
+                    <img src="/assets/logo1.png" alt="Cell Spott Manage Logo" class="welcome-logo">
+                    <h1>Welcome back...</h1>
                 </div>
-                <h1>Welcome Back</h1>
-                <p>Sign in to your Cell Spott Manage</p>
             </div>
-            
-            <form class="login-form" id="loginForm" novalidate>
-                <div class="smart-field" data-field="email">
-                    <div class="field-background"></div>
-                    <input type="email" id="email" name="email" required autocomplete="email">
-                    <label for="email">Email Address</label>
-                    <div class="ai-indicator">
-                        <div class="ai-pulse"></div>
-                    </div>
-                    <div class="field-completion"></div>
-                    <span class="error-message" id="emailError"></span>
+        </div>
+
+        <!-- Right Panel: Login Form -->
+        <div class="auth-right-panel">
+            <div class="form-wrapper">
+                <div class="form-header">
+                    <h2>Welcome Back</h2>
+                    <p>Sign in to your Cell Spott Manage</p>
                 </div>
 
-                <div class="smart-field" data-field="password">
-                    <div class="field-background"></div>
-                    <input type="password" id="password" name="password" required autocomplete="current-password">
-                    <label for="password">Password</label>
-                    <button type="button" class="smart-toggle" id="passwordToggle" aria-label="Toggle password visibility">
-                        <svg class="toggle-show" width="18" height="18" viewBox="0 0 18 18" fill="none">
-                            <path d="M9 3.75c-3.15 0-5.85 1.89-7.02 4.72a.75.75 0 000 .56c1.17 2.83 3.87 4.72 7.02 4.72s5.85-1.89 7.02-4.72a.75.75 0 000-.56C14.85 5.64 12.15 3.75 9 3.75zM9 12a3 3 0 110-6 3 3 0 010 6z" fill="currentColor"/>
-                        </svg>
-                        <svg class="toggle-hide" width="18" height="18" viewBox="0 0 18 18" fill="none">
-                            <path d="M3.53 2.47a.75.75 0 00-1.06 1.06l11 11a.75.75 0 101.06-1.06l-2.82-2.82c.8-.67 1.5-1.49 2.04-2.42a.75.75 0 000-.56C12.58 4.84 10.89 3.75 9 3.75c-.69 0-1.36.1-2 .29L3.53 2.47zM7.974 5.847L10.126 8a1.5 1.5 0 01-2.126-2.126l-.026-.027z" fill="currentColor"/>
-                        </svg>
-                    </button>
-                    <div class="ai-indicator">
-                        <div class="ai-pulse"></div>
-                    </div>
-                    <div class="field-completion"></div>
-                    <span class="error-message" id="passwordError"></span>
-                </div>
-
-                <button type="submit" class="neural-button">
-                    <div class="button-bg"></div>
-                    <span class="button-text">Login</span>
-                    <div class="button-loader">
-                        <div class="neural-spinner">
-                            <div class="spinner-segment"></div>
-                            <div class="spinner-segment"></div>
-                            <div class="spinner-segment"></div>
+                <form class="signup-form-modern" id="loginForm" novalidate>
+                    <div class="form-field-modern">
+                        <div class="input-poda">
+                            <div class="input-glow"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-white"></div>
+                            <div class="input-border"></div>
+                            <div class="input-main">
+                                <div class="input-icon">
+                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <path d="M3.33334 5.83333L9.07534 10.05C9.63567 10.4333 10.3643 10.4333 10.9247 10.05L16.6667 5.83333M4.16667 15.8333H15.8333C16.7538 15.8333 17.5 15.0871 17.5 14.1667V5.83333C17.5 4.91286 16.7538 4.16667 15.8333 4.16667H4.16667C3.24619 4.16667 2.5 4.91286 2.5 5.83333V14.1667C2.5 15.0871 3.24619 15.8333 4.16667 15.8333Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                                <input type="email" id="email" name="email" required autocomplete="email" placeholder="Email Address" class="input-field">
+                            </div>
                         </div>
+                        <span class="error-message" id="emailError"></span>
                     </div>
-                    <div class="button-glow"></div>
-                </button>
-            </form>
 
-            <div class="signup-section">
-                <span>New to Cell Spott Manage? </span>
-                <a href="/auth/signup.html" class="neural-signup">Create an account</a>
-            </div>
-
-            <div class="success-neural" id="successMessage">
-                <div class="success-core">
-                    <div class="success-rings">
-                        <div class="success-ring"></div>
-                        <div class="success-ring"></div>
-                        <div class="success-ring"></div>
+                    <div class="form-field-modern">
+                        <div class="input-poda">
+                            <div class="input-glow"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-darkBorderBg"></div>
+                            <div class="input-white"></div>
+                            <div class="input-border"></div>
+                            <div class="input-main">
+                                <div class="input-icon">
+                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <path d="M15.8333 9.16667V7.5C15.8333 5.11929 13.8807 3.16667 11.5 3.16667H8.5C6.11929 3.16667 4.16667 5.11929 4.16667 7.5V9.16667M15.8333 9.16667H4.16667M15.8333 9.16667V14.1667C15.8333 15.0871 15.0871 15.8333 14.1667 15.8333H5.83333C4.91286 15.8333 4.16667 15.0871 4.16667 14.1667V9.16667M10 12.5H10.0083" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                                <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="Password" class="input-field">
+                                <button type="button" class="show-password-btn" id="passwordToggle" aria-label="Show password">
+                                    <svg class="eye-icon" width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                        <path d="M10 3.75C6.85 3.75 4.15 5.64 2.98 8.47C2.9 8.66 2.9 8.87 2.98 9.06C4.15 11.89 6.85 13.78 10 13.78C13.15 13.78 15.85 11.89 17.02 9.06C17.1 8.87 17.1 8.66 17.02 8.47C15.85 5.64 13.15 3.75 10 3.75ZM10 12.5C7.93 12.5 6.25 10.82 6.25 8.75C6.25 6.68 7.93 5 10 5C12.07 5 13.75 6.68 13.75 8.75C13.75 10.82 12.07 12.5 10 12.5ZM10 6.25C8.76 6.25 7.75 7.26 7.75 8.5C7.75 9.74 8.76 10.75 10 10.75C11.24 10.75 12.25 9.74 12.25 8.5C12.25 7.26 11.24 6.25 10 6.25Z" fill="currentColor"/>
+                                    </svg>
+                                    <svg class="eye-off-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" style="display: none;">
+                                        <path d="M3.92 2.5L16.42 15L15.42 16L13.25 13.83C12.6 14.22 11.82 14.5 11 14.66V16.25H9V14.66C8.18 14.5 7.4 14.22 6.73 13.83L2.92 17.64L1.92 16.64L3.92 14.64C2.25 13.22 1.25 11.16 1.25 8.75C1.25 6.34 2.25 4.28 3.92 2.92L3.92 2.5ZM5.42 4L4.42 5C3.46 5.96 2.75 7.28 2.75 8.75C2.75 11.57 4.68 13.89 7.25 14.33L5.42 12.5C4.53 11.61 4 10.24 4 8.75C4 7.26 4.53 5.89 5.42 5L5.42 4ZM10 4.25C10.82 4.41 11.6 4.69 12.27 5.08L11.27 6.08C10.62 5.69 9.84 5.41 9 5.25V4.25H10ZM12.75 6.08L11.75 7.08C12.64 7.97 13.25 9.34 13.25 10.75C13.25 12.24 12.72 13.61 11.83 14.5L10.83 15.5C11.48 15.89 12.26 16.17 13 16.33V17.75H15V16.33C17.82 15.89 19.75 13.57 19.75 10.75C19.75 9.28 19.04 7.96 18.08 7L17.08 6L16.08 7L15.08 8L14.08 7L13.08 6L12.75 6.08Z" fill="currentColor"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        <span class="error-message" id="passwordError"></span>
                     </div>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                        <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
+
+                    <button type="submit" class="submit-button-modern">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="button-icon">
+                            <path d="M13.3333 2.66667V6.66667H9.33333M2.66667 13.3333V9.33333H6.66667M13.3333 6.66667L10.6667 4C9.80001 3.13333 8.73334 2.66667 7.33334 2.66667C4.33334 2.66667 2.00001 5 2.00001 8C2.00001 11 4.33334 13.3333 7.33334 13.3333C9.06667 13.3333 10.5333 12.5333 11.4667 11.3333M2.66667 9.33333L5.33334 12C6.20001 12.8667 7.26667 13.3333 8.66667 13.3333C11.6667 13.3333 14 11 14 8C14 5 11.6667 2.66667 8.66667 2.66667C6.93334 2.66667 5.46667 3.46667 4.53334 4.66667" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span class="button-text">Login</span>
+                        <div class="button-loader">
+                            <div class="spinner"></div>
+                        </div>
+                    </button>
+                </form>
+
+                <div class="form-footer-modern">
+                    <span>New to Cell Spott Manage? </span>
+                    <a href="/auth/signup.html">Create an account</a>
                 </div>
-                <h3>Done !</h3>
+
+                <div class="success-message-modern" id="successMessage">
+                    <div class="success-icon-modern">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                            <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h3>Done!</h3>
+                </div>
             </div>
         </div>
     </div>
@@ -106,7 +117,6 @@
     <script src="/auth/firebase-config.js"></script>
     
     <!-- Login Script -->
-    <script src="/auth/login.js"></script>
+    <script src="/auth/login.js?v=3"></script>
 </body>
 </html>
-

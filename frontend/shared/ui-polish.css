@@ -1,0 +1,481 @@
+/* UI/UX Polish - Smooth Animations, Empty States, Skeleton Screens */
+
+/* ==================== Smooth Animations & Transitions ==================== */
+* {
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Page transitions */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInFromRight {
+    from {
+        opacity: 0;
+        transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes slideInFromLeft {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes shimmer {
+    0% {
+        background-position: -1000px 0;
+    }
+    100% {
+        background-position: 1000px 0;
+    }
+}
+
+/* Apply fade-in to main content - DISABLED to prevent flashing on data updates */
+/* .main-content,
+.insights-section,
+.home-container,
+.admins-container {
+    animation: fadeIn 0.4s ease-out;
+} */
+
+/* Smooth hover transitions */
+button, .btn, a, .card, .nav-link {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Modal animations */
+.modal-overlay,
+.available-services-modal-overlay {
+    animation: fadeIn 0.2s ease-out;
+}
+
+.modal,
+.available-services-modal {
+    animation: scaleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* View Details Modal - keep original simple appearance */
+.view-details-modal-overlay {
+    animation: none !important;
+}
+
+.view-details-modal {
+    animation: none !important;
+}
+
+/* Table row animations - DISABLED to prevent flashing on data updates */
+/* tbody tr {
+    animation: fadeIn 0.3s ease-out;
+    animation-fill-mode: both;
+}
+
+tbody tr:nth-child(1) { animation-delay: 0.05s; }
+tbody tr:nth-child(2) { animation-delay: 0.1s; }
+tbody tr:nth-child(3) { animation-delay: 0.15s; }
+tbody tr:nth-child(4) { animation-delay: 0.2s; }
+tbody tr:nth-child(5) { animation-delay: 0.25s; } */
+
+/* Card hover effects */
+.card {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px rgba(139, 92, 246, 0.2);
+}
+
+/* Button press animation */
+button:active, .btn:active {
+    transform: scale(0.98);
+}
+
+/* ==================== Skeleton Screens ==================== */
+.skeleton {
+    background: linear-gradient(
+        90deg,
+        rgba(139, 92, 246, 0.1) 0%,
+        rgba(139, 92, 246, 0.2) 50%,
+        rgba(139, 92, 246, 0.1) 100%
+    );
+    background-size: 1000px 100%;
+    animation: shimmer 2s infinite;
+    border-radius: 4px;
+}
+
+.skeleton-text {
+    height: 16px;
+    margin: 8px 0;
+    border-radius: 4px;
+}
+
+.skeleton-text.short {
+    width: 60%;
+}
+
+.skeleton-text.medium {
+    width: 80%;
+}
+
+.skeleton-text.long {
+    width: 100%;
+}
+
+.skeleton-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+}
+
+.skeleton-button {
+    height: 40px;
+    width: 120px;
+    border-radius: 8px;
+}
+
+.skeleton-table-row {
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    align-items: center;
+}
+
+.skeleton-table-cell {
+    flex: 1;
+    height: 20px;
+}
+
+.skeleton-card {
+    padding: 24px;
+    border-radius: 12px;
+}
+
+/* Light mode skeleton */
+body.light-mode .skeleton,
+html.light-mode .skeleton {
+    background: linear-gradient(
+        90deg,
+        rgba(100, 116, 139, 0.1) 0%,
+        rgba(100, 116, 139, 0.2) 50%,
+        rgba(100, 116, 139, 0.1) 100%
+    );
+    background-size: 1000px 100%;
+}
+
+/* ==================== Empty States ==================== */
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    text-align: center;
+    animation: fadeIn 0.5s ease-out;
+}
+
+.empty-state-icon {
+    width: 120px;
+    height: 120px;
+    margin-bottom: 24px;
+    opacity: 0.6;
+    animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-10px);
+    }
+}
+
+.empty-state-icon svg {
+    width: 100%;
+    height: 100%;
+    color: #8b5cf6;
+}
+
+.empty-state-title {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: #f8fafc;
+    background: linear-gradient(135deg, #3a0a4e, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.empty-state-description {
+    font-size: 16px;
+    color: #94a3b8;
+    margin-bottom: 24px;
+    max-width: 400px;
+}
+
+.empty-state-action {
+    margin-top: 16px;
+}
+
+/* Light mode empty states */
+body.light-mode .empty-state-title,
+html.light-mode .empty-state-title {
+    background: linear-gradient(135deg, #5b21b6, #7c3aed);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+body.light-mode .empty-state-description,
+html.light-mode .empty-state-description {
+    color: #64748b;
+}
+
+body.light-mode .empty-state-icon svg,
+html.light-mode .empty-state-icon svg {
+    color: #5b21b6;
+}
+
+/* Specific empty state illustrations */
+.empty-state.no-data .empty-state-icon::before {
+    content: '📊';
+    font-size: 80px;
+    display: block;
+}
+
+.empty-state.no-results .empty-state-icon::before {
+    content: '🔍';
+    font-size: 80px;
+    display: block;
+}
+
+.empty-state.error .empty-state-icon::before {
+    content: '⚠️';
+    font-size: 80px;
+    display: block;
+}
+
+.empty-state.success .empty-state-icon::before {
+    content: '✅';
+    font-size: 80px;
+    display: block;
+}
+
+/* ==================== Enhanced Dark Mode ==================== */
+body:not(.light-mode) {
+    /* Better contrast for dark mode */
+    --bg-primary: #0a0a0f;
+    --bg-secondary: #0f0f14;
+    --bg-tertiary: #151520;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-tertiary: #94a3b8;
+    --border-color: rgba(139, 92, 246, 0.2);
+    --shadow-color: rgba(0, 0, 0, 0.5);
+}
+
+body:not(.light-mode) .navbar {
+    background: rgba(15, 15, 20, 0.98);
+    border-bottom-color: rgba(139, 92, 246, 0.3);
+}
+
+body:not(.light-mode) .card,
+body:not(.light-mode) .admins-container,
+body:not(.light-mode) .insights-section {
+    background: rgba(15, 15, 20, 0.8);
+    border-color: rgba(139, 92, 246, 0.2);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+body:not(.light-mode) table {
+    background: rgba(15, 15, 20, 0.6);
+}
+
+body:not(.light-mode) tbody tr:hover {
+    background: rgba(139, 92, 246, 0.1);
+}
+
+/* Enhanced glow effects in dark mode */
+body:not(.light-mode) .nav-brand h1,
+body:not(.light-mode) .mobile-sidebar-logo h1 {
+    text-shadow: 0 0 20px rgba(139, 92, 246, 0.5);
+}
+
+/* ==================== Loading States ==================== */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(10, 10, 15, 0.8);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    animation: fadeIn 0.2s ease-out;
+}
+
+.loading-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(139, 92, 246, 0.2);
+    border-top-color: #8b5cf6;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* Pulse animation for loading indicators */
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.pulse {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ==================== Smooth Scroll ==================== */
+html {
+    scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(15, 15, 20, 0.5);
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #3a0a4e, #8b5cf6);
+    border-radius: 5px;
+    transition: background 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+}
+
+/* Light mode scrollbar */
+body.light-mode ::-webkit-scrollbar-track,
+html.light-mode ::-webkit-scrollbar-track {
+    background: rgba(248, 250, 252, 0.5);
+}
+
+body.light-mode ::-webkit-scrollbar-thumb,
+html.light-mode ::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #5b21b6, #7c3aed);
+}
+
+body.light-mode ::-webkit-scrollbar-thumb:hover,
+html.light-mode ::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+}
+
+/* ==================== Focus States ==================== */
+button:focus-visible,
+.btn:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid #8b5cf6;
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* ==================== Micro-interactions ==================== */
+/* Ripple effect on click */
+.ripple {
+    position: relative;
+    overflow: hidden;
+}
+
+.ripple::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(139, 92, 246, 0.3);
+    transform: translate(-50%, -50%);
+    transition: width 0.6s, height 0.6s;
+}
+
+.ripple:active::after {
+    width: 300px;
+    height: 300px;
+}
+
+/* ==================== Progress Bar Animations ==================== */
+.progress-fill {
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.progress-bar {
+    overflow: hidden;
+    position: relative;
+}
+
+/* ==================== Notification Animations ==================== */
+.notification {
+    animation: slideInFromRight 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.notification.hiding {
+    animation: slideInFromRight 0.3s cubic-bezier(0.4, 0, 0.2, 1) reverse;
+}
+
+/* ==================== Responsive Animations ==================== */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+

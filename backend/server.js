@@ -38,7 +38,6 @@ const cors = require('cors');
 
 // Load services - Use API-first approach
 const { fetchAlfaData } = require('./services/alfaServiceApiFirst');
-const browserPool = require('./services/browserPool');
 const cacheLayer = require('./services/cacheLayer');
 const scheduledRefresh = require('./services/scheduledRefresh');
 const cookieRefreshWorker = require('./services/cookieRefreshWorker');
@@ -93,6 +92,10 @@ const requestQueue = require('./services/requestQueue');
 const alfaApiRoutes = require('./routes/alfaApiRoutes');
 const subscriberRoutes = require('./routes/subscriberRoutes');
 const actionLogsRoutes = require('./routes/actionLogsRoutes');
+const ownerRoutes = require('./routes/ownerRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const pushRoutes = require('./routes/pushRoutes');
+const contactRoutes = require('./routes/contactRoutes');
 
 // Import queue workers
 const { initializeWorkers } = require('./services/queue');
@@ -104,11 +107,6 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
         timestamp: new Date().toISOString(),
-        browserPool: {
-            // TODO: Remove Puppeteer health check once captchaService.js replaces login fallback
-            initialized: browserPool.isInitialized(),
-            activeContexts: browserPool.getActiveContextCount()
-        },
         cache: {
             enabled: cacheLayer.isAvailable(),
             ttl: cacheLayer.getTTL(),
@@ -122,6 +120,10 @@ app.get('/health', (req, res) => {
 app.use('/api', alfaApiRoutes);      // /api/getconsumption, /api/getexpirydate, etc.
 app.use('/api', subscriberRoutes);   // /api/addSubscriber, /api/editSubscriber, etc.
 app.use('/api', actionLogsRoutes);   // /api/actionLogs
+app.use('/api', ownerRoutes);        // /api/owner/users, /api/owner/users/:userId/admin-limit, etc.
+app.use('/api/admins', adminRoutes); // /api/admins (POST, PUT, DELETE)
+app.use('/api', pushRoutes);         // /api/push/* - Push notification routes
+app.use('/api', contactRoutes);      // /api/contact - Contact form routes
 
 // Cache management endpoint (optional - for debugging/admin)
 app.delete('/api/cache/:identifier', async (req, res) => {
@@ -372,7 +374,16 @@ app.post('/api/subscribers/add', async (req, res) => {
         }
 
         // Clean subscriber number (8 digits)
-        const cleanSubscriberNumber = subscriberPhone.replace(/\D/g, '').substring(0, 8);
+        let cleanSubscriberNumber = subscriberPhone.replace(/\D/g, '');
+        if (cleanSubscriberNumber.length === 11 && cleanSubscriberNumber.startsWith('961')) {
+            cleanSubscriberNumber = cleanSubscriberNumber.substring(3);
+        }
+        // Auto-fix: If 7 digits, prepend '0' to make it 8 digits
+        if (cleanSubscriberNumber.length === 7) {
+            cleanSubscriberNumber = '0' + cleanSubscriberNumber;
+            console.log(`ℹ️ [Legacy AddSubscriber] Auto-corrected 7-digit number to 8 digits: ${cleanSubscriberNumber}`);
+        }
+        cleanSubscriberNumber = cleanSubscriberNumber.substring(0, 8);
         if (cleanSubscriberNumber.length !== 8) {
             return res.status(400).json({
                 success: false,
@@ -702,7 +713,18 @@ app.get('/api/admin/:adminId/balance-history', async (req, res) => {
 // This will serve index.html at the root "/" and all other frontend files
 const frontendPath = path.join(__dirname, '..', 'frontend');
 console.log('📁 Frontend path:', frontendPath);
-app.use(express.static(frontendPath));
+
+// Custom static file middleware with cache control for development
+app.use(express.static(frontendPath, {
+    setHeaders: (res, filePath) => {
+        // Disable caching for JavaScript files in development to prevent stale code issues
+        if (filePath.endsWith('.js')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+        }
+    }
+}));
 
 // Log static file serving for debugging
 app.use((req, res, next) => {
@@ -769,8 +791,6 @@ async function gracefulShutdown(signal) {
             console.warn('⚠️ Error closing queues:', queueError.message);
         }
         
-        // Close browser pool
-        await browserPool.shutdown();
         console.log('✅ Graceful shutdown complete');
         process.exit(0);
     } catch (error) {
@@ -786,7 +806,6 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 // Handle uncaught exceptions
 process.on('uncaughtException', async (error) => {
     console.error('❌ Uncaught Exception:', error);
-    await browserPool.shutdown();
     process.exit(1);
 });
 

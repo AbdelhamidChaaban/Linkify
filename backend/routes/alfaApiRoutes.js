@@ -394,7 +394,72 @@ router.get('/refreshAdmins', authenticateJWT, async (req, res) => {
             
             // Get previous subscribers from Firebase
             const previousSecondarySubscribers = previousAdminData?.alfaData?.secondarySubscribers || [];
-            const existingRemovedActiveSubscribers = previousAdminData?.removedActiveSubscribers || [];
+            let existingRemovedActiveSubscribers = previousAdminData?.removedActiveSubscribers || [];
+            
+            // CRITICAL: Clean concatenated phone numbers from existing data
+            // Handle cases like "7659002696170313250" which contains "76590026" + "961" + "70313250"
+            // We need to extract BOTH phone numbers from concatenated strings and remove "961" prefix
+            const cleanedExistingRemoved = [];
+            const seenPhoneNumbers = new Set();
+            
+            existingRemovedActiveSubscribers.forEach(sub => {
+                let phoneNumber = sub.phoneNumber || '';
+                
+                // Check if this is a concatenated phone number (longer than 11 digits)
+                // Pattern: "7659002696170313250" = "76590026" + "961" + "70313250"
+                if (phoneNumber.length > 11) {
+                    // Extract all phone numbers from the concatenated string
+                    // Strategy: Split by "961" and extract valid phone numbers from each part
+                    let remaining = phoneNumber;
+                    const extractedNumbers = [];
+                    
+                    // Keep extracting 8-11 digit phone numbers, skipping "961" separators
+                    while (remaining.length >= 8) {
+                        // Try to match: 8-11 digits at the start
+                        const match = remaining.match(/^(\d{8,11})/);
+                        if (match) {
+                            const extracted = match[1];
+                            extractedNumbers.push(extracted);
+                            remaining = remaining.substring(extracted.length);
+                            
+                            // If next part starts with "961", skip it (Lebanon country code separator)
+                            if (remaining.startsWith('961')) {
+                                remaining = remaining.substring(3);
+                            }
+                        } else {
+                            break; // Can't extract more
+                        }
+                    }
+                    
+                    // Add all extracted numbers as separate subscribers (avoid duplicates)
+                    if (extractedNumbers.length > 0) {
+                        console.log(`   🔧 [DETECTION] Split concatenated phone number "${sub.phoneNumber}" into: ${extractedNumbers.join(', ')}`);
+                        extractedNumbers.forEach(extractedNum => {
+                            if (!seenPhoneNumbers.has(extractedNum)) {
+                                seenPhoneNumbers.add(extractedNum);
+                                cleanedExistingRemoved.push({ ...sub, phoneNumber: extractedNum });
+                            }
+                        });
+                    } else {
+                        // Fallback: couldn't extract, use original (trimmed)
+                        const trimmed = phoneNumber.replace(/^961/, '').substring(0, 11);
+                        if (!seenPhoneNumbers.has(trimmed)) {
+                            seenPhoneNumbers.add(trimmed);
+                            cleanedExistingRemoved.push({ ...sub, phoneNumber: trimmed });
+                        }
+                    }
+                } else {
+                    // Normal phone number (not concatenated)
+                    // Remove "961" Lebanon country code prefix if present
+                    phoneNumber = phoneNumber.replace(/^961/, '');
+                    if (!seenPhoneNumbers.has(phoneNumber)) {
+                        seenPhoneNumbers.add(phoneNumber);
+                        cleanedExistingRemoved.push({ ...sub, phoneNumber });
+                    }
+                }
+            });
+            
+            existingRemovedActiveSubscribers = cleanedExistingRemoved;
             const existingRemovedPhoneNumbers = new Set(existingRemovedActiveSubscribers.map(sub => sub.phoneNumber));
             
             // Get current subscribers from ushare data
@@ -425,11 +490,19 @@ router.get('/refreshAdmins', authenticateJWT, async (req, res) => {
                                 // It was removed directly from Alfa website
                                 console.log(`   🔍 [DETECTION] Found removed Active subscriber: ${prevSub.phoneNumber} (was Active, now missing)`);
                                 console.log(`      [Detection] Subscriber ${prevSub.phoneNumber} marked as Out for admin ${adminId}`);
+                                
+                                // Handle both field name formats: usedConsumption/totalQuota (Ushare HTML) or consumption/quota (API)
+                                const consumptionValue = prevSub.consumption !== undefined ? prevSub.consumption : 
+                                                        (prevSub.usedConsumption !== undefined ? prevSub.usedConsumption : 0);
+                                const limitValue = prevSub.quota !== undefined ? prevSub.quota :
+                                                  (prevSub.limit !== undefined ? prevSub.limit :
+                                                  (prevSub.totalQuota !== undefined ? prevSub.totalQuota : 0));
+                                
                                 newlyRemovedActiveSubscribers.push({
                                     phoneNumber: prevSub.phoneNumber,
                                     fullPhoneNumber: prevSub.fullPhoneNumber || prevSub.phoneNumber,
-                                    consumption: prevSub.consumption || 0,
-                                    limit: prevSub.quota || prevSub.limit || 0,
+                                    consumption: typeof consumptionValue === 'number' ? consumptionValue : parseFloat(consumptionValue) || 0,
+                                    limit: typeof limitValue === 'number' ? limitValue : parseFloat(limitValue) || 0,
                                     status: 'Active' // Always Active since we only store Active removed subscribers
                                 });
                             } else {

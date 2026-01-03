@@ -4,7 +4,7 @@ class AIAssistantLoginForm {
         this.emailInput = document.getElementById('email');
         this.passwordInput = document.getElementById('password');
         this.passwordToggle = document.getElementById('passwordToggle');
-        this.submitButton = this.form.querySelector('.neural-button');
+        this.submitButton = this.form.querySelector('.submit-button-modern');
         this.successMessage = document.getElementById('successMessage');
         
         this.init();
@@ -13,7 +13,6 @@ class AIAssistantLoginForm {
     init() {
         this.bindEvents();
         this.setupPasswordToggle();
-        this.setupAIEffects();
     }
     
     bindEvents() {
@@ -22,38 +21,16 @@ class AIAssistantLoginForm {
         this.passwordInput.addEventListener('blur', () => this.validatePassword());
         this.emailInput.addEventListener('input', () => this.clearError('email'));
         this.passwordInput.addEventListener('input', () => this.clearError('password'));
-        
-        // Add placeholder for label animations
-        this.emailInput.setAttribute('placeholder', ' ');
-        this.passwordInput.setAttribute('placeholder', ' ');
     }
     
     setupPasswordToggle() {
-        this.passwordToggle.addEventListener('click', () => {
-            const type = this.passwordInput.type === 'password' ? 'text' : 'password';
-            this.passwordInput.type = type;
-            
-            this.passwordToggle.classList.toggle('toggle-active', type === 'text');
-        });
-    }
-    
-    setupAIEffects() {
-        // Add neural connection effect on input focus
-        [this.emailInput, this.passwordInput].forEach(input => {
-            input.addEventListener('focus', (e) => {
-                this.triggerNeuralEffect(e.target.closest('.smart-field'));
+        if (this.passwordToggle) {
+            this.passwordToggle.addEventListener('click', () => {
+                const type = this.passwordInput.type === 'password' ? 'text' : 'password';
+                this.passwordInput.type = type;
+                this.passwordToggle.classList.toggle('active', type === 'text');
             });
-        });
-    }
-    
-    triggerNeuralEffect(field) {
-        // Add subtle AI processing effect
-        const indicator = field.querySelector('.ai-indicator');
-        indicator.style.opacity = '1';
-        
-        setTimeout(() => {
-            indicator.style.opacity = '';
-        }, 2000);
+        }
     }
     
     validateEmail() {
@@ -61,12 +38,12 @@ class AIAssistantLoginForm {
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         
         if (!email) {
-            this.showError('email', 'Linkify requires email address');
+            this.showError('email', 'Email address is required');
             return false;
         }
         
         if (!emailRegex.test(email)) {
-            this.showError('email', 'Invalid email format detected');
+            this.showError('email', 'Invalid email format');
             return false;
         }
         
@@ -78,12 +55,7 @@ class AIAssistantLoginForm {
         const password = this.passwordInput.value;
         
         if (!password) {
-            this.showError('password', 'Security key required for access');
-            return false;
-        }
-        
-        if (password.length < 6) {
-            this.showError('password', 'Security key must be at least 6 characters');
+            this.showError('password', 'Password is required');
             return false;
         }
         
@@ -92,27 +64,38 @@ class AIAssistantLoginForm {
     }
     
     showError(field, message) {
-        const smartField = document.getElementById(field).closest('.smart-field');
+        const formField = document.getElementById(field)?.closest('.form-field-modern');
         const errorElement = document.getElementById(`${field}Error`);
         
-        smartField.classList.add('error');
-        errorElement.textContent = message;
-        errorElement.classList.add('show');
+        if (formField) {
+            formField.classList.add('error');
+        }
+        if (errorElement) {
+            errorElement.textContent = message;
+            errorElement.classList.add('show');
+        }
     }
     
     clearError(field) {
-        const smartField = document.getElementById(field).closest('.smart-field');
+        const formField = document.getElementById(field)?.closest('.form-field-modern');
         const errorElement = document.getElementById(`${field}Error`);
         
-        smartField.classList.remove('error');
-        errorElement.classList.remove('show');
-        setTimeout(() => {
-            errorElement.textContent = '';
-        }, 200);
+        if (formField) {
+            formField.classList.remove('error');
+        }
+        if (errorElement) {
+            errorElement.classList.remove('show');
+            setTimeout(() => {
+                errorElement.textContent = '';
+            }, 200);
+        }
     }
     
     async handleSubmit(e) {
         e.preventDefault();
+        
+        // DEBUG: Force console log to verify file is loaded
+        console.log('[LOGIN] handleSubmit called - login.js v2 loaded');
         
         const isEmailValid = this.validateEmail();
         const isPasswordValid = this.validatePassword();
@@ -128,7 +111,46 @@ class AIAssistantLoginForm {
             const password = this.passwordInput.value;
             
             // Sign in with Firebase Authentication
-            await auth.signInWithEmailAndPassword(email, password);
+            const userCredential = await auth.signInWithEmailAndPassword(email, password);
+            const user = userCredential.user;
+            
+            // IMPORTANT: Check if user is approved BEFORE allowing access
+            console.log('[LOGIN CHECK] Starting approval check for user:', user.uid);
+            const userDoc = await db.collection('users').doc(user.uid).get();
+            
+            if (!userDoc.exists) {
+                console.log('[LOGIN CHECK] User document does not exist - blocking login');
+                await auth.signOut();
+                localStorage.clear();
+                sessionStorage.clear();
+                throw new Error('Please contact 71829887');
+            }
+            
+            const userData = userDoc.data();
+            console.log('[LOGIN CHECK] User data retrieved:', { isApproved: userData.isApproved, isBlocked: userData.isBlocked });
+            const isApproved = userData.isApproved === true; // Must be explicitly true
+            
+            // Check approval status FIRST
+            if (!isApproved) {
+                console.log('[LOGIN CHECK] User NOT approved - blocking login and signing out');
+                await auth.signOut();
+                localStorage.clear();
+                sessionStorage.clear();
+                throw new Error('Please contact 71829887');
+            }
+            
+            console.log('[LOGIN CHECK] User is approved, checking block status...');
+            
+            // Check if user is blocked
+            if (userData.isBlocked === true) {
+                console.log('[LOGIN CHECK] User is blocked - signing out');
+                await auth.signOut();
+                localStorage.clear();
+                sessionStorage.clear();
+                throw new Error('Your account has been blocked. Please contact support.');
+            }
+            
+            console.log('[LOGIN CHECK] All checks passed, allowing login');
             
             // Show neural success
             this.showNeuralSuccess();
@@ -149,6 +171,12 @@ class AIAssistantLoginForm {
             } else if (error.code === 'auth/user-disabled') {
                 errorMessage = 'This account has been disabled.';
                 this.showError('email', errorMessage);
+            } else if (error.message && error.message.includes('Please contact')) {
+                errorMessage = error.message;
+                this.showError('email', errorMessage);
+            } else if (error.message && error.message.includes('blocked')) {
+                errorMessage = error.message;
+                this.showError('email', errorMessage);
             } else {
                 this.showError('password', errorMessage);
             }
@@ -163,23 +191,30 @@ class AIAssistantLoginForm {
     }
     
     showNeuralSuccess() {
-        // Show brief success feedback
-        this.successMessage.classList.add('show');
-        
-        // Hide form quickly
-        this.form.style.transform = 'scale(0.95)';
+        // Hide form with transition
         this.form.style.opacity = '0';
+        this.form.style.transform = 'translateY(-20px)';
+        this.form.style.transition = 'all 0.3s ease';
+        
+        const formFooter = document.querySelector('.form-footer-modern');
+        if (formFooter) {
+            formFooter.style.display = 'none';
+        }
         
         setTimeout(() => {
             this.form.style.display = 'none';
-            document.querySelector('.signup-section').style.display = 'none';
-        }, 150);
+            
+            // Show success message
+            if (this.successMessage) {
+                this.successMessage.classList.add('show');
+            }
+            
+        }, 300);
         
-        // Redirect quickly after brief success feedback (500ms)
+        // Redirect to home page after success
         setTimeout(() => {
-            // Use absolute path from root (server serves from frontend/)
             window.location.href = '/pages/home.html';
-        }, 500);
+        }, 1500);
     }
 }
 

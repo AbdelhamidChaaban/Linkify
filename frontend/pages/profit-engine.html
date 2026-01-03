@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en" class="profit-engine-page">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cell Spott Manage - Profit Engine</title>
+    <link rel="icon" type="image/png" href="/assets/logo1.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/shared/layout.css">
+    <link rel="stylesheet" href="/pages/profit-engine.css">
+    <link rel="stylesheet" href="/shared/mobile-enhancements.css">
+    <link rel="stylesheet" href="/shared/ui-polish.css">
+    <link rel="stylesheet" href="/shared/notification-panel.css">
+    <!-- Global Error Handler - Must load early to catch errors -->
+    <script src="/shared/error-handler.js"></script>
+    <!-- Theme Loader - Must run synchronously before page renders -->
+    <script>
+        (function() {
+            try {
+                const savedTheme = localStorage.getItem('theme');
+                if (savedTheme === 'light') {
+                    document.documentElement.classList.add('light-mode');
+                }
+            } catch (e) {
+                // Ignore errors if localStorage is not available
+            }
+        })();
+    </script>
+</head>
+<body class="profit-engine-page">
+    <!-- Copy light-mode class from html to body immediately -->
+    <script>
+        (function() {
+            if (document.documentElement.classList.contains('light-mode')) {
+                document.body.classList.add('light-mode');
+            }
+        })();
+    </script>
+    <!-- Mobile Menu Checkbox -->
+    <input type="checkbox" id="mobileMenuCheck">
+    
+    <!-- Mobile Menu Button -->
+    <label for="mobileMenuCheck" class="mobile-menu-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 12h18M3 6h18M3 18h18"/>
+        </svg>
+    </label>
+    
+    <!-- Mobile Sidebar Overlay -->
+    <div class="mobile-sidebar-overlay"></div>
+    
+    <!-- Mobile Sidebar -->
+    <div class="mobile-sidebar">
+        <div class="mobile-sidebar-header">
+            <div class="mobile-sidebar-logo">
+                <img src="/assets/logo1.png" alt="Linkify Logo">
+                <h1>Cell Spott Manage</h1>
+            </div>
+            <label for="mobileMenuCheck" class="mobile-sidebar-close">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                </svg>
+            </label>
+        </div>
+        
+        <ul class="mobile-sidebar-nav">
+            <li>
+                <a href="/pages/home.html" class="mobile-nav-link" data-page="home">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                        <polyline points="9 22 9 12 15 12 15 22"/>
+                    </svg>
+                    Home
+                </a>
+            </li>
+            <li>
+                <a href="/pages/insights.html" class="mobile-nav-link" data-page="insights">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 3v18h18"/>
+                        <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
+                    </svg>
+                    Insights
+                </a>
+            </li>
+            <li>
+                <a href="/pages/admins.html" class="mobile-nav-link" data-page="admins">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                    Admins
+                </a>
+            </li>
+            <li>
+                <a href="/pages/actions.html" class="mobile-nav-link" data-page="actions">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        <path d="M9 12l2 2 4-4"/>
+                    </svg>
+                    Actions
+                </a>
+            </li>
+            <li>
+                <a href="/pages/flow-manager.html" class="mobile-nav-link" data-page="flow-manager">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                        <path d="M12 8v8M8 12h8"/>
+                    </svg>
+                    Flow Manager
+                </a>
+            </li>
+            <li>
+                <a href="/pages/profit-engine.html" class="mobile-nav-link active" data-page="profit-engine">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                    Profit Engine
+                </a>
+            </li>
+        </ul>
+        
+        <div class="mobile-sidebar-footer">
+            <div class="mobile-sidebar-actions">
+                <button class="mobile-sidebar-theme" id="mobileThemeToggle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                    </svg>
+                    Toggle Theme
+                </button>
+                <div class="mobile-sidebar-avatar-wrapper" id="mobileAvatarWrapper">
+                    <div class="mobile-sidebar-avatar" id="mobileUserAvatar"></div>
+                    <div class="mobile-sidebar-user-info">
+                        <div id="mobileUserEmail">User</div>
+                    </div>
+                </div>
+                <a href="/pages/settings.html" class="mobile-sidebar-nav-link">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/>
+                        <path d="M18.88 4h-.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+                        <path d="M5.12 4h-.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+                    </svg>
+                    Settings
+                </a>
+                <a href="#" class="mobile-sidebar-nav-link logout" id="mobileLogoutLink">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
+                    </svg>
+                    Logout
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-left">
+                <a href="/pages/home.html" class="nav-brand" style="text-decoration: none;">
+                    <img src="/assets/logo1.png" alt="Linkify Logo">
+                    <h1>Cell Spott Manage</h1>
+                </a>
+            </div>
+            <div class="nav-center">
+                <ul class="nav-links">
+                    <li><a href="/pages/home.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                            <polyline points="9 22 9 12 15 12 15 22"/>
+                        </svg>
+                        Home
+                    </a></li>
+                    <li><a href="/pages/insights.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 3v18h18"/>
+                            <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/>
+                        </svg>
+                        Insights
+                    </a></li>
+                    <li><a href="/pages/admins.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                            <circle cx="9" cy="7" r="4"/>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+                        </svg>
+                        Admins
+                    </a></li>
+                    <li><a href="/pages/actions.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                            <path d="M9 12l2 2 4-4"/>
+                        </svg>
+                        Actions
+                    </a></li>
+                    <li><a href="/pages/flow-manager.html" class="nav-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                            <path d="M12 8v8M8 12h8"/>
+                        </svg>
+                        Flow Manager
+                    </a></li>
+                    <li><a href="/pages/profit-engine.html" class="nav-link active">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                        </svg>
+                        Profit Engine
+                    </a></li>
+                </ul>
+            </div>
+            <div class="nav-right">
+                <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                    </svg>
+                </button>
+                <div class="avatar-container">
+                    <div class="avatar" id="userAvatar"></div>
+                    <div class="avatar-dropdown" id="avatarDropdown">
+                        <a href="/pages/settings.html" class="dropdown-item" id="settingsLink">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/>
+                                <path d="M18.88 4h-.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+                                <path d="M5.12 4h-.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+                            </svg>
+                            Settings
+                        </a>
+                        <a href="#" class="dropdown-item logout" id="logoutLink">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
+                            </svg>
+                            Logout
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="page-header">
+            <h2>Profit Engine</h2>
+            <p>Track profit from each subscriber operation</p>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="profit-summary-cards">
+            <div class="profit-card">
+                <h6 class="profit-card-label">Total Revenue</h6>
+                <h5 class="profit-card-value" id="totalRevenue">0 LBP</h5>
+            </div>
+            <div class="profit-card">
+                <h6 class="profit-card-label">Total Cost</h6>
+                <h5 class="profit-card-value" id="totalCost">0 LBP</h5>
+            </div>
+            <div class="profit-card">
+                <h6 class="profit-card-label">Total Profit</h6>
+                <h5 class="profit-card-value profit-value" id="totalProfit">0 LBP</h5>
+            </div>
+            <div class="profit-card">
+                <h6 class="profit-card-label">Avg Service Profit</h6>
+                <h5 class="profit-card-value" id="avgServiceProfit">0 LBP</h5>
+                <span class="profit-card-subtitle" id="serviceCount">0 services</span>
+            </div>
+        </div>
+
+        <!-- Date Filter Section -->
+        <div class="date-filter-card">
+            <div class="date-filter-content">
+                <h6 class="date-filter-title">Filter by Operation Date</h6>
+                <div class="date-filter-chips">
+                    <button class="date-filter-chip" data-date-filter="today">Today</button>
+                    <button class="date-filter-chip" data-date-filter="yesterday">Yesterday</button>
+                    <button class="date-filter-chip active" data-date-filter="this-month">This Month</button>
+                    <button class="date-filter-chip" data-date-filter="last-month">Last Month</button>
+                    <button class="date-filter-chip" data-date-filter="custom">Custom</button>
+                </div>
+                <!-- Custom Date Picker Fields -->
+                <div class="custom-date-picker" id="customDatePicker" style="display: none;">
+                    <div class="custom-date-input-group">
+                        <div class="custom-date-input-wrapper">
+                            <label for="startDateInput" class="custom-date-label">Start Date</label>
+                            <div class="custom-date-input-container">
+                                <input type="date" id="startDateInput" class="custom-date-input">
+                                <svg class="custom-date-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                                    <circle cx="18" cy="16" r="1.5"></circle>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="custom-date-input-wrapper">
+                            <label for="endDateInput" class="custom-date-label">End Date</label>
+                            <div class="custom-date-input-container">
+                                <input type="date" id="endDateInput" class="custom-date-input">
+                                <svg class="custom-date-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                                    <circle cx="18" cy="16" r="1.5"></circle>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <span class="date-filter-caption" id="dateFilterCaption">Showing subscriber operations between Dec 01, 2025 - Dec 31, 2025</span>
+            </div>
+        </div>
+
+        <!-- Filters Section -->
+        <div class="profit-filters">
+            <div class="filter-group">
+                <div class="search-wrapper">
+                    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <path d="m21 21-4.35-4.35"/>
+                    </svg>
+                    <input type="text" id="profitSearchInput" class="search-input" placeholder="Search by admin or subscriber number...">
+                </div>
+            </div>
+            <div class="filter-chips">
+                <button class="filter-chip active" data-filter="all">All</button>
+                <button class="filter-chip" data-filter="complete">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10s10-4.5 10-10S17.5 2 12 2m-2 15l-5-5l1.41-1.41L10 14.17l7.59-7.59L19 8z"/>
+                    </svg>
+                    Complete
+                </button>
+                <button class="filter-chip" data-filter="incomplete">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M13 13h-2V7h2m0 10h-2v-2h2M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10a10 10 0 0 0 10-10A10 10 0 0 0 12 2"/>
+                    </svg>
+                    Incomplete
+                </button>
+            </div>
+            <div class="filter-actions">
+                <button class="filter-action-btn" id="defaultCostsBtn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12A3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5a3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1s.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64z"/>
+                    </svg>
+                    Default Costs
+                </button>
+                <button class="filter-action-btn" id="defaultPricesBtn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M5.5 9A1.5 1.5 0 0 0 7 7.5A1.5 1.5 0 0 0 5.5 6A1.5 1.5 0 0 0 4 7.5A1.5 1.5 0 0 0 5.5 9m11.91 2.58c.36.36.59.86.59 1.42c0 .55-.22 1.05-.59 1.41l-5 5a1.996 1.996 0 0 1-2.83 0l-6.99-6.99C2.22 12.05 2 11.55 2 11V6c0-1.11.89-2 2-2h5c.55 0 1.05.22 1.41.58zm-3.87-5.87l1-1l6.87 6.87c.37.36.59.87.59 1.42s-.22 1.05-.58 1.41l-5.38 5.38l-1-1L20.75 13z"/>
+                    </svg>
+                    Default Prices
+                </button>
+            </div>
+        </div>
+
+        <!-- Profit Table -->
+        <div class="profit-table-container">
+            <div class="profit-table-wrapper">
+                <table class="profit-table" id="profitTable">
+                    <thead>
+                        <tr>
+                            <th width="40"></th>
+                            <th>Admin</th>
+                            <th>Size</th>
+                            <th>Quota</th>
+                            <th class="text-right">Cost</th>
+                            <th class="text-right">Revenue</th>
+                            <th class="text-right">Profit</th>
+                            <th class="text-center">Margin</th>
+                            <th class="text-center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="profitTableBody">
+                        <!-- Table rows will be populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Pagination Section -->
+        <div class="pagination-section">
+            <div class="pagination-container">
+                <div class="pagination-info">
+                    <span>Rows per page:</span>
+                    <select id="rowsPerPage" class="rows-per-page-select">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <span class="page-info" id="pageInfo">1-25 of 0</span>
+                </div>
+                <div class="pagination-controls">
+                    <button class="pagination-btn" id="prevPage" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M15 18l-6-6 6-6"/>
+                        </svg>
+                    </button>
+                    <button class="pagination-btn" id="nextPage" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 18l6-6-6-6"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Set Cost Modal -->
+    <div class="profit-modal-overlay" id="setCostModal">
+        <div class="profit-modal-container">
+            <div class="profit-modal-header">
+                <h2 class="profit-modal-title" id="setCostTitle">Set Cost</h2>
+                <button class="profit-modal-close" id="setCostClose" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="profit-modal-content">
+                <div class="profit-form-field">
+                    <label for="adminCostInput" class="profit-form-label">Admin Cost (LBP)</label>
+                    <input type="number" id="adminCostInput" class="profit-form-input" value="0" min="0" step="1000">
+                    <div class="profit-form-helper">Enter the total cost for this admin</div>
+                </div>
+            </div>
+            <div class="profit-modal-actions">
+                <button class="profit-modal-cancel" id="setCostCancel">Cancel</button>
+                <button class="profit-modal-save" id="setCostSave">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Default Costs Modal -->
+    <div class="profit-modal-overlay" id="defaultCostsModal">
+        <div class="profit-modal-container default-costs-modal">
+            <div class="profit-modal-header">
+                <h2 class="profit-modal-title">Default Service Costs</h2>
+                <button class="profit-modal-close" id="defaultCostsClose" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="profit-modal-content">
+                <!-- Info Alert -->
+                <div class="default-costs-alert">
+                    <svg class="default-costs-alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="16" x2="12" y2="12"/>
+                        <line x1="12" y1="8" x2="12.01" y2="8"/>
+                    </svg>
+                    <div class="default-costs-alert-message">
+                        Set default costs per service size. These apply automatically when no manual cost is set for a service.
+                    </div>
+                </div>
+                
+                <!-- Default Costs Table -->
+                <div class="default-costs-table-container">
+                    <div class="default-costs-table">
+                        <div class="default-costs-table-header">
+                            <div class="default-costs-col-size"></div>
+                            <div class="default-costs-col-label">Regular</div>
+                            <div class="default-costs-col-label">Data</div>
+                        </div>
+                        <div class="default-costs-table-body">
+                            <!-- 22 GB -->
+                            <div class="default-costs-table-row">
+                                <div class="default-costs-col-size">22 GB</div>
+                                <div class="default-costs-col-input">
+                                    <input type="text" id="defaultCost22Regular" class="default-cost-input" placeholder="Not set" data-size="22" data-type="regular">
+                                    <span class="default-cost-suffix">LBP</span>
+                                </div>
+                                <div class="default-costs-col-input">
+                                    <input type="text" id="defaultCost22Data" class="default-cost-input" placeholder="Not set" data-size="22" data-type="data">
+                                    <span class="default-cost-suffix">LBP</span>
+                                </div>
+                            </div>
+                            <!-- 44 GB -->
+                            <div class="default-costs-table-row">
+                                <div class="default-costs-col-size">44 GB</div>
+                                <div class="default-costs-col-input">
+                                    <input type="text" id="defaultCost44Regular" class="default-cost-input" placeholder="Not set" data-size="44" data-type="regular">
+                                    <span class="default-cost-suffix">LBP</span>
+                                </div>
+                                <div class="default-costs-col-input">
+                                    <input type="text" id="defaultCost44Data" class="default-cost-input" placeholder="Not set" data-size="44" data-type="data">
+                                    <span class="default-cost-suffix">LBP</span>
+                                </div>
+                            </div>
+                            <!-- 77 GB -->
+                            <div class="default-costs-table-row">
+                                <div class="default-costs-col-size">77 GB</div>
+                                <div class="default-costs-col-input">
+                                    <input type="text" id="defaultCost77Regular" class="default-cost-input" placeholder="Not set" data-size="77" data-type="regular">
+                                    <span class="default-cost-suffix">LBP</span>
+                                </div>
+                                <div class="default-costs-col-input">
+                                    <input type="text" id="defaultCost77Data" class="default-cost-input" placeholder="Not set" data-size="77" data-type="data">
+                                    <span class="default-cost-suffix">LBP</span>
+                                </div>
+                            </div>
+                            <!-- 111 GB -->
+                            <div class="default-costs-table-row">
+                                <div class="default-costs-col-size">111 GB</div>
+                                <div class="default-costs-col-input">
+                                    <input type="text" id="defaultCost111Regular" class="default-cost-input" placeholder="Not set" data-size="111" data-type="regular">
+                                    <span class="default-cost-suffix">LBP</span>
+                                </div>
+                                <div class="default-costs-col-input">
+                                    <input type="text" id="defaultCost111Data" class="default-cost-input" placeholder="Not set" data-size="111" data-type="data">
+                                    <span class="default-cost-suffix">LBP</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="profit-modal-actions">
+                <button class="profit-modal-cancel" id="defaultCostsCancel">Cancel</button>
+                <button class="profit-modal-save" id="defaultCostsSave">Save Defaults</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Default Prices Modal -->
+    <div class="profit-modal-overlay" id="defaultPricesModal">
+        <div class="profit-modal-container default-prices-modal">
+            <div class="profit-modal-header">
+                <h2 class="profit-modal-title">Default Partition Prices</h2>
+                <button class="profit-modal-close" id="defaultPricesClose" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="profit-modal-content">
+                <!-- Info Alert -->
+                <div class="default-prices-alert">
+                    <svg class="default-prices-alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="16" x2="12" y2="12"/>
+                        <line x1="12" y1="8" x2="12.01" y2="8"/>
+                    </svg>
+                    <div class="default-prices-alert-message">
+                        Set default sale prices per quota size. These apply automatically when no manual or store price exists for a partition.
+                    </div>
+                </div>
+                
+                <!-- Current Defaults Section -->
+                <div class="default-prices-section">
+                    <h6 class="default-prices-section-title">Current Defaults</h6>
+                    <div class="default-prices-list" id="defaultPricesList">
+                        <!-- Price entries will be populated by JavaScript -->
+                    </div>
+                </div>
+                
+                <!-- Divider -->
+                <hr class="default-prices-divider">
+                
+                <!-- Add New Default Section -->
+                <div class="default-prices-section">
+                    <h6 class="default-prices-section-title">Add New Default</h6>
+                    <div class="default-prices-add-form">
+                        <div class="default-prices-add-input-wrapper">
+                            <label for="newQuotaInput" class="default-prices-add-label">Quota</label>
+                            <div class="default-prices-add-input-container">
+                                <input type="text" id="newQuotaInput" class="default-prices-add-input" placeholder="e.g., 5.5">
+                                <span class="default-prices-add-suffix">GB</span>
+                            </div>
+                        </div>
+                        <div class="default-prices-add-input-wrapper">
+                            <label for="newPriceInput" class="default-prices-add-label">Price</label>
+                            <div class="default-prices-add-input-container">
+                                <input type="text" id="newPriceInput" class="default-prices-add-input" placeholder="e.g., 600,000">
+                                <span class="default-prices-add-suffix">LBP</span>
+                            </div>
+                        </div>
+                        <button class="default-prices-add-btn" id="addDefaultPriceBtn" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 5v14M5 12h14"/>
+                            </svg>
+                            Add
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="profit-modal-actions">
+                <button class="profit-modal-cancel" id="defaultPricesCancel">Cancel</button>
+                <button class="profit-modal-save" id="defaultPricesSave">Save Defaults</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Set Prices Modal -->
+    <div class="profit-modal-overlay" id="setPricesModal">
+        <div class="profit-modal-container">
+            <div class="profit-modal-header">
+                <h2 class="profit-modal-title" id="setPricesTitle">Set Prices</h2>
+                <button class="profit-modal-close" id="setPricesClose" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="profit-modal-content">
+                <div class="profit-prices-container" id="pricesContainer">
+                    <!-- Prices will be populated by JavaScript -->
+                </div>
+            </div>
+            <div class="profit-modal-actions">
+                <button class="profit-modal-cancel" id="setPricesCancel">Cancel</button>
+                <button class="profit-modal-save" id="setPricesSave">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
+    <!-- Firebase Config -->
+    <script src="/auth/firebase-config.js"></script>
+    
+    <!-- Block Status Check - Must run immediately after Firebase loads -->
+    <script src="/shared/auth-check.js"></script>
+    
+    <!-- Navigation Script -->
+    <script src="/shared/nav.js"></script>
+    
+    <!-- Push Notifications Script -->
+    <script src="/shared/push-notifications.js"></script>
+    
+    <!-- Profit Engine Script -->
+    <script src="/pages/profit-engine.js"></script>
+</body>
+</html>
+

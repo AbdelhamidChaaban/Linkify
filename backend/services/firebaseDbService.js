@@ -329,46 +329,41 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       console.log(`ℹ️ [${adminId}] No detectedRemovedActiveSubscribers in dashboardData - preserving existing ${removedActiveSubscribersToSave.length} removed subscriber(s) from Firebase`);
     }
     
-    // CRITICAL: Clear removedActiveSubscribers at 00:00 of the day AFTER validity date (billing cycle reset)
-    // Cleanup happens ONCE at 00:00:00 when today is the day AFTER validity date
-    // Example: If validity date is 21/12/2025, cleanup happens at 00:00:00 on 22/12/2025
+    // CRITICAL: Clear removedActiveSubscribers when validity date passes (billing cycle reset)
+    // Cleanup happens when today is AFTER the validity date (at 00:00:00 on the day after validity date)
+    // Example: If validity date is 22/12/2025, cleanup happens at 00:00:00 on 23/12/2025
     // Track last cleanup date to prevent multiple cleanups
     const validityDateStr = cleanDashboardData.validityDate || 
                            currentData.alfaData?.validityDate || 
                            currentData._cachedDates?.validityDate?.value;
     
     if (validityDateStr && typeof validityDateStr === 'string' && validityDateStr.trim()) {
-      // Parse validity date (format: "DD/MM/YYYY" like "21/12/2025" or "DD-MM-YYYY")
+      // Parse validity date (format: "DD/MM/YYYY" like "22/12/2025" or "DD-MM-YYYY")
       const dateMatch = validityDateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
       if (dateMatch) {
         const [, day, month, year] = dateMatch;
         const validityDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-        validityDate.setHours(0, 0, 0, 0); // Reset time to start of day
-        
-        // Calculate the day AFTER validity date (cleanup day)
-        const cleanupDate = new Date(validityDate);
-        cleanupDate.setDate(cleanupDate.getDate() + 1); // Add 1 day
+        validityDate.setHours(23, 59, 59, 999); // End of validity date day
         
         const today = new Date();
-        today.setHours(0, 0, 0, 0); // Reset time to start of day
+        today.setHours(0, 0, 0, 0); // Start of today
         
-        // Check if today is the day AFTER validity date (cleanup should happen at 00:00:00)
-        if (cleanupDate.getTime() === today.getTime()) {
+        // Check if today is AFTER validity date (i.e., today > validity date)
+        // This means validity date has passed, so we should clear removed subscribers
+        if (today.getTime() > validityDate.getTime()) {
           // Get last cleanup date from currentData (format: "YYYY-MM-DD")
           const lastCleanupDateStr = currentData._lastRemovedCleanupDate || null;
           const todayStr = today.toISOString().split('T')[0]; // Format: "YYYY-MM-DD"
           
-          // Get current hour to check if it's around 00:00 (within first 5 minutes of the day)
-          const currentHour = new Date().getHours();
-          const currentMinute = new Date().getMinutes();
-          const isEarlyMorning = currentHour === 0 && currentMinute < 5;
+          // Check if we need to perform cleanup
+          // Cleanup should happen once per day when validity date has passed
+          // We check if cleanup hasn't happened today yet
+          const shouldCleanup = lastCleanupDateStr !== todayStr;
           
-          // Only clear if cleanup hasn't happened today yet AND it's early morning (00:00-00:05)
-          // This ensures cleanup happens once at the start of the day AFTER validity date
-          if (lastCleanupDateStr !== todayStr && isEarlyMorning) {
+          if (shouldCleanup) {
             if (removedActiveSubscribersToSave.length > 0 || removedSubscribersToSave.length > 0) {
-              console.log(`🔄 [${adminId}] [Cleanup] Validity date (${validityDateStr}) ended yesterday - clearing removed subscribers at 00:00 (billing cycle reset)`);
-              console.log(`   [Cleanup] Removed subscribers cleared for admin ${adminId} at 00:00`);
+              console.log(`🔄 [${adminId}] [Cleanup] Validity date (${validityDateStr}) has passed - clearing removed subscribers (billing cycle reset)`);
+              console.log(`   [Cleanup] Removed subscribers cleared for admin ${adminId}`);
               console.log(`   [Cleanup] Clearing ${removedActiveSubscribersToSave.length} removed active subscriber(s) and ${removedSubscribersToSave.length} removed subscriber phone(s)`);
               removedActiveSubscribersToSave = []; // Clear the list for new billing cycle
               removedSubscribersToSave = []; // Clear the list for new billing cycle
@@ -379,13 +374,10 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
             } else {
               // No subscribers to clean, but still mark cleanup date to prevent repeated checks
               currentData._lastRemovedCleanupDate = todayStr;
-              console.log(`ℹ️ [${adminId}] [Cleanup] Validity date (${validityDateStr}) ended yesterday, but no removed subscribers to clean`);
+              console.log(`ℹ️ [${adminId}] [Cleanup] Validity date (${validityDateStr}) has passed, but no removed subscribers to clean`);
             }
-          } else if (lastCleanupDateStr === todayStr) {
+          } else {
             console.log(`ℹ️ [${adminId}] [Cleanup] Cleanup already performed today (${todayStr}) - skipping to prevent duplicate cleanups`);
-          } else if (!isEarlyMorning) {
-            // Not early morning yet, cleanup will happen at 00:00 via scheduled job
-            console.log(`ℹ️ [${adminId}] [Cleanup] Validity date (${validityDateStr}) ended yesterday, cleanup scheduled for 00:00 (current time: ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
           }
         }
       }
@@ -889,6 +881,43 @@ async function logAction(userId, adminId, adminName, adminPhone, action, subscri
       
       await adminDbInstance.collection('actionLogs').add(actionLog);
       console.log(`✅ Logged action: ${action} subscriber ${subscriberPhone} for admin ${adminId} (${success ? 'success' : 'failed'})`);
+      
+      // Update user revenue if action is 'add' and successful
+      if (action === 'add' && success && quota !== null && quota !== undefined && userId) {
+        try {
+          const userRef = adminDbInstance.collection('users').doc(userId);
+          const userDoc = await userRef.get();
+          
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            const defaultPrices = userData.defaultPrices || {};
+            const quotaNum = typeof quota === 'string' ? parseFloat(quota) : quota;
+            
+            // Calculate price for this quota
+            let price = 0;
+            if (defaultPrices[quotaNum] !== undefined) {
+              price = defaultPrices[quotaNum];
+            } else if (defaultPrices[String(quotaNum)] !== undefined) {
+              price = defaultPrices[String(quotaNum)];
+            }
+            
+            // Update revenue if price is found
+            if (price > 0) {
+              const admin = require('firebase-admin');
+              const currentRevenue = userData.revenue || 0;
+              await userRef.update({
+                revenue: currentRevenue + price,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+              });
+              console.log(`💰 Updated revenue for user ${userId}: +${price} (total: ${currentRevenue + price})`);
+            }
+          }
+        } catch (revenueError) {
+          // Non-critical error - log but don't fail the action logging
+          console.warn(`⚠️ Failed to update revenue for user ${userId}:`, revenueError.message);
+        }
+      }
+      
       return true;
     }
     
@@ -922,6 +951,49 @@ async function logAction(userId, adminId, adminName, adminPhone, action, subscri
     
     await addDoc(actionsCollection, actionLog);
     console.log(`✅ Logged action: ${action} subscriber ${subscriberPhone} for admin ${adminId} (${success ? 'success' : 'failed'})`);
+    
+    // Update user revenue if action is 'add' and successful (client SDK fallback)
+    // Note: This requires security rules to allow user document updates
+    if (action === 'add' && success && quota !== null && quota !== undefined && userId) {
+      try {
+        // Try to use Admin SDK for revenue update (more reliable)
+        const adminDbInstance = initializeAdminDb();
+        if (adminDbInstance) {
+          const userRef = adminDbInstance.collection('users').doc(userId);
+          const userDoc = await userRef.get();
+          
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            const defaultPrices = userData.defaultPrices || {};
+            const quotaNum = typeof quota === 'string' ? parseFloat(quota) : quota;
+            
+            // Calculate price for this quota
+            let price = 0;
+            if (defaultPrices[quotaNum] !== undefined) {
+              price = defaultPrices[quotaNum];
+            } else if (defaultPrices[String(quotaNum)] !== undefined) {
+              price = defaultPrices[String(quotaNum)];
+            }
+            
+            // Update revenue if price is found
+            if (price > 0) {
+              const admin = require('firebase-admin');
+              const currentRevenue = userData.revenue || 0;
+              await userRef.update({
+                revenue: currentRevenue + price,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+              });
+              console.log(`💰 Updated revenue for user ${userId}: +${price} (total: ${currentRevenue + price})`);
+            }
+          }
+        }
+        // If Admin SDK not available, skip revenue update (requires security rules for client SDK)
+      } catch (revenueError) {
+        // Non-critical error - log but don't fail the action logging
+        console.warn(`⚠️ Failed to update revenue for user ${userId}:`, revenueError.message);
+      }
+    }
+    
     return true;
   } catch (error) {
     console.error('❌ Error logging action:', error.message);
@@ -956,16 +1028,17 @@ async function getActionLogs(userId, options = {}) {
     const adminDbInstance = initializeAdminDb();
     if (adminDbInstance) {
       try {
-        // Try query with orderBy first (requires composite index)
-        let query = adminDbInstance.collection('actionLogs')
-          .where('userId', '==', userId)
-          .orderBy('timestamp', 'desc')
-          .limit(limitCount);
+        // Query using composite index: action, userId, timestamp
+        // When using composite indexes, where clauses should match index order
+        let query = adminDbInstance.collection('actionLogs');
         
-        // Add action filter if not 'all'
+        // Build query based on filter - match index field order (action, userId, timestamp)
         if (actionFilter !== 'all') {
           query = query.where('action', '==', actionFilter);
         }
+        query = query.where('userId', '==', userId);
+        query = query.orderBy('timestamp', 'desc');
+        query = query.limit(limitCount);
         
         const querySnapshot = await query.get();
         const logs = [];
@@ -980,13 +1053,13 @@ async function getActionLogs(userId, options = {}) {
           });
         });
         
-        console.log(`✅ Retrieved ${logs.length} action log(s) for user ${userId} (filter: ${actionFilter}) using Admin SDK`);
+        console.log(`✅ Retrieved ${logs.length} action log(s) for user ${userId} (filter: ${actionFilter}) using Admin SDK with composite index`);
         return logs;
       } catch (indexError) {
         // If index error, use simpler query and sort in memory
         if (indexError.message && indexError.message.includes('index')) {
-          console.warn('⚠️ Composite index required. Using fallback query (sorted in memory)...');
-          console.warn('   Create index here:', indexError.message.match(/https:\/\/[^\s]+/)?.[0] || 'Firebase Console > Firestore > Indexes');
+          // Log at debug level - this is expected behavior with fallback
+          console.log('ℹ️ Using fallback query for action logs (composite index not required, but recommended for better performance)');
           
           let simpleQuery = adminDbInstance.collection('actionLogs')
             .where('userId', '==', userId)
