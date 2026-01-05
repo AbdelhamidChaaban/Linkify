@@ -488,17 +488,17 @@ async function getAdminData(adminId, expectedUserId = null) {
     return null;
   }
   
-  // Check if Firebase is initialized
-  if (!db || !app) {
-    console.warn('⚠️ Firebase not initialized, cannot get admin data');
+  // Use Admin SDK to bypass security rules
+  const adminDbInstance = initializeAdminDb();
+  if (!adminDbInstance) {
+    console.warn('⚠️ Firebase Admin SDK not available, cannot get admin data');
     return null;
   }
   
   try {
-    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
-    const adminDoc = await getDoc(adminDocRef);
+    const adminDoc = await adminDbInstance.collection(COLLECTION_NAME).doc(adminId).get();
     
-    if (!adminDoc.exists()) {
+    if (!adminDoc.exists) {
       console.warn(`⚠️ Admin document ${adminId} does not exist`);
       return null;
     }
