@@ -174,6 +174,7 @@ app.get('/api/cache/:identifier/stats', async (req, res) => {
 // Fetch Alfa dashboard data (with incremental scraping support)
 app.post('/api/alfa/fetch', async (req, res) => {
     const requestStartTime = Date.now();
+    let identifier = 'unknown'; // Declare identifier outside try block for error handling
     
     // CRITICAL: Log immediately - this MUST show up
     process.stdout.write(`\n\n🔥🔥🔥 REFRESH API CALLED 🔥🔥🔥\n`);
@@ -265,7 +266,7 @@ app.post('/api/alfa/fetch', async (req, res) => {
         }
     } catch (error) {
         const errorDuration = Date.now() - (requestStartTime || Date.now());
-        console.error(`\n[${new Date().toISOString()}] ❌ [API] /api/alfa/fetch ERROR for ${identifier || 'unknown'}`);
+        console.error(`\n[${new Date().toISOString()}] ❌ [API] /api/alfa/fetch ERROR for ${identifier}`);
         console.error(`   Duration: ${errorDuration}ms`);
         console.error(`   Error message: ${error?.message}`);
         console.error(`   Stack trace: ${error?.stack}`);
