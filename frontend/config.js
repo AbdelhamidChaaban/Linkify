@@ -12,7 +12,7 @@
                         window.location.hostname === '';
 
     // Auto-detect API URL based on environment
-    window.AEFA_API_URL = window.AEFA_API_URL || (
+    const apiURL = window.AEFA_API_URL || (
         isLocalhost
             ? 'http://localhost:3000'  // Local development
             : (() => {
@@ -27,14 +27,16 @@
                 }
 
                 // Fallback to Render URL (direct Render deployment URL)
-                // TODO: Update this with your actual Render backend URL after deployment
+                // Update this with your actual Render backend URL
                 return 'https://cell-spott-manage-backend.onrender.com';
             })()
     );
     
-    // Log the detected URL for debugging (only in development)
-    if (isLocalhost) {
-        console.log('🌐 Backend API URL:', window.AEFA_API_URL);
-    }
+    // Set both variable names for backward compatibility
+    window.AEFA_API_URL = apiURL;
+    window.ALFA_API_URL = apiURL;  // Alias for files that use ALFA_API_URL
+    
+    // Log the detected URL for debugging
+    console.log('🌐 Backend API URL:', window.AEFA_API_URL);
 })();
 
