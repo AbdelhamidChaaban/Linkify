@@ -612,6 +612,7 @@ async function addPendingSubscriber(adminId, subscriberPhone, quota) {
 
 /**
  * Get pending subscribers for an admin
+ * Uses Admin SDK to bypass security rules
  * @param {string} adminId - Admin document ID
  * @returns {Promise<Array<{phone: string, quota: number, addedAt: string}>>} Pending subscribers
  */
@@ -621,16 +622,17 @@ async function getPendingSubscribers(adminId) {
     return [];
   }
   
-  // Check if Firebase is initialized
-  if (!db || !app) {
+  // Use Admin SDK to bypass security rules
+  const adminDbInstance = initializeAdminDb();
+  if (!adminDbInstance) {
+    console.warn('⚠️ Firebase Admin SDK not available, cannot get pending subscribers');
     return [];
   }
   
   try {
-    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
-    const adminDoc = await getDoc(adminDocRef);
+    const adminDoc = await adminDbInstance.collection(COLLECTION_NAME).doc(adminId).get();
     
-    if (!adminDoc.exists()) {
+    if (!adminDoc.exists) {
       return [];
     }
     
