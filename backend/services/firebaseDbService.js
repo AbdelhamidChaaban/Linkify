@@ -120,22 +120,17 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     return;
   }
   
-  // Check if Firebase is initialized
-  if (!db || !app) {
-    console.warn('⚠️ Firebase not initialized, skipping database update');
+  // Use Admin SDK to bypass security rules
+  const adminDbInstance = initializeAdminDb();
+  if (!adminDbInstance) {
+    console.warn('⚠️ Firebase Admin SDK not available, skipping database update');
     return; // Don't throw, just skip the save
   }
   
   // Wrap everything in a try-catch to ensure we never throw
   try {
-    // Try to create doc reference - this might fail if db is offline
-    let userDocRef;
-    try {
-      userDocRef = doc(db, COLLECTION_NAME, adminId);
-    } catch (docError) {
-      console.warn('⚠️ Could not create document reference (Firebase may be offline):', docError.message);
-      return; // Can't proceed without a valid doc reference
-    }
+    // Create document reference using Admin SDK
+    const userDocRef = adminDbInstance.collection(COLLECTION_NAME).doc(adminId);
     
     // Preserve critical fields
     const totalConsumptionBackup = dashboardData.totalConsumption;
@@ -213,8 +208,8 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     // Get current document to preserve other fields
     let currentData = {};
     try {
-      const currentDoc = await getDoc(userDocRef);
-      if (!currentDoc.exists()) {
+      const currentDoc = await userDocRef.get();
+      if (!currentDoc.exists) {
         console.warn(`⚠️ Admin document ${adminId} does not exist`);
         return; // Don't create new document if it doesn't exist
       }
@@ -430,7 +425,7 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     
     // Update document
     try {
-      await setDoc(userDocRef, {
+      await userDocRef.set({
         ...cleanCurrentDataWithoutPreserved, // Include all other current data first
         ...cleanPreservedFields, // Then apply preserved fields (these take precedence)
         alfaData: cleanDashboardData,
