@@ -28,7 +28,7 @@
 
                 // Fallback to Render URL (direct Render deployment URL)
                 // TODO: Update this with your actual Render backend URL after deployment
-                return 'https://your-backend-name.onrender.com';
+                return 'https://cell-spott-manage-backend.onrender.com';
             })()
     );
     
