@@ -1,33 +1,40 @@
 /**
  * Frontend API Configuration
- * 
- * This file configures the backend API URL for production deployments.
- * 
- * IMPORTANT: After deploying your backend to Render.com, update the URL below
- * with your actual Render.com backend URL.
- * 
- * Example: https://linkify-backend.onrender.com
- * 
- * For local development, this can be overridden by setting window.AEFA_API_URL
- * before this script loads.
+ * Sets the backend API URL based on the environment
  */
 
-// Backend API URL - Auto-detect localhost for development
-const isLocalhost = window.location.hostname === 'localhost' || 
-                    window.location.hostname === '127.0.0.1' ||
-                    window.location.hostname === '';
+(function() {
+    'use strict';
+    
+    // Detect if running on localhost
+    const isLocalhost = window.location.hostname === 'localhost' || 
+                        window.location.hostname === '127.0.0.1' ||
+                        window.location.hostname === '';
 
-window.AEFA_API_URL = window.AEFA_API_URL || (
-    isLocalhost 
-        ? 'http://localhost:3000'  // Local development
-        : 'https://cellspottmanage.onrender.com'  // Production
-);
+    // Auto-detect API URL based on environment
+    window.AEFA_API_URL = window.AEFA_API_URL || (
+        isLocalhost
+            ? 'http://localhost:3000'  // Local development
+            : (() => {
+                // Production: Use api subdomain if on custom domain, otherwise use Render URL
+                const hostname = window.location.hostname;
 
-// Log the configured API URL (for debugging in production)
-if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    console.log('🌐 Backend API URL:', window.AEFA_API_URL);
-    if (window.AEFA_API_URL.includes('your-backend-url')) {
-        console.warn('⚠️ WARNING: Backend URL not configured! Update frontend/config.js with your Render.com backend URL.');
+                // If on custom domain (not vercel.app), use api subdomain
+                if (hostname && !hostname.includes('vercel.app') && !hostname.includes('localhost')) {
+                    // Replace www or remove subdomain, add api
+                    const domain = hostname.replace(/^(www\.|api\.)/, '');
+                    return `https://api.${domain}`;
+                }
+
+                // Fallback to Render URL (direct Render deployment URL)
+                // TODO: Update this with your actual Render backend URL after deployment
+                return 'https://your-backend-name.onrender.com';
+            })()
+    );
+    
+    // Log the detected URL for debugging (only in development)
+    if (isLocalhost) {
+        console.log('🌐 Backend API URL:', window.AEFA_API_URL);
     }
-}
+})();
 

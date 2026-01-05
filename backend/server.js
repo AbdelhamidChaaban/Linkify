@@ -50,16 +50,30 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-// CORS configuration - Allow requests from Vercel and localhost
+// CORS configuration - Allow requests from Vercel, Render, localhost, and custom domains
+const allowedOrigins = [
+    /\.vercel\.app$/,  // All Vercel deployments
+    /\.onrender\.com$/,  // All Render deployments (for testing)
+    'http://localhost:3000',
+    'http://localhost:8080',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:8080'
+];
+
+// Add custom frontend URL if provided (e.g., from Cloudflare custom domain)
+if (process.env.FRONTEND_URL) {
+    allowedOrigins.push(process.env.FRONTEND_URL);
+    // Also add the www subdomain if the main domain is provided
+    if (process.env.FRONTEND_URL.startsWith('https://')) {
+        const domain = process.env.FRONTEND_URL.replace('https://', '');
+        if (!domain.startsWith('www.')) {
+            allowedOrigins.push(`https://www.${domain}`);
+        }
+    }
+}
+
 app.use(cors({
-    origin: [
-        /\.vercel\.app$/,  // All Vercel deployments
-        /\.onrender\.com$/,  // All Render deployments (for testing)
-        'http://localhost:3000',
-        'http://localhost:8080',
-        'http://127.0.0.1:3000',
-        'http://127.0.0.1:8080'
-    ],
+    origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
