@@ -1353,7 +1353,8 @@ class ProfitEngine {
             const token = await user.getIdToken();
             
             // Delete from API
-            const response = await fetch(`/api/actionLogs/${service.id}`, {
+            const apiBaseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
+            const response = await fetch(`${apiBaseURL}/api/actionLogs/${service.id}`, {
                 method: 'DELETE',
                 headers: {
                     'Authorization': `Bearer ${token}`,
