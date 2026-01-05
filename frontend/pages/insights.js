@@ -3089,7 +3089,7 @@ class InsightsManager {
         try {
             // Fetch balance history from backend
             // Get backend base URL from config
-            const baseURL = window.AEFA_API_URL || window.location.origin;
+            const baseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
             const response = await fetch(`${baseURL}/api/admin/${adminId}/balance-history`);
             const result = await response.json();
             
@@ -5100,7 +5100,7 @@ class InsightsManager {
             const results = [];
             for (const item of items) {
                 try {
-                    const baseURL = window.AEFA_API_URL || window.location.origin;
+                    const baseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
                     const response = await fetch(`${baseURL}/api/subscribers/add`, {
                         method: 'POST',
                         headers: {

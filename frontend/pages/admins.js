@@ -485,7 +485,7 @@ class AdminsManager {
             }
             
             // Get API base URL
-            const apiBaseURL = window.AEFA_API_URL || window.location.origin;
+            const apiBaseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
             
             if (this.editingAdminId) {
                 // Update existing admin via API
@@ -950,7 +950,7 @@ class AdminsManager {
             }
             
             // Get API base URL
-            const apiBaseURL = window.AEFA_API_URL || window.location.origin;
+            const apiBaseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
             
             // Delete admin via API (also updates adminCount)
             const response = await fetch(`${apiBaseURL}/api/admins/${id}`, {
