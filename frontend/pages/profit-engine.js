@@ -436,7 +436,8 @@ class ProfitEngine {
             const token = await auth.currentUser.getIdToken();
             
             // Fetch action logs from API
-            const response = await fetch('/api/actionLogs?actionFilter=add&limit=1000', {
+            const apiBaseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
+            const response = await fetch(`${apiBaseURL}/api/actionLogs?actionFilter=add&limit=1000`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'

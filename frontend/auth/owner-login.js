@@ -9,7 +9,7 @@ class OwnerLogin {
         this.passwordToggle = document.getElementById('passwordToggle');
         this.submitBtn = document.getElementById('submitBtn');
         this.errorMessage = document.getElementById('errorMessage');
-        this.baseURL = window.ALFA_API_URL || 'http://localhost:3000';
+        this.baseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
         
         this.init();
     }
