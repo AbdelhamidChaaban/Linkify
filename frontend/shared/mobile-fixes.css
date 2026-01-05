@@ -1,0 +1,155 @@
+/* Mobile Fixes - Phone screen only (max-width: 768px) */
+
+@media (max-width: 768px) {
+    /* ==================== Navigation Smaller ==================== */
+    .navbar {
+        padding: 0.5rem 0.75rem 0.5rem 3.5rem !important;
+        min-height: auto !important;
+    }
+    
+    .nav-brand img {
+        height: 40px !important;
+        width: auto;
+    }
+    
+    .nav-brand h1,
+    .nav-brand-text {
+        font-size: 1.1rem !important;
+        letter-spacing: 0.5px;
+    }
+    
+    /* ==================== Make Pages Scrollable ==================== */
+    /* Remove fixed height and overflow hidden on mobile for all pages */
+    html.home-page,
+    body.home-page {
+        overflow: visible !important;
+        height: auto !important;
+        position: relative !important;
+    }
+    
+    body.home-page .main-content {
+        height: auto !important;
+        overflow: visible !important;
+        position: relative !important;
+        min-height: calc(100vh - 60px);
+    }
+    
+    /* Insights page - make scrollable */
+    html.insights-page,
+    body.insights-page {
+        overflow: visible !important;
+        height: auto !important;
+        position: relative !important;
+    }
+    
+    body.insights-page .main-content {
+        height: auto !important;
+        overflow: visible !important;
+        position: relative !important;
+        min-height: calc(100vh - 60px);
+    }
+    
+    /* Admins page - make scrollable */
+    html.admins-page,
+    body.admins-page {
+        overflow: visible !important;
+        height: auto !important;
+        position: relative !important;
+    }
+    
+    body.admins-page .main-content {
+        height: auto !important;
+        overflow: visible !important;
+        position: relative !important;
+        min-height: calc(100vh - 60px);
+    }
+    
+    /* ==================== Better Spacing ==================== */
+    .main-content {
+        padding: 1rem !important;
+    }
+    
+    .container {
+        padding: 0.5rem !important;
+    }
+    
+    /* ==================== Insights Page - Button Beside Title ==================== */
+    .page-header-section {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 0.75rem !important;
+        margin-bottom: 1rem !important;
+        flex-wrap: nowrap !important;
+    }
+    
+    .header-left {
+        flex: 1 !important;
+        min-width: 0 !important;
+    }
+    
+    .header-right {
+        flex: 0 0 auto !important;
+        width: auto !important;
+    }
+    
+    .add-subscribers-btn {
+        padding: 0.5rem 0.75rem !important;
+        font-size: 0.75rem !important;
+        min-height: 36px !important;
+        white-space: nowrap !important;
+        width: auto !important;
+        gap: 0.375rem !important;
+    }
+    
+    .add-subscribers-btn svg {
+        width: 16px !important;
+        height: 16px !important;
+    }
+    
+    .page-title {
+        margin: 0 !important;
+        font-size: 1.25rem !important;
+    }
+    
+    /* ==================== Admins Page - Button Beside Title ==================== */
+    .page-header {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 0.75rem !important;
+        margin-bottom: 1rem !important;
+        flex-wrap: nowrap !important;
+    }
+    
+    .page-header > div:first-child {
+        flex: 1 !important;
+        min-width: 0 !important;
+    }
+    
+    .page-header h2 {
+        margin: 0 0 0.25rem 0 !important;
+        font-size: 1.25rem !important;
+    }
+    
+    .page-header p {
+        margin: 0 !important;
+        font-size: 0.875rem !important;
+    }
+    
+    .new-admin-btn {
+        padding: 0.5rem 0.75rem !important;
+        font-size: 0.75rem !important;
+        min-height: 36px !important;
+        white-space: nowrap !important;
+        width: auto !important;
+        gap: 0.375rem !important;
+        flex: 0 0 auto !important;
+    }
+    
+    .new-admin-btn svg {
+        width: 16px !important;
+        height: 16px !important;
+    }
+}
+
