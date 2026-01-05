@@ -17,7 +17,8 @@ class MobileEnhancements {
     init() {
         // Only enable on mobile devices
         if (this.isMobileDevice()) {
-            this.initPullToRefresh();
+            // Disable pull-to-refresh - only allow normal scrolling
+            // this.initPullToRefresh();
             this.initSwipeGestures();
             this.initTouchOptimizations();
         }
