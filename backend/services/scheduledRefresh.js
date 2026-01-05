@@ -1,5 +1,4 @@
 const cron = require('node-cron');
-const { getFirestore, collection, query, where, getDocs, doc, getDoc, setDoc } = require('firebase/firestore');
 // MIGRATED: Using API-first service (no Puppeteer) instead of legacy alfaService.js
 const { fetchAlfaData } = require('./alfaServiceApiFirst');
 const { updateDashboardData } = require('./firebaseDbService');
@@ -7,74 +6,78 @@ const { getSession, deleteSession } = require('./sessionManager');
 const snapshotManager = require('./snapshotManager');
 const cacheLayer = require('./cacheLayer');
 
-// Get Firebase instance from firebaseDbService
-// We'll need to access the db instance, so let's create our own query function
+// Firebase Admin SDK instance (bypasses security rules)
 let db = null;
-let app = null;
 
 /**
- * Initialize Firebase for scheduled refresh
- * This uses the same config as firebaseDbService
+ * Initialize Firebase Admin SDK for scheduled refresh
+ * Uses Admin SDK to bypass Firestore security rules
  */
 function initializeFirebase() {
     try {
-        const { initializeApp } = require("firebase/app");
-        const { getFirestore } = require("firebase/firestore");
+        const admin = require('firebase-admin');
         
-        const firebaseConfig = {
-            apiKey: process.env.FIREBASE_API_KEY,
-            authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-            projectId: process.env.FIREBASE_PROJECT_ID,
-            storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-            messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-            appId: process.env.FIREBASE_APP_ID,
-            measurementId: process.env.FIREBASE_MEASUREMENT_ID
-        };
-
         // Check if Firebase is disabled
         if (process.env.DISABLE_FIREBASE === 'true') {
             console.log('ℹ️ Firebase is disabled, scheduled refresh will not work');
             return false;
         }
 
-        // Check required env vars
-        const requiredEnvVars = ['FIREBASE_API_KEY', 'FIREBASE_AUTH_DOMAIN', 'FIREBASE_PROJECT_ID'];
-        const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+        // Check if Admin SDK is already initialized
+        if (admin.apps && admin.apps.length > 0) {
+            // Use existing Admin SDK instance
+            db = admin.firestore();
+            console.log('✅ Firebase Admin SDK already initialized, using existing instance for scheduled refresh');
+            return true;
+        }
+
+        // Try to initialize Admin SDK if service account is available
+        const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
+            ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
+            : null;
         
-        if (missingVars.length > 0) {
-            console.warn('⚠️ Missing required Firebase environment variables for scheduled refresh:', missingVars.join(', '));
+        if (!serviceAccount) {
+            console.warn('⚠️ FIREBASE_SERVICE_ACCOUNT_KEY not found. Scheduled refresh requires Admin SDK.');
+            console.warn('   Please set FIREBASE_SERVICE_ACCOUNT_KEY environment variable in Render.');
             return false;
         }
 
-        app = initializeApp(firebaseConfig, 'scheduled-refresh');
-        db = getFirestore(app);
-        console.log('✅ Firebase initialized for scheduled refresh');
+        // Initialize Admin SDK
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        
+        db = admin.firestore();
+        console.log('✅ Firebase Admin SDK initialized for scheduled refresh');
         return true;
     } catch (error) {
-        console.error('❌ Error initializing Firebase for scheduled refresh:', error.message);
+        console.error('❌ Error initializing Firebase Admin SDK for scheduled refresh:', error.message);
+        if (error.message.includes('JSON')) {
+            console.error('   ⚠️ FIREBASE_SERVICE_ACCOUNT_KEY may be invalid JSON. Make sure it\'s minified on a single line.');
+        }
         return false;
     }
 }
 
 /**
  * Get all admins from Firestore (regardless of status)
+ * Uses Admin SDK to bypass security rules
  * @returns {Promise<Array>} Array of all admin objects with id, phone, password
  */
 async function getAllAdmins() {
     if (!db) {
-        console.warn('⚠️ Firebase not initialized, cannot query admins');
+        console.warn('⚠️ Firebase Admin SDK not initialized, cannot query admins');
         return [];
     }
 
     try {
-        const adminsCollection = collection(db, 'admins');
-        const snapshot = await getDocs(adminsCollection);
+        const snapshot = await db.collection('admins').get();
         
         const allAdmins = [];
         let totalDocs = 0;
         let missingPhoneOrPassword = 0;
         
-        snapshot.forEach((doc) => {
+        snapshot.docs.forEach((doc) => {
             totalDocs++;
             const data = doc.data();
             const adminId = doc.id;
@@ -119,25 +122,24 @@ async function getAllAdmins() {
 
 /**
  * Get all active admins from Firestore
+ * Uses Admin SDK to bypass security rules
  * Status is stored in alfaData.status or directly on the admin document
  */
 async function getActiveAdmins() {
     if (!db) {
-        console.warn('⚠️ Firebase not initialized, cannot query active admins');
+        console.warn('⚠️ Firebase Admin SDK not initialized, cannot query active admins');
         return [];
     }
 
     try {
-        const adminsCollection = collection(db, 'admins');
-        
         // Query for admins where status is 'active' (case-insensitive)
         // Status can be in alfaData.status or directly on the document
         // We'll get all admins and filter in memory since Firestore doesn't support nested field queries easily
-        const snapshot = await getDocs(adminsCollection);
+        const snapshot = await db.collection('admins').get();
         
         const activeAdmins = [];
         
-        snapshot.forEach((doc) => {
+        snapshot.docs.forEach((doc) => {
             const data = doc.data();
             const adminId = doc.id;
             
@@ -366,10 +368,10 @@ async function cleanupRemovedSubscribers() {
         
         for (const admin of allAdmins) {
             try {
-                const adminDocRef = doc(db, 'admins', admin.id);
-                const adminDoc = await getDoc(adminDocRef);
+                const adminDocRef = db.collection('admins').doc(admin.id);
+                const adminDoc = await adminDocRef.get();
                 
-                if (!adminDoc.exists()) {
+                if (!adminDoc.exists) {
                     continue;
                 }
                 
@@ -407,7 +409,7 @@ async function cleanupRemovedSubscribers() {
                         console.log(`   [Cleanup] Validity date: ${validityDateStr} (ended yesterday), Removed subscribers: ${removedActiveSubscribers.length}`);
                         
                         // Clear removed subscribers
-                        await setDoc(adminDocRef, {
+                        await adminDocRef.set({
                             removedActiveSubscribers: [],
                             removedSubscribers: [],
                             _lastRemovedCleanupDate: todayStr
