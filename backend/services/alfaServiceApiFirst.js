@@ -731,6 +731,8 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 const timeUntilExpiry = cookieExpiry - now;
                 const twoHours = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
                 const tenMinutes = 10 * 60 * 1000; // 10 minutes in milliseconds
+                const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
+                const thirtyMinutes = 30 * 60 * 1000; // 30 minutes in milliseconds
                 
                 if (timeUntilExpiry > tenMinutes && timeUntilExpiry <= twoHours) {
                     // Cookies expire in 5-30 minutes - proactively extend them (but with short timeout)
