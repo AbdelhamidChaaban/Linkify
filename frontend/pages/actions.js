@@ -399,7 +399,7 @@ class ActionsManager {
                 throw new Error('Authentication token not available');
             }
             
-            const baseURL = window.location.origin;
+            const baseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
             const deleteUrl = `${baseURL}/api/actionLogs/${log.id}`;
             console.log('🗑️ [Delete] Attempting to delete action log:', deleteUrl);
             
