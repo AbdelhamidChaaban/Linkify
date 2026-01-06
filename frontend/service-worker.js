@@ -3,7 +3,7 @@
  * Handles background push events and displays notifications
  */
 
-const CACHE_NAME = 'linkify-v1';
+const CACHE_NAME = 'linkify-v2'; // Updated to force cache refresh
 
 // Install event - cache assets
 self.addEventListener('install', (event) => {
@@ -67,50 +67,65 @@ self.addEventListener('fetch', (event) => {
         return;
     }
     
-    event.respondWith(
-        caches.match(event.request)
-            .then((response) => {
-                // Return cached version or fetch from network
-                if (response) {
-                    return response;
-                }
-                
-                return fetch(event.request).catch((error) => {
-                    // Only log if it's not a network error (which is expected when offline)
-                    if (error.name !== 'TypeError' || !error.message.includes('Failed to fetch')) {
-                        console.error('Service Worker: Fetch failed:', error);
+    // Check if this is an HTML, CSS, or JS file that should use network-first strategy
+    const url = new URL(event.request.url);
+    const isStaticAsset = url.pathname.match(/\.(css|js|html|htm)$/i);
+    
+    if (isStaticAsset) {
+        // Network-first strategy: Try network first, fallback to cache
+        event.respondWith(
+            fetch(event.request)
+                .then((response) => {
+                    // If network request succeeds, cache and return the response
+                    if (response && response.status === 200) {
+                        const responseToCache = response.clone();
+                        caches.open(CACHE_NAME).then((cache) => {
+                            cache.put(event.request, responseToCache);
+                        });
                     }
-                    // Return a basic offline response if fetch fails
-                    return new Response('Offline', {
-                        status: 503,
-                        statusText: 'Service Unavailable',
-                        headers: new Headers({
-                            'Content-Type': 'text/plain'
-                        })
+                    return response;
+                })
+                .catch(() => {
+                    // Network failed, try cache as fallback
+                    return caches.match(event.request);
+                })
+        );
+    } else {
+        // For other files (images, fonts), use cache-first (offline-friendly)
+        event.respondWith(
+            caches.match(event.request)
+                .then((response) => {
+                    // Return cached version or fetch from network
+                    if (response) {
+                        return response;
+                    }
+                    
+                    return fetch(event.request).then((response) => {
+                        // Cache successful responses
+                        if (response && response.status === 200) {
+                            const responseToCache = response.clone();
+                            caches.open(CACHE_NAME).then((cache) => {
+                                cache.put(event.request, responseToCache);
+                            });
+                        }
+                        return response;
+                    }).catch((error) => {
+                        // Only log if it's not a network error (which is expected when offline)
+                        if (error.name !== 'TypeError' || !error.message.includes('Failed to fetch')) {
+                            console.error('Service Worker: Fetch failed:', error);
+                        }
+                        // Return a basic offline response if fetch fails
+                        return new Response('Offline', {
+                            status: 503,
+                            statusText: 'Service Unavailable',
+                            headers: new Headers({
+                                'Content-Type': 'text/plain'
+                            })
+                        });
                     });
-                });
-            })
-            .catch((error) => {
-                // Catch any errors in the promise chain
-                // Only log unexpected errors
-                if (error.name !== 'TypeError' || !error.message.includes('Failed to fetch')) {
-                    console.error('Service Worker: Error in fetch handler:', error);
-                }
-                // Try to fetch directly, but don't catch errors here (let browser handle it)
-                try {
-                    return fetch(event.request);
-                } catch (e) {
-                    // If fetch also fails, return offline response
-                    return new Response('Offline', {
-                        status: 503,
-                        statusText: 'Service Unavailable',
-                        headers: new Headers({
-                            'Content-Type': 'text/plain'
-                        })
-                    });
-                }
-            })
-    );
+                })
+        );
+    }
 });
 
 // Push event - handle incoming push notifications
