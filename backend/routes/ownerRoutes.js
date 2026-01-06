@@ -221,26 +221,24 @@ router.put('/owner/users/:userId/admin-limit', checkOwner, async (req, res) => {
         }
         
         const updateStartTime = Date.now();
-        
-        // Update admin limit directly (no need to fetch first - Firestore will error if doc doesn't exist)
         const admin = require('firebase-admin');
         const userRef = adminDbInstance.collection('users').doc(userId);
         
-        try {
-            await userRef.update({
-                adminLimit: adminLimit === null ? admin.firestore.FieldValue.delete() : adminLimit,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-        } catch (updateError) {
-            // Check if document doesn't exist
-            if (updateError.code === 5 || updateError.message.includes('not found')) {
-                return res.status(404).json({ error: 'User not found' });
-            }
-            throw updateError;
+        // Check if user document exists first
+        const userDoc = await userRef.get();
+        if (!userDoc.exists) {
+            console.warn(`⚠️ [Owner Panel] User ${userId} not found in Firestore when updating admin limit`);
+            return res.status(404).json({ error: 'User not found' });
         }
         
+        // Update admin limit
+        await userRef.update({
+            adminLimit: adminLimit === null ? admin.firestore.FieldValue.delete() : adminLimit,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
         const updateDuration = Date.now() - updateStartTime;
-        console.log(`⏱️ [Owner Panel] Admin limit updated in ${updateDuration}ms`);
+        console.log(`✅ [Owner Panel] Admin limit updated for user ${userId} to ${adminLimit === null ? 'unlimited' : adminLimit} in ${updateDuration}ms`);
         
         // Invalidate cache
         usersCache = null;
@@ -248,8 +246,10 @@ router.put('/owner/users/:userId/admin-limit', checkOwner, async (req, res) => {
         
         res.json({ success: true, adminLimit });
     } catch (error) {
-        console.error('Error updating admin limit:', error);
-        res.status(500).json({ error: 'Failed to update admin limit' });
+        console.error('❌ Error updating admin limit:', error);
+        console.error('   Error code:', error.code);
+        console.error('   Error message:', error.message);
+        res.status(500).json({ error: 'Failed to update admin limit: ' + (error.message || 'Unknown error') });
     }
 });
 
@@ -269,26 +269,24 @@ router.put('/owner/users/:userId/block', checkOwner, async (req, res) => {
         }
         
         const updateStartTime = Date.now();
-        
-        // Update blocked status directly (no need to fetch first - Firestore will error if doc doesn't exist)
         const admin = require('firebase-admin');
         const userRef = adminDbInstance.collection('users').doc(userId);
         
-        try {
-            await userRef.update({
-                isBlocked: isBlocked,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-        } catch (updateError) {
-            // Check if document doesn't exist
-            if (updateError.code === 5 || updateError.message.includes('not found')) {
-                return res.status(404).json({ error: 'User not found' });
-            }
-            throw updateError;
+        // Check if user document exists first
+        const userDoc = await userRef.get();
+        if (!userDoc.exists) {
+            console.warn(`⚠️ [Owner Panel] User ${userId} not found in Firestore`);
+            return res.status(404).json({ error: 'User not found' });
         }
         
+        // Update blocked status
+        await userRef.update({
+            isBlocked: isBlocked,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
         const updateDuration = Date.now() - updateStartTime;
-        console.log(`⏱️ [Owner Panel] Block status updated in ${updateDuration}ms`);
+        console.log(`✅ [Owner Panel] Block status updated for user ${userId} (${isBlocked ? 'blocked' : 'unblocked'}) in ${updateDuration}ms`);
         
         // Invalidate cache
         usersCache = null;
@@ -296,8 +294,10 @@ router.put('/owner/users/:userId/block', checkOwner, async (req, res) => {
         
         res.json({ success: true, isBlocked });
     } catch (error) {
-        console.error('Error updating block status:', error);
-        res.status(500).json({ error: 'Failed to update block status' });
+        console.error('❌ Error updating block status:', error);
+        console.error('   Error code:', error.code);
+        console.error('   Error message:', error.message);
+        res.status(500).json({ error: 'Failed to update block status: ' + (error.message || 'Unknown error') });
     }
 });
 
