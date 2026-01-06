@@ -4611,7 +4611,17 @@ class InsightsManager {
         // Bind click handler for service selector
         const selector = document.getElementById(`service_selector_${itemIndex}`);
         if (selector) {
-            selector.onclick = () => this.openAdminSelector(itemIndex);
+            // Prevent keyboard on mobile by handling touch events properly
+            selector.setAttribute('tabindex', '-1');
+            selector.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Blur any active input to prevent keyboard
+                if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+                    document.activeElement.blur();
+                }
+                this.openAdminSelector(itemIndex);
+            });
         }
         
         // Update add button state after adding a row
@@ -4664,7 +4674,17 @@ class InsightsManager {
                         const oldIndex = selector.dataset.index;
                         selector.id = `service_selector_${index}`;
                         selector.dataset.index = index;
-                        selector.onclick = () => this.openAdminSelector(index);
+                        selector.setAttribute('tabindex', '-1');
+                        selector.onclick = null; // Remove old handler
+                        selector.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            // Blur any active input to prevent keyboard
+                            if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+                                document.activeElement.blur();
+                            }
+                            this.openAdminSelector(index);
+                        });
                         const textSpan = selector.querySelector('.service-selector-text');
                         if (textSpan) {
                             textSpan.id = `service_text_${index}`;
@@ -4811,10 +4831,13 @@ class InsightsManager {
             modal.classList.add('show');
             document.body.style.overflow = 'hidden';
             
-            // Focus search input
-            const searchInput = document.getElementById('adminSelectorSearch');
-            if (searchInput) {
-                setTimeout(() => searchInput.focus(), 100);
+            // Only auto-focus search input on desktop (not mobile to avoid keyboard popup)
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
+            if (!isMobile) {
+                const searchInput = document.getElementById('adminSelectorSearch');
+                if (searchInput) {
+                    setTimeout(() => searchInput.focus(), 100);
+                }
             }
             
             // Bind search functionality

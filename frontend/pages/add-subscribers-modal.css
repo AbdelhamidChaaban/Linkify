@@ -585,6 +585,9 @@ body.light-mode .add-subscriber-row-btn:hover {
     transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
     box-sizing: border-box;
     gap: 0.5rem;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 body.light-mode .service-selector {
@@ -610,6 +613,23 @@ body.light-mode .service-selector:hover {
 
 body.light-mode .service-selector:focus {
     box-shadow: 0 0 0 3px rgba(90, 33, 182, 0.15);
+}
+
+/* Prevent keyboard on mobile when clicking service selector */
+@media (max-width: 768px) {
+    .service-selector {
+        touch-action: manipulation;
+    }
+    
+    .service-selector:focus {
+        outline: none;
+    }
+    
+    /* Prevent focus outline on touch devices */
+    .service-selector[tabindex="-1"]:focus {
+        outline: none;
+        box-shadow: none;
+    }
 }
 
 .service-selector-text {

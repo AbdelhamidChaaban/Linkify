@@ -3199,27 +3199,35 @@ body.light-mode .dense-toggle-text {
     }
 
     .filters-section {
-        flex-direction: row;
-        align-items: center;
+        flex-direction: column;
+        align-items: stretch;
         gap: 0.75rem;
         padding: 1rem;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
     }
 
+    .filter-group:first-child,
+    .filter-group:nth-child(2) {
+        width: 100%;
+        flex: none;
+    }
+    
     .filter-group:first-child {
-        width: auto;
         flex-shrink: 0;
     }
     
     .filter-group:first-child .mui-select-wrapper {
-        min-width: 100px;
-        width: 100px;
+        width: 100%;
+        min-width: auto;
     }
 
     .filter-group:nth-child(2) {
-        flex: 1;
         min-width: 0;
-        width: auto;
+    }
+    
+    .filter-group:nth-child(3) {
+        width: 100%;
+        margin-top: 0;
     }
 
     .form-control.full-width {
@@ -3227,7 +3235,7 @@ body.light-mode .dense-toggle-text {
     }
 
     .mui-select-wrapper {
-        width: auto;
+        width: 100%;
     }
 
     .search-input {
@@ -3350,13 +3358,15 @@ body.light-mode .dense-toggle-text {
         padding: 0.875rem;
         gap: 0.5rem;
         flex-direction: row;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
+        align-items: center;
     }
 
     .filter-group:first-child {
         gap: 0;
         width: auto;
         flex-shrink: 0;
+        flex: 0 0 auto;
     }
     
     .filter-group:first-child .mui-select-wrapper {
@@ -3368,6 +3378,13 @@ body.light-mode .dense-toggle-text {
         flex: 1;
         min-width: 0;
         gap: 0.5rem;
+    }
+    
+    .filter-group:nth-child(3) {
+        width: 100%;
+        flex: 1 1 100%;
+        order: 3;
+        margin-top: 0.25rem;
     }
 
     .filter-input,
