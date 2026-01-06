@@ -36,6 +36,12 @@ class AdminsManager {
         return null;
     }
     
+    // Check if browser is Samsung Internet
+    isSamsungBrowser() {
+        const ua = navigator.userAgent || navigator.vendor || window.opera;
+        return /SamsungBrowser/i.test(ua) || /SAMSUNG/i.test(ua);
+    }
+
     // Load admins from Firebase/API
     async loadAdmins() {
         try {
@@ -57,6 +63,11 @@ class AdminsManager {
                 return;
             }
             
+            // Log browser info for debugging
+            if (this.isSamsungBrowser()) {
+                console.log('🌐 Samsung Internet browser detected - using enhanced compatibility mode');
+            }
+            
             // Try to get all admins for this user only
             let snapshot;
             try {
@@ -64,16 +75,51 @@ class AdminsManager {
                 // Get admins with timeout handling
                 // Firestore will automatically use cache if server is unavailable (thanks to persistence)
                 const queryPromise = db.collection('admins').where('userId', '==', this.currentUserId).get();
-                const timeoutPromise = new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Firestore timeout')), 20000) // 20s timeout (increased)
-                );
                 
-                snapshot = await Promise.race([queryPromise, timeoutPromise]);
+                // Better timeout handling for Samsung Internet browser compatibility
+                let timeoutId;
+                const timeoutPromise = new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => reject(new Error('Firestore timeout')), 20000); // 20s timeout
+                });
+                
+                // Use Promise.race with cleanup for Samsung Internet compatibility
+                const isSamsung = this.isSamsungBrowser();
+                if (isSamsung) {
+                    // Samsung Internet: Try direct query first, then add timeout protection
+                    try {
+                        snapshot = await Promise.race([
+                            queryPromise.then(result => {
+                                if (timeoutId) clearTimeout(timeoutId);
+                                return result;
+                            }),
+                            timeoutPromise
+                        ]);
+                    } catch (raceError) {
+                        if (timeoutId) clearTimeout(timeoutId);
+                        // Fallback: Try direct query without timeout for Samsung Internet
+                        console.warn('⚠️ Promise.race failed on Samsung Internet, trying direct query:', raceError);
+                        try {
+                            snapshot = await queryPromise;
+                        } catch (directError) {
+                            console.error('❌ Direct query also failed:', directError);
+                            throw directError;
+                        }
+                    }
+                } else {
+                    // Other browsers: Use standard Promise.race
+                    snapshot = await Promise.race([
+                        queryPromise.then(result => {
+                            if (timeoutId) clearTimeout(timeoutId);
+                            return result;
+                        }),
+                        timeoutPromise
+                    ]);
+                }
                 
                 // Check if data is from cache (offline mode)
-                if (snapshot.metadata && snapshot.metadata.fromCache) {
+                if (snapshot && snapshot.metadata && snapshot.metadata.fromCache) {
                     console.log('ℹ️ Loaded admins from cache (offline mode)');
-                } else {
+                } else if (snapshot) {
                     console.log('✅ Loaded admins from server');
                 }
             } catch (error) {
@@ -88,18 +134,21 @@ class AdminsManager {
                 // Show user-friendly error message
                 const tbody = document.getElementById('adminsTableBody');
                 if (tbody) {
+                    const isSamsung = this.isSamsungBrowser();
                     tbody.innerHTML = `
                         <tr>
                             <td colspan="5" class="empty-state" style="text-align: center; padding: 3rem;">
                                 <p style="color: #f59e0b; margin-bottom: 1rem;">
                                     ⚠️ Connection timeout. Firestore is operating in offline mode.
                                 </p>
+                                ${isSamsung ? '<p style="color: #3b82f6; margin-bottom: 1rem; font-size: 0.9rem;">Detected Samsung Internet browser. If issues persist, try updating your browser or clearing cache.</p>' : ''}
                                 <p style="color: #94a3b8; margin-bottom: 1rem; font-size: 0.9rem;">
                                     If you have previously loaded admins, they should appear automatically when connection is restored.
                                 </p>
-                                <button onclick="location.reload()" style="padding: 0.5rem 1rem; background: #3a0a4e; color: white; border: none; border-radius: 0.5rem; cursor: pointer;">
+                                <button onclick="location.reload()" style="padding: 0.5rem 1rem; background: #3a0a4e; color: white; border: none; border-radius: 0.5rem; cursor: pointer; margin-right: 0.5rem;">
                                     Retry
                                 </button>
+                                ${isSamsung ? '<button onclick="window.location.href=\'/pages/home.html\'" style="padding: 0.5rem 1rem; background: #64748b; color: white; border: none; border-radius: 0.5rem; cursor: pointer;">Go to Home</button>' : ''}
                             </td>
                         </tr>
                     `;
@@ -107,12 +156,27 @@ class AdminsManager {
                 return;
             }
             
-            this.admins = snapshot.docs.map(doc => {
-                const data = doc.data();
-                return {
-                    id: doc.id,
-                    ...data
-                };
+            // Process snapshot with error handling for Samsung Internet compatibility
+            if (!snapshot || !snapshot.docs) {
+                console.error('❌ Invalid snapshot received:', snapshot);
+                throw new Error('Invalid Firestore snapshot - no documents array');
+            }
+            
+            this.admins = [];
+            snapshot.docs.forEach(doc => {
+                try {
+                    const data = doc.data();
+                    if (data && doc.id) {
+                        this.admins.push({
+                            id: doc.id,
+                            ...data
+                        });
+                    } else {
+                        console.warn('⚠️ Skipping invalid document:', doc.id);
+                    }
+                } catch (error) {
+                    console.error('❌ Error processing document:', doc.id, error);
+                }
             });
             
             // Sort alphabetically by name (A to Z) - optimized
@@ -170,35 +234,77 @@ class AdminsManager {
     
     async waitForAuth() {
         // Wait for Firebase auth to be available and user to be authenticated
+        // Samsung Internet browser compatibility: more robust error handling
         let attempts = 0;
-        while (attempts < 50) {
-            if (typeof auth !== 'undefined' && auth) {
-                // Wait for auth state to be ready
-                return new Promise((resolve, reject) => {
-                    const unsubscribe = auth.onAuthStateChanged((user) => {
-                        unsubscribe(); // Stop listening after first state change
-                        if (user && user.uid) {
-                            this.currentUserId = user.uid;
-                            console.log('✅ User authenticated:', user.uid);
-                            resolve();
-                        } else {
-                            reject(new Error('User not authenticated. Please log in.'));
+        const maxAttempts = 100; // Increased for slower devices
+        
+        while (attempts < maxAttempts) {
+            try {
+                if (typeof auth !== 'undefined' && auth && auth.currentUser && auth.currentUser.uid) {
+                    // User is already logged in
+                    this.currentUserId = auth.currentUser.uid;
+                    console.log('✅ User already authenticated:', auth.currentUser.uid);
+                    return Promise.resolve();
+                }
+                
+                if (typeof auth !== 'undefined' && auth) {
+                    // Wait for auth state to be ready
+                    return new Promise((resolve, reject) => {
+                        let resolved = false;
+                        const timeout = setTimeout(() => {
+                            if (!resolved) {
+                                resolved = true;
+                                if (auth.currentUser && auth.currentUser.uid) {
+                                    this.currentUserId = auth.currentUser.uid;
+                                    console.log('✅ User authenticated (timeout fallback):', auth.currentUser.uid);
+                                    resolve();
+                                } else {
+                                    reject(new Error('Firebase auth timeout - user not authenticated'));
+                                }
+                            }
+                        }, 5000); // 5s timeout for auth state
+                        
+                        try {
+                            const unsubscribe = auth.onAuthStateChanged((user) => {
+                                if (resolved) return;
+                                clearTimeout(timeout);
+                                resolved = true;
+                                unsubscribe(); // Stop listening after first state change
+                                if (user && user.uid) {
+                                    this.currentUserId = user.uid;
+                                    console.log('✅ User authenticated:', user.uid);
+                                    resolve();
+                                } else {
+                                    reject(new Error('User not authenticated. Please log in.'));
+                                }
+                            });
+                            
+                            // Double-check if user logged in while setting up listener (Samsung Internet race condition)
+                            if (auth.currentUser && auth.currentUser.uid && !resolved) {
+                                clearTimeout(timeout);
+                                resolved = true;
+                                this.currentUserId = auth.currentUser.uid;
+                                console.log('✅ User authenticated (race condition fix):', auth.currentUser.uid);
+                                unsubscribe();
+                                resolve();
+                            }
+                        } catch (err) {
+                            clearTimeout(timeout);
+                            if (!resolved) {
+                                resolved = true;
+                                reject(err);
+                            }
                         }
                     });
-                    
-                    // If user is already logged in, resolve immediately
-                    if (auth.currentUser && auth.currentUser.uid) {
-                        this.currentUserId = auth.currentUser.uid;
-                        console.log('✅ User already authenticated:', auth.currentUser.uid);
-                        unsubscribe();
-                        resolve();
-                    }
-                });
+                }
+            } catch (error) {
+                console.warn('⚠️ Auth check error (attempt ' + attempts + '):', error.message);
             }
+            
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
-        throw new Error('Firebase auth timeout - user not authenticated');
+        throw new Error('Firebase auth timeout - user not authenticated after ' + maxAttempts + ' attempts');
     }
     
     checkUrlHash() {
@@ -230,13 +336,27 @@ class AdminsManager {
     
     async waitForFirebase() {
         // Wait for db to be available
+        // Samsung Internet browser compatibility: more robust checking
         let attempts = 0;
-        while (typeof db === 'undefined' && attempts < 50) {
+        const maxAttempts = 100; // Increased for slower devices
+        
+        while (attempts < maxAttempts) {
+            try {
+                // Check if db is available and has collection method (not just defined)
+                if (typeof db !== 'undefined' && db && typeof db.collection === 'function') {
+                    console.log('✅ Firebase Firestore (db) is ready');
+                    return Promise.resolve();
+                }
+            } catch (error) {
+                console.warn('⚠️ Firebase check error (attempt ' + attempts + '):', error.message);
+            }
+            
             await new Promise(resolve => setTimeout(resolve, 50));
             attempts++;
         }
-        if (typeof db === 'undefined') {
-            throw new Error('Firebase Firestore (db) is not initialized');
+        
+        if (typeof db === 'undefined' || !db || typeof db.collection !== 'function') {
+            throw new Error('Firebase Firestore (db) is not initialized after ' + maxAttempts + ' attempts');
         }
     }
     
