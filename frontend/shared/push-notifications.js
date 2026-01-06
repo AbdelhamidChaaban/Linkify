@@ -283,11 +283,56 @@ class PushNotificationManager {
     
     async registerServiceWorker() {
         try {
-            const registration = await navigator.serviceWorker.register('/service-worker.js');
-            console.log('Service Worker registered:', registration);
+            // First, check if there are any existing service workers and unregister them if needed
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            for (let registration of registrations) {
+                // Check if this registration is from a different origin (like localhost)
+                if (registration.scope.includes('localhost')) {
+                    console.log('[SW] Unregistering service worker from different origin:', registration.scope);
+                    await registration.unregister();
+                }
+            }
+            
+            // Register new service worker
+            const registration = await navigator.serviceWorker.register('/service-worker.js', {
+                updateViaCache: 'none' // Always check for updates
+            });
+            
+            console.log('[SW] Service Worker registered:', registration);
+            
+            // Listen for service worker updates
+            registration.addEventListener('updatefound', () => {
+                const newWorker = registration.installing;
+                if (newWorker) {
+                    newWorker.addEventListener('statechange', () => {
+                        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                            // New service worker available, force reload
+                            console.log('[SW] New service worker installed, reloading page...');
+                            window.location.reload();
+                        }
+                    });
+                }
+            });
+            
+            // Listen for messages from service worker
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'SW_UPDATED') {
+                    console.log('[SW] Service worker updated to:', event.data.cacheVersion);
+                    // Force reload to get new files
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                }
+            });
+            
+            // Check for updates every 60 seconds
+            setInterval(() => {
+                registration.update();
+            }, 60000);
+            
             return registration;
         } catch (error) {
-            console.error('Service Worker registration failed:', error);
+            console.error('[SW] Service Worker registration failed:', error);
             return null;
         }
     }

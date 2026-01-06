@@ -3,40 +3,67 @@
  * Handles background push events and displays notifications
  */
 
-const CACHE_NAME = 'linkify-v2'; // Updated to force cache refresh
+const CACHE_NAME = 'linkify-v3'; // Updated to force cache refresh - v3: network-first strategy
+const FORCE_UPDATE = true; // Set to true to force immediate update
 
 // Install event - cache assets
 self.addEventListener('install', (event) => {
+    console.log('[SW] Installing service worker v3...');
     // Skip waiting to activate immediately
     self.skipWaiting();
     
     event.waitUntil(
-        caches.open(CACHE_NAME)
-            .then((cache) => {
-                console.log('Service Worker: Cache opened');
-                // Don't cache files during install - we'll cache on demand
-                return Promise.resolve();
-            })
-            .catch((error) => {
-                console.error('Service Worker: Cache error during install:', error);
-            })
+        // Delete ALL old caches first
+        caches.keys().then((cacheNames) => {
+            console.log('[SW] Found caches:', cacheNames);
+            return Promise.all(
+                cacheNames.map((cacheName) => {
+                    console.log('[SW] Deleting old cache:', cacheName);
+                    return caches.delete(cacheName);
+                })
+            );
+        }).then(() => {
+            // Open new cache
+            return caches.open(CACHE_NAME);
+        }).then((cache) => {
+            console.log('[SW] New cache opened:', CACHE_NAME);
+            // Don't cache files during install - we'll cache on demand
+            return Promise.resolve();
+        })
+        .catch((error) => {
+            console.error('[SW] Cache error during install:', error);
+        })
     );
 });
 
 // Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
+    console.log('[SW] Activating service worker v3...');
     event.waitUntil(
         caches.keys().then((cacheNames) => {
-            return Promise.all(
-                cacheNames.map((cacheName) => {
-                    if (cacheName !== CACHE_NAME) {
-                        console.log('Service Worker: Deleting old cache', cacheName);
-                        return caches.delete(cacheName);
-                    }
-                })
-            ).then(() => {
+            console.log('[SW] Checking for old caches to delete...');
+            const deletePromises = cacheNames.map((cacheName) => {
+                if (cacheName !== CACHE_NAME) {
+                    console.log('[SW] Deleting old cache:', cacheName);
+                    return caches.delete(cacheName);
+                }
+            }).filter(p => p !== undefined);
+            
+            return Promise.all(deletePromises).then(() => {
+                console.log('[SW] All old caches deleted');
                 // Take control of all pages immediately
                 return self.clients.claim();
+            }).then(() => {
+                console.log('[SW] Service worker activated and controlling clients');
+                // Notify all clients about the update
+                return self.clients.matchAll().then((clients) => {
+                    clients.forEach((client) => {
+                        client.postMessage({
+                            type: 'SW_UPDATED',
+                            cacheVersion: CACHE_NAME
+                        });
+                    });
+                });
             });
         })
     );
