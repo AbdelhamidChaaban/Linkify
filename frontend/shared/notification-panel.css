@@ -258,11 +258,40 @@ body.light-mode .notification-badge {
 }
 
 /* Notification List Section */
+.notification-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+
 .notification-list-section h3 {
     font-size: 1rem;
     font-weight: 600;
     color: #f8fafc;
-    margin: 0 0 1rem 0;
+    margin: 0;
+}
+
+.delete-all-btn {
+    padding: 0.5rem 1rem;
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.delete-all-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.5);
+    transform: translateY(-1px);
+}
+
+.delete-all-btn:active {
+    transform: translateY(0);
 }
 
 .notification-list {
@@ -353,6 +382,10 @@ body.light-mode .notification-toggle-header span {
 
 body.light-mode .notification-toggle-description {
     color: #64748b;
+}
+
+body.light-mode .notification-list-header {
+    /* No specific light mode styling needed */
 }
 
 body.light-mode .notification-list-section h3 {

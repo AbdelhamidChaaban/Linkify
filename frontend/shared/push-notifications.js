@@ -77,7 +77,10 @@ class PushNotificationManager {
                         </div>
                         
                         <div class="notification-list-section">
-                            <h3>Recent Notifications</h3>
+                            <div class="notification-list-header">
+                                <h3>Recent Notifications</h3>
+                                <button id="deleteAllNotifications" class="delete-all-btn" style="display: none;">Delete All</button>
+                            </div>
                             <div id="notificationList" class="notification-list">
                                 <div class="notification-empty">No notifications yet</div>
                             </div>
@@ -169,6 +172,11 @@ class PushNotificationManager {
             // Register service worker
             await this.registerServiceWorker();
             
+            // Listen for messages from service worker
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                this.handleServiceWorkerMessage(event);
+            });
+            
             // Check existing subscription and update toggle state
             // This MUST happen after service worker is ready
             await this.checkSubscription();
@@ -202,6 +210,7 @@ class PushNotificationManager {
         const panel = document.getElementById('notificationPanel');
         const overlay = document.getElementById('notificationPanelOverlay');
         const closeBtn = document.getElementById('notificationPanelClose');
+        const deleteAllBtn = document.getElementById('deleteAllNotifications');
         
         // Don't set toggle state here - wait for checkSubscription to set it
         // This prevents the toggle from being reset to unchecked on page load
@@ -250,6 +259,12 @@ class PushNotificationManager {
         if (overlay) {
             overlay.addEventListener('click', () => {
                 this.closePanel();
+            });
+        }
+        
+        if (deleteAllBtn) {
+            deleteAllBtn.addEventListener('click', async () => {
+                await this.deleteAllNotifications();
             });
         }
     }
@@ -316,13 +331,7 @@ class PushNotificationManager {
             
             // Listen for messages from service worker
             navigator.serviceWorker.addEventListener('message', (event) => {
-                if (event.data && event.data.type === 'SW_UPDATED') {
-                    console.log('[SW] Service worker updated to:', event.data.cacheVersion);
-                    // Force reload to get new files
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1000);
-                }
+                this.handleServiceWorkerMessage(event);
             });
             
             // Check for updates every 60 seconds
@@ -713,12 +722,18 @@ class PushNotificationManager {
     
     renderNotifications() {
         const list = document.getElementById('notificationList');
+        const deleteAllBtn = document.getElementById('deleteAllNotifications');
+        
         if (!list) return;
         
         if (this.notifications.length === 0) {
             list.innerHTML = '<div class="notification-empty">No notifications yet</div>';
+            if (deleteAllBtn) deleteAllBtn.style.display = 'none';
             return;
         }
+        
+        // Show delete all button if there are notifications
+        if (deleteAllBtn) deleteAllBtn.style.display = 'inline-block';
         
         list.innerHTML = this.notifications.map(notif => {
             const time = new Date(notif.timestamp).toLocaleString();
@@ -734,6 +749,93 @@ class PushNotificationManager {
                 </div>
             `;
         }).join('');
+    }
+    
+    async deleteAllNotifications() {
+        try {
+            const token = await this.getIdToken();
+            const response = await fetch(`${this.baseURL}/api/push/notifications/delete-all`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
+            if (response.ok) {
+                console.log('✅ All notifications deleted');
+                this.notifications = [];
+                this.renderNotifications();
+                this.updateBadge();
+            } else {
+                console.error('❌ Failed to delete notifications');
+            }
+        } catch (error) {
+            console.error('Error deleting notifications:', error);
+        }
+    }
+    
+    handleServiceWorkerMessage(event) {
+        const { type, text, url } = event.data || {};
+        
+        switch (type) {
+            case 'SW_UPDATED':
+                console.log('[SW] Service worker updated to:', event.data.cacheVersion);
+                // Force reload to get new files
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+                break;
+            case 'COPY_TO_CLIPBOARD':
+                if (text) {
+                    this.copyToClipboard(text);
+                }
+                break;
+            case 'OPEN_WHATSAPP':
+                if (url) {
+                    window.open(url, '_blank');
+                }
+                break;
+            default:
+                console.log('Unknown service worker message type:', type);
+        }
+    }
+    
+    async copyToClipboard(text) {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                console.log('✅ Notification message copied to clipboard:', text);
+            } else {
+                // Fallback for older browsers
+                this.fallbackCopyToClipboard(text);
+            }
+        } catch (err) {
+            console.error('❌ Failed to copy to clipboard:', err);
+            // Try fallback method
+            this.fallbackCopyToClipboard(text);
+        }
+    }
+    
+    fallbackCopyToClipboard(text) {
+        try {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            textArea.style.top = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textArea);
+            if (successful) {
+                console.log('✅ Notification message copied to clipboard (fallback method):', text);
+            } else {
+                console.warn('⚠️ Failed to copy to clipboard using fallback method');
+            }
+        } catch (err) {
+            console.error('❌ Error copying to clipboard (fallback):', err);
+        }
     }
     
     updateBadge() {

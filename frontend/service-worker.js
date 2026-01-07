@@ -206,19 +206,28 @@ self.addEventListener('push', (event) => {
 // Notification click event - handle when user clicks on notification
 self.addEventListener('notificationclick', (event) => {
     console.log('Notification clicked:', event);
+    console.log('Notification data:', event.notification.data);
     
     event.notification.close();
     
-    // Open or focus the app
+    // Get notification data
+    const notificationData = event.notification.data || {};
+    const adminPhone = notificationData.adminPhone || '';
+    const message = event.notification.body || notificationData.message || '';
+    
     event.waitUntil(
         clients.matchAll({
             type: 'window',
             includeUncontrolled: true
         }).then((clientList) => {
+            // Step 1: Copy to clipboard and open WhatsApp
+            handleNotificationClick(message, adminPhone, clientList);
+            
+            // Step 2: Open or focus the app
             // If app is already open, focus it
             for (let i = 0; i < clientList.length; i++) {
                 const client = clientList[i];
-                if (client.url === '/' || client.url.includes('/pages/') && 'focus' in client) {
+                if ((client.url === '/' || client.url.includes('/pages/')) && 'focus' in client) {
                     return client.focus();
                 }
             }
@@ -226,9 +235,81 @@ self.addEventListener('notificationclick', (event) => {
             if (clients.openWindow) {
                 return clients.openWindow('/pages/home.html');
             }
+            return Promise.resolve();
+        }).catch((error) => {
+            console.error('Error handling notification click:', error);
+            // Still try to open WhatsApp even if window focus fails
+            if (adminPhone) {
+                openWhatsApp(adminPhone);
+            }
         })
     );
 });
+
+// Helper function to handle notification click actions
+function handleNotificationClick(message, adminPhone, existingClients) {
+    // Step 1: Copy notification message to clipboard via client message
+    // (Service workers can't access clipboard directly, so we send a message to the client)
+    if (message) {
+        if (existingClients && existingClients.length > 0) {
+            existingClients.forEach((client) => {
+                // Send message to client to copy to clipboard
+                client.postMessage({
+                    type: 'COPY_TO_CLIPBOARD',
+                    text: message
+                });
+            });
+        } else {
+            // If no clients are available yet, we'll send the message when clients are ready
+            // This will be handled when the page opens
+            console.log('ℹ️ No clients available, clipboard copy will happen when page opens');
+        }
+    }
+    
+    // Step 2: Open WhatsApp with admin phone number
+    if (adminPhone && adminPhone.trim()) {
+        openWhatsApp(adminPhone, existingClients);
+    } else {
+        console.warn('⚠️ No admin phone number in notification data');
+    }
+}
+
+// Helper function to open WhatsApp
+function openWhatsApp(adminPhone, existingClients) {
+    // Clean phone number (remove any non-digit characters except +)
+    let cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
+    
+    // If phone doesn't start with +, add country code prefix if needed
+    // For Lebanon, add +961 if it starts with 0
+    if (cleanPhone.startsWith('0')) {
+        cleanPhone = '+961' + cleanPhone.substring(1);
+    } else if (!cleanPhone.startsWith('+')) {
+        // If no + and doesn't start with 0, assume it's Lebanese number
+        cleanPhone = '+961' + cleanPhone;
+    }
+    
+    // Open WhatsApp with the phone number
+    const whatsappUrl = `https://wa.me/${cleanPhone}`;
+    console.log('📱 Opening WhatsApp for:', cleanPhone, 'URL:', whatsappUrl);
+    
+    if (existingClients && existingClients.length > 0) {
+        // If we have clients, send them a message to open WhatsApp
+        existingClients.forEach((client) => {
+            client.postMessage({
+                type: 'OPEN_WHATSAPP',
+                url: whatsappUrl
+            });
+        });
+    } else {
+        // If no clients, open directly from service worker
+        // This works because it's called from notification click (user gesture)
+        if (self.clients && self.clients.openWindow) {
+            self.clients.openWindow(whatsappUrl).catch((err) => {
+                console.error('Failed to open WhatsApp:', err);
+            });
+        }
+    }
+}
 
 // Notification close event
 self.addEventListener('notificationclose', (event) => {

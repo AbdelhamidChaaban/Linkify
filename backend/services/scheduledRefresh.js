@@ -5,6 +5,7 @@ const { updateDashboardData } = require('./firebaseDbService');
 const { getSession, deleteSession } = require('./sessionManager');
 const snapshotManager = require('./snapshotManager');
 const cacheLayer = require('./cacheLayer');
+const { checkForNotifications, sendPushNotifications } = require('../routes/pushRoutes');
 
 // Firebase Admin SDK instance (bypasses security rules)
 let db = null;
@@ -285,7 +286,60 @@ async function refreshAllActiveAdmins() {
         });
     }
     
-    console.log(`\n✅ [Scheduled Refresh] Daily refresh completed at ${new Date().toISOString()}\n`);
+    console.log(`\n✅ [Scheduled Refresh] Daily refresh completed at ${new Date().toISOString()}`);
+    
+    // Step 3: Check and send push notifications for all affected users
+    try {
+        console.log('\n📢 [Notifications] Checking for notifications after refresh...');
+        const admin = require('firebase-admin');
+        
+        // Get all unique userIds from refreshed admins
+        const userIds = new Set();
+        for (const adminInfo of activeAdmins) {
+            try {
+                const adminDoc = await db.collection('admins').doc(adminInfo.id).get();
+                if (adminDoc.exists) {
+                    const data = adminDoc.data();
+                    if (data.userId) {
+                        userIds.add(data.userId);
+                    }
+                }
+            } catch (error) {
+                console.warn(`⚠️ [Notifications] Error getting userId for admin ${adminInfo.id}:`, error.message);
+            }
+        }
+        
+        if (userIds.size > 0) {
+            console.log(`📢 [Notifications] Checking notifications for ${userIds.size} user(s)...`);
+            
+            // Check notifications for each user
+            const notificationPromises = Array.from(userIds).map(async (userId) => {
+                try {
+                    const notifications = await checkForNotifications(userId);
+                    if (notifications.length > 0) {
+                        await sendPushNotifications(userId, notifications);
+                        console.log(`✅ [Notifications] Sent ${notifications.length} notification(s) to user ${userId}`);
+                        return { userId, count: notifications.length };
+                    }
+                    return { userId, count: 0 };
+                } catch (error) {
+                    console.error(`❌ [Notifications] Error checking notifications for user ${userId}:`, error.message);
+                    return { userId, count: 0, error: error.message };
+                }
+            });
+            
+            const notificationResults = await Promise.all(notificationPromises);
+            const totalNotifications = notificationResults.reduce((sum, r) => sum + r.count, 0);
+            console.log(`📢 [Notifications] Total notifications sent: ${totalNotifications}`);
+        } else {
+            console.log('ℹ️ [Notifications] No users found to check notifications');
+        }
+    } catch (error) {
+        console.error('❌ [Notifications] Error during notification check:', error.message);
+        // Don't fail the refresh if notification check fails
+    }
+    
+    console.log('');
 }
 
 /**

@@ -548,16 +548,54 @@ router.get('/refreshAdmins', authenticateJWT, async (req, res) => {
             console.log(``);
         }
         
-        // CRITICAL: Save to Firebase if we have valid data (especially primaryData for status determination)
-        // This ensures new admins are saved with proper structure and don't become inactive
+        // Send response IMMEDIATELY to avoid blocking the refresh
+        res.json({
+            success: overallSuccess,
+            data: aggregated,
+            message: overallSuccess 
+                ? `Refresh completed: ${aggregated.summary.successful.length}/4 APIs successful`
+                : 'All API calls failed'
+        });
+        
+        // AFTER response is sent, save to Firebase and check notifications (non-blocking)
+        // Use setImmediate to ensure this runs after the response is fully sent
         if (overallSuccess && aggregated.primaryData) {
             const { updateDashboardData } = require('../services/firebaseDbService');
-            // Save asynchronously (non-blocking) - don't wait for it
-            process.nextTick(() => {
+            const { checkForNotifications, sendPushNotifications } = require('./pushRoutes');
+            
+            // Use setImmediate to ensure this runs AFTER the response is sent
+            setImmediate(() => {
                 (async () => {
                     try {
+                        // Save to Firebase first
                         await updateDashboardData(adminId, aggregated);
                         console.log(`✅ [Refresh] Data saved to Firebase for admin ${adminId}`);
+                        
+                        // Then check and send push notifications after data is saved
+                        try {
+                            // Get userId from admin document
+                            const admin = require('firebase-admin');
+                            const adminDbInstance = admin.firestore();
+                            const adminDoc = await adminDbInstance.collection('admins').doc(adminId).get();
+                            
+                            if (adminDoc.exists) {
+                                const adminData = adminDoc.data();
+                                const userId = adminData.userId;
+                                
+                                if (userId) {
+                                    // Only check the admin that was refreshed
+                                    const notifications = await checkForNotifications(userId, adminId);
+                                    if (notifications.length > 0) {
+                                        await sendPushNotifications(userId, notifications);
+                                        console.log(`📢 [Refresh] Sent ${notifications.length} notification(s) to user ${userId} for admin ${adminId}`);
+                                    } else {
+                                        console.log(`ℹ️ [Refresh] No notifications needed for admin ${adminId}`);
+                                    }
+                                }
+                            }
+                        } catch (notifError) {
+                            console.warn(`⚠️ [Refresh] Notification check failed (non-critical):`, notifError?.message);
+                        }
                     } catch (firebaseError) {
                         console.warn(`⚠️ [Refresh] Firebase save failed (non-critical):`, firebaseError?.message);
                     }
@@ -566,14 +604,6 @@ router.get('/refreshAdmins', authenticateJWT, async (req, res) => {
         } else if (overallSuccess && !aggregated.primaryData) {
             console.warn(`⚠️ [Refresh] Skipping Firebase save - primaryData missing (would mark admin inactive)`);
         }
-        
-        res.json({
-            success: overallSuccess,
-            data: aggregated,
-            message: overallSuccess 
-                ? `Refresh completed: ${aggregated.summary.successful.length}/4 APIs successful`
-                : 'All API calls failed'
-        });
         
     } catch (error) {
         console.error('❌ Error in /api/refreshAdmins:', error);
