@@ -3929,25 +3929,23 @@ body:not(.light-mode) .view-details-table .status-badge.status-out {
 /* Mobile responsiveness */
 @media (max-width: 768px) {
     .view-details-modal-overlay {
-        padding: 0;
-        align-items: flex-end;
-        background: rgba(0, 0, 0, 0.75);
+        padding: 1rem;
+        align-items: center;
+        background: rgba(0, 0, 0, 0.6);
     }
     
     .view-details-modal {
         max-width: 100%;
         width: 100%;
-        max-height: 100vh;
-        height: 100vh;
+        max-height: 90vh;
         margin: 0;
-        border-radius: 0;
-        animation: slideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        border-radius: 16px;
+        animation: scaleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
     
     .view-details-modal-inner {
-        border-radius: 0;
-        max-height: 100vh;
-        height: 100%;
+        border-radius: 16px;
+        max-height: 90vh;
         display: flex;
         flex-direction: column;
     }
@@ -3982,14 +3980,14 @@ body:not(.light-mode) .view-details-table .status-badge.status-out {
     }
     
     .modal-close-btn {
-        width: 40px;
-        height: 40px;
-        min-width: 40px;
+        width: 36px;
+        height: 36px;
+        min-width: 36px;
         flex-shrink: 0;
         background: rgba(239, 68, 68, 0.15) !important;
-        border: 2px solid rgba(239, 68, 68, 0.3) !important;
+        border: 1.5px solid rgba(239, 68, 68, 0.3) !important;
         color: #ef4444 !important;
-        border-radius: 10px;
+        border-radius: 8px;
     }
     
     body:not(.light-mode) .modal-close-btn {
@@ -3999,9 +3997,9 @@ body:not(.light-mode) .view-details-table .status-badge.status-out {
     }
     
     .modal-close-btn svg {
-        width: 20px;
-        height: 20px;
-        stroke-width: 3;
+        width: 18px;
+        height: 18px;
+        stroke-width: 2.5;
     }
     
     .view-details-modal-stats {
@@ -4050,7 +4048,7 @@ body:not(.light-mode) .view-details-table .status-badge.status-out {
         -webkit-overflow-scrolling: touch;
         flex: 1;
         min-height: 0;
-        max-height: calc(100vh - 280px); /* Adjust based on header + stats height */
+        max-height: calc(90vh - 280px); /* Adjust based on header + stats height */
     }
     
     .table-wrapper {
@@ -4100,24 +4098,22 @@ body:not(.light-mode) .view-details-table .status-badge.status-out {
 
 @media (max-width: 480px) {
     .view-details-modal-overlay {
-        padding: 0;
-        background: rgba(0, 0, 0, 0.8);
+        padding: 0.75rem;
+        background: rgba(0, 0, 0, 0.65);
     }
     
     .view-details-modal {
-        max-height: 100vh;
-        height: 100vh;
-        border-radius: 0;
+        max-height: 90vh;
+        border-radius: 12px;
     }
     
     .view-details-modal-inner {
-        border-radius: 0;
-        max-height: 100vh;
-        height: 100%;
+        border-radius: 12px;
+        max-height: 90vh;
     }
     
     .view-details-modal-body {
-        max-height: calc(100vh - 260px); /* Adjust for smaller header on small screens */
+        max-height: calc(90vh - 260px); /* Adjust for smaller header on small screens */
     }
     
     .view-details-modal-header {
@@ -4140,27 +4136,25 @@ body:not(.light-mode) .view-details-table .status-badge.status-out {
     }
     
     .modal-close-btn {
-        width: 44px;
-        height: 44px;
-        min-width: 44px;
-        background: rgba(239, 68, 68, 0.2) !important;
-        border: 2px solid rgba(239, 68, 68, 0.4) !important;
+        width: 34px;
+        height: 34px;
+        min-width: 34px;
+        background: rgba(239, 68, 68, 0.15) !important;
+        border: 1.5px solid rgba(239, 68, 68, 0.3) !important;
         color: #ef4444 !important;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+        border-radius: 8px;
     }
     
     body:not(.light-mode) .modal-close-btn {
-        background: rgba(239, 68, 68, 0.3) !important;
-        border-color: rgba(239, 68, 68, 0.5) !important;
+        background: rgba(239, 68, 68, 0.25) !important;
+        border-color: rgba(239, 68, 68, 0.4) !important;
         color: #f87171 !important;
-        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
     }
     
     .modal-close-btn svg {
-        width: 22px;
-        height: 22px;
-        stroke-width: 3;
+        width: 18px;
+        height: 18px;
+        stroke-width: 2.5;
     }
     
     .modal-header-text h2 {
