@@ -42,7 +42,7 @@
     body.insights-page .card-container {
         overflow-y: auto !important;
         overflow-x: hidden !important;
-        touch-action: pan-y pan-x !important;
+        touch-action: pan-y !important;
         position: relative !important;
         -webkit-overflow-scrolling: touch !important;
         max-height: calc(100vh - 180px) !important;
@@ -51,6 +51,7 @@
         will-change: scroll-position !important;
         transform: translateZ(0) !important;
         -webkit-transform: translateZ(0) !important;
+        overscroll-behavior: contain !important;
     }
     
     /* Table container allows horizontal scrolling */

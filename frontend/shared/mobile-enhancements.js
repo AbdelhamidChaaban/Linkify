@@ -31,13 +31,16 @@ class MobileEnhancements {
 
     // ==================== Pull-to-Refresh ====================
     initPullToRefresh() {
-        // Only enable pull-to-refresh on insights page for the table container
+        // Disable pull-to-refresh on insights page to prevent scrolling interference
         const isInsightsPage = document.body.classList.contains('insights-page');
         
-        // For insights page, use card-container (the actual scrollable element) instead of main content
-        const targetElement = isInsightsPage 
-            ? document.querySelector('.card-container')
-            : document.querySelector('.main-content, .insights-section, .home-container');
+        // Skip pull-to-refresh entirely for insights page
+        if (isInsightsPage) {
+            return; // Don't interfere with scrolling on insights page
+        }
+        
+        // For other pages, use main content
+        const targetElement = document.querySelector('.main-content, .insights-section, .home-container');
             
         if (!targetElement) return;
 

@@ -34,12 +34,15 @@
         min-height: calc(100vh - 60px);
     }
     
-    /* Insights page - make scrollable */
+    /* Insights page - allow card-container to scroll */
     html.insights-page,
     body.insights-page {
-        overflow: visible !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
         height: auto !important;
         position: relative !important;
+        touch-action: pan-y !important;
+        -webkit-overflow-scrolling: touch !important;
     }
     
     body.insights-page .main-content {
@@ -47,6 +50,21 @@
         overflow: visible !important;
         position: relative !important;
         min-height: calc(100vh - 60px);
+        touch-action: pan-y !important;
+    }
+    
+    /* Ensure card-container can scroll on mobile */
+    body.insights-page .card-container {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-y !important;
+        max-height: calc(100vh - 180px) !important;
+        height: calc(100vh - 180px) !important;
+        position: relative !important;
+        will-change: scroll-position !important;
+        transform: translateZ(0) !important;
+        -webkit-transform: translateZ(0) !important;
     }
     
     /* Admins page - make scrollable */

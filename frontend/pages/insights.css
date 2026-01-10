@@ -555,7 +555,7 @@ body.light-mode .page-title {
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
-    touch-action: pan-y pan-x;
+    touch-action: pan-y;
     width: 100%;
     box-sizing: border-box;
     flex: 1 1 0;
@@ -569,6 +569,7 @@ body.light-mode .page-title {
     will-change: scroll-position;
     transform: translateZ(0);
     -webkit-transform: translateZ(0);
+    overscroll-behavior: contain;
 }
 
 .card-container::-webkit-scrollbar {
@@ -597,13 +598,15 @@ body.light-mode .page-title {
         overflow-y: auto !important;
         overflow-x: hidden !important;
         -webkit-overflow-scrolling: touch !important;
-        touch-action: pan-y pan-x !important;
+        touch-action: pan-y !important;
         max-height: calc(100vh - 180px) !important;
         height: calc(100vh - 180px) !important;
         flex: 1 1 0 !important;
         will-change: scroll-position !important;
         transform: translateZ(0) !important;
         -webkit-transform: translateZ(0) !important;
+        overscroll-behavior: contain !important;
+        position: relative !important;
     }
 }
 
