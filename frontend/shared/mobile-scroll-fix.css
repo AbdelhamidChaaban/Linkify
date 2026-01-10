@@ -67,7 +67,17 @@
         overflow-x: auto !important;
         overflow-y: visible !important;
         -webkit-overflow-scrolling: touch !important;
-        touch-action: pan-x !important;
+        touch-action: pan-y pan-x !important;
+    }
+    
+    /* Allow touch scrolling on table elements */
+    body.insights-page .subscribers-table,
+    body.insights-page .subscribers-table tbody,
+    body.insights-page .subscribers-table tbody tr,
+    body.insights-page .subscribers-table td,
+    body.insights-page .subscribers-table th {
+        touch-action: pan-y pan-x !important;
+        pointer-events: auto !important;
     }
     
     /* Allow interaction with header/filters */

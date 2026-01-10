@@ -1984,6 +1984,19 @@ body.light-mode .table-wrapper {
     background: transparent;
     border-radius: 1rem;
     overflow: hidden;
+    touch-action: pan-y pan-x;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Allow touch scrolling on all table elements */
+.subscribers-table,
+.subscribers-table thead,
+.subscribers-table tbody,
+.subscribers-table tbody tr,
+.subscribers-table td,
+.subscribers-table th {
+    touch-action: pan-y pan-x;
+    pointer-events: auto;
 }
 
 .subscribers-table thead {
@@ -1991,6 +2004,8 @@ body.light-mode .table-wrapper {
     position: sticky;
     top: 0;
     z-index: 10;
+    touch-action: pan-y pan-x;
+    pointer-events: auto;
 }
 
 body:not(.light-mode) .subscribers-table thead {
@@ -2005,6 +2020,8 @@ body:not(.light-mode) .subscribers-table thead {
     font-size: 0.8125rem;
     border-bottom: 1px solid rgba(0, 0, 0, 0.12);
     background: #f5f5f5;
+    touch-action: pan-y pan-x;
+    pointer-events: auto;
 }
 
 /* Desktop: Allow header text wrapping */
@@ -2135,6 +2152,9 @@ body:not(.light-mode) .subscribers-table th {
     border-bottom: 1px solid rgba(0, 0, 0, 0.08);
     transition: background 0.2s ease;
     background: #ffffff;
+    touch-action: pan-y pan-x;
+    pointer-events: auto;
+    -webkit-tap-highlight-color: transparent;
 }
 
 body:not(.light-mode) .subscribers-table tbody tr {
@@ -2162,6 +2182,8 @@ body:not(.light-mode) .subscribers-table tbody tr:hover {
     padding: 0.75rem 0.75rem;
     color: #475569;
     font-size: 0.8125rem;
+    touch-action: pan-y pan-x;
+    pointer-events: auto;
 }
 
 body:not(.light-mode) .subscribers-table td {
@@ -3505,7 +3527,18 @@ body.light-mode .dense-toggle-text {
         -webkit-overflow-scrolling: touch !important;
         scrollbar-width: thin;
         scrollbar-color: rgba(167, 139, 250, 0.6) rgba(58, 10, 78, 0.2);
-        touch-action: pan-x !important;
+        touch-action: pan-y pan-x !important;
+    }
+    
+    /* Ensure table elements allow scrolling on mobile */
+    .subscribers-table,
+    .subscribers-table tbody,
+    .subscribers-table tbody tr,
+    .subscribers-table td,
+    .subscribers-table th {
+        touch-action: pan-y pan-x !important;
+        pointer-events: auto !important;
+        -webkit-tap-highlight-color: transparent !important;
     }
     
     .table-wrapper::-webkit-scrollbar {
