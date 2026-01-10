@@ -50,11 +50,20 @@
         flex: 1 1 0 !important;
     }
     
-    /* Table container is part of scrollable card container */
+    /* Table container allows horizontal scrolling */
     body.insights-page .table-container {
         touch-action: pan-y pan-x !important;
-        overflow: visible !important;
+        overflow-x: auto !important;
+        overflow-y: visible !important;
         position: relative !important;
+    }
+    
+    /* Table wrapper handles horizontal scrolling */
+    body.insights-page .table-wrapper {
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-x !important;
     }
     
     /* Allow interaction with header/filters */

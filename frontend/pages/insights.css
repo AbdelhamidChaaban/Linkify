@@ -1832,9 +1832,10 @@ body:not(.light-mode) .filter-icon-btn:hover {
     color: inherit;
 }
 
-/* Table Container - Part of scrollable card-container */
+/* Table Container - Part of scrollable card-container, allows horizontal overflow */
 .table-container {
-    overflow: visible;
+    overflow-x: visible;
+    overflow-y: visible;
     width: 100%;
     position: relative;
     flex: 0 0 auto;
@@ -1854,17 +1855,30 @@ body.light-mode .table-container {
     box-shadow: 0px 1rem 1.5rem -0.9rem rgba(0, 0, 0, 0.15);
 }
 
-/* Desktop: No horizontal scroll */
+/* Desktop: Allow horizontal scroll on table-wrapper */
 @media (min-width: 1024px) {
     .table-container {
-        overflow-x: hidden;
+        overflow-x: visible;
+        overflow-y: visible;
+    }
+    
+    .table-wrapper {
+        overflow-x: auto;
+        overflow-y: visible;
+        -webkit-overflow-scrolling: touch;
     }
 }
 
 /* Tablet and below: Allow horizontal scroll on table wrapper */
 @media (max-width: 1023px) {
+    .table-container {
+        overflow-x: visible;
+        overflow-y: visible;
+    }
+    
     .table-wrapper {
         overflow-x: auto;
+        overflow-y: visible;
         -webkit-overflow-scrolling: touch;
     }
 }
@@ -1879,18 +1893,55 @@ body.light-mode .table-container {
     border-radius: 1.15rem;
     padding: 0.5rem;
     overflow-x: auto;
+    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
+}
+
+.table-wrapper::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+    display: block;
+}
+
+.table-wrapper::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+}
+
+.table-wrapper::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+}
+
+.table-wrapper::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+body:not(.light-mode) .table-wrapper::-webkit-scrollbar-track {
+    background: rgba(58, 10, 78, 0.2);
+}
+
+body:not(.light-mode) .table-wrapper::-webkit-scrollbar-thumb {
+    background: rgba(167, 139, 250, 0.7);
+}
+
+body:not(.light-mode) .table-wrapper::-webkit-scrollbar-thumb:hover {
+    background: rgba(167, 139, 250, 0.9);
 }
 
 body.light-mode .table-wrapper {
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(240, 245, 255, 0.6) 43%, rgba(255, 255, 255, 0.98) 100%);
 }
 
-/* Desktop: Table fits without scrolling */
+/* Desktop: Table can scroll horizontally if needed */
 @media (min-width: 1024px) {
     .table-wrapper {
         width: 100%;
         min-width: 100%;
+        overflow-x: auto;
+        overflow-y: visible;
     }
     
     .subscribers-table {
@@ -3428,23 +3479,42 @@ body.light-mode .dense-toggle-text {
         flex: 0 0 auto;
     }
     
+    .table-container {
+        overflow-x: visible;
+        overflow-y: visible;
+    }
+    
     .table-wrapper {
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        -webkit-overflow-scrolling: touch !important;
         scrollbar-width: thin;
         scrollbar-color: rgba(167, 139, 250, 0.6) rgba(58, 10, 78, 0.2);
+        touch-action: pan-x !important;
+    }
+    
+    .table-wrapper::-webkit-scrollbar {
+        display: block;
+        height: 8px;
+        width: 8px;
+    }
+    
+    .table-wrapper::-webkit-scrollbar-track {
+        background: rgba(58, 10, 78, 0.2);
+        border-radius: 4px;
+    }
+    
+    .table-wrapper::-webkit-scrollbar-thumb {
+        background: rgba(167, 139, 250, 0.7);
+        border-radius: 4px;
+    }
+    
+    .table-wrapper::-webkit-scrollbar-thumb:hover {
+        background: rgba(167, 139, 250, 0.9);
     }
     
     body.insights-page .card-container {
         max-height: calc(100vh - 150px);
-    }
-
-    .table-container::-webkit-scrollbar {
-        height: 10px;
-    }
-
-    .table-container::-webkit-scrollbar-thumb {
-        min-width: 40px;
     }
 
     .subscribers-table {
@@ -4343,4 +4413,5 @@ body:not(.light-mode) .view-details-table .progress-bar {
 
 body:not(.light-mode) .view-details-table .progress-text {
     color: var(--text-secondary, #94a3b8);
+}
 }
