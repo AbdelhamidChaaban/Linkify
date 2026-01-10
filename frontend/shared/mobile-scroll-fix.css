@@ -1,53 +1,67 @@
-/* Mobile Scroll Fix - Prevent page scrolling, allow only table scrolling */
+/* Mobile Scroll Fix - Allow full page scrolling for insights page */
+/* The insights page needs full page scrolling to access pagination and buttons */
 
-/* Insights page - prevent body/html scrolling on mobile */
 @media (max-width: 768px) {
+    /* Allow page-level scrolling on mobile */
     html.insights-page,
     body.insights-page {
-        overflow: hidden !important;
-        position: fixed !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        position: relative !important;
         width: 100% !important;
-        height: 100% !important;
-        height: 100dvh !important;
-        touch-action: none !important;
-        overscroll-behavior: none !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        min-height: 100dvh !important;
+        touch-action: pan-y !important;
+        overscroll-behavior-y: auto !important;
+        overscroll-behavior-x: none !important;
+        -webkit-overflow-scrolling: touch !important;
     }
     
-    /* Prevent main content from scrolling */
+    /* Allow main content to scroll with page */
     body.insights-page .main-content {
-        overflow: hidden !important;
-        touch-action: none !important;
-        overscroll-behavior: none !important;
+        overflow: visible !important;
+        touch-action: pan-y !important;
+        overscroll-behavior: contain !important;
+        position: relative !important;
+        height: auto !important;
+        min-height: calc(100vh - 70px) !important;
+        min-height: calc(100dvh - 70px) !important;
     }
     
-    /* Prevent container from scrolling */
+    /* Allow container to scroll with page */
     body.insights-page .container {
-        overflow: hidden !important;
-        touch-action: none !important;
-        overscroll-behavior: none !important;
+        overflow: visible !important;
+        touch-action: pan-y !important;
+        overscroll-behavior: contain !important;
+        position: relative !important;
+        height: auto !important;
     }
     
-    /* Prevent card container from scrolling */
+    /* Card container should scroll with table and pagination inside */
     body.insights-page .card-container {
-        overflow: hidden !important;
-        touch-action: none !important;
-        overscroll-behavior: none !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        touch-action: pan-y !important;
+        position: relative !important;
+        -webkit-overflow-scrolling: touch !important;
+        max-height: calc(100vh - 180px) !important;
+        height: calc(100vh - 180px) !important;
+        flex: 1 1 0 !important;
     }
     
-    /* Only allow table container to scroll */
+    /* Table container is part of scrollable card container */
     body.insights-page .table-container {
         touch-action: pan-y pan-x !important;
-        overflow-y: auto !important;
-        overflow-x: auto !important;
-        -webkit-overflow-scrolling: touch !important;
-        overscroll-behavior: contain !important;
+        overflow: visible !important;
+        position: relative !important;
     }
     
-    /* Prevent any other scrolling */
+    /* Allow interaction with header/filters */
     body.insights-page .page-header-section,
     body.insights-page .filters-section,
     body.insights-page .tabs-container {
-        touch-action: none !important;
+        touch-action: manipulation !important;
         flex-shrink: 0;
     }
 }

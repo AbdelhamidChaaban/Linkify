@@ -277,7 +277,6 @@ html.insights-page,
 body.insights-page {
     overflow-y: auto;
     overflow-x: hidden;
-    height: 100%;
     min-height: 100vh;
     min-height: 100dvh;
     position: relative;
@@ -292,7 +291,6 @@ body.insights-page .main-content {
     flex-direction: column;
     padding: 0 !important;
     position: relative;
-    height: auto;
 }
 
 /* Override main-content padding for insights page on mobile */
@@ -303,9 +301,6 @@ body.insights-page .main-content {
         overflow-x: hidden;
         position: relative;
         width: 100%;
-        height: auto;
-        min-height: 100vh;
-        min-height: 100dvh;
     }
     
     body.insights-page .main-content {
@@ -313,41 +308,32 @@ body.insights-page .main-content {
         min-height: calc(100vh - 70px);
         min-height: calc(100dvh - 70px);
         overflow: visible;
-        height: auto;
     }
 }
 
 @media (max-width: 480px) {
-    html.insights-page,
-    body.insights-page {
-        height: auto;
-        min-height: 100vh;
-        min-height: 100dvh;
-    }
-    
     body.insights-page .main-content {
         padding: 0 !important;
         min-height: calc(100vh - 60px);
         min-height: calc(100dvh - 60px);
-        height: auto;
     }
 }
 
-/* Container */
+/* Container - Full scrollable layout */
 .container {
     max-width: 100%;
     margin: 0;
     padding: 2rem;
+    padding-bottom: 2rem;
     width: 100%;
     box-sizing: border-box;
     position: relative;
-    flex: 1;
+    flex: 1 1 auto;
     display: flex;
     flex-direction: column;
     overflow: visible;
     min-height: 0;
-    height: auto;
-    padding-bottom: 2rem;
+    height: 100%;
 }
 
 @media (max-width: 768px) {
@@ -357,7 +343,9 @@ body.insights-page .main-content {
         overflow: visible;
         display: flex;
         flex-direction: column;
-        height: auto;
+        flex: 1 1 auto;
+        height: 100%;
+        min-height: 0;
     }
 }
 
@@ -366,7 +354,7 @@ body.insights-page .main-content {
         padding: 0.5rem;
         padding-bottom: 1rem;
         overflow: visible;
-        height: auto;
+        flex: 1 1 auto;
     }
 }
 
@@ -557,26 +545,57 @@ body.light-mode .page-title {
     height: 1em;
 }
 
-/* Card Container */
+/* Card Container - Now the main scrollable container */
 .card-container {
     background: #ffffff;
     border-radius: 8px;
     padding: 0;
     border: 1px solid rgba(0, 0, 0, 0.12);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    overflow: visible;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
     width: 100%;
     box-sizing: border-box;
-    flex: 1;
+    flex: 1 1 0;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    max-height: calc(100vh - 200px);
+    height: calc(100vh - 200px);
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
 }
 
-/* On mobile, ensure card container allows scrolling */
+.card-container::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    display: block;
+}
+
+.card-container::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 4px;
+}
+
+.card-container::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+}
+
+.card-container::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* On mobile, card container scrolls with adjusted max-height */
 @media (max-width: 768px) {
     body.insights-page .card-container {
-        overflow: visible;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+        max-height: calc(100vh - 180px);
+        height: calc(100vh - 180px);
+        flex: 1 1 0;
     }
 }
 
@@ -1813,38 +1832,17 @@ body:not(.light-mode) .filter-icon-btn:hover {
     color: inherit;
 }
 
-/* Table Container */
+/* Table Container - Part of scrollable card-container */
 .table-container {
-    overflow-y: auto;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+    overflow: visible;
     width: 100%;
     position: relative;
-    flex: 1 1 0;
-    min-height: 200px;
-    max-height: calc(100vh - 450px);
-    scrollbar-width: thin;
-    scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
+    flex: 0 0 auto;
     /* Card-like styling with gradient border */
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(90, 33, 182, 0.15), rgba(255, 255, 255, 0.6));
     padding: 1px;
     border-radius: 1.2rem;
     box-shadow: 0px 1rem 1.5rem -0.9rem rgba(0, 0, 0, 0.88);
-    touch-action: pan-y pan-x;
-}
-
-@media (max-width: 768px) {
-    .table-container {
-        max-height: calc(100vh - 500px);
-        min-height: 300px;
-    }
-}
-
-@media (max-width: 480px) {
-    .table-container {
-        max-height: calc(100vh - 450px);
-        min-height: 250px;
-    }
 }
 
 body:not(.light-mode) .table-container {
@@ -1863,32 +1861,15 @@ body.light-mode .table-container {
     }
 }
 
-/* Tablet and below: Allow horizontal scroll */
+/* Tablet and below: Allow horizontal scroll on table wrapper */
 @media (max-width: 1023px) {
-    .table-container {
+    .table-wrapper {
         overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
     }
 }
 
-.table-container::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-    display: block;
-}
-
-.table-container::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.05);
-    border-radius: 4px;
-}
-
-.table-container::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 4px;
-}
-
-.table-container::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.3);
-}
+/* Table container no longer scrolls - card-container does */
 
 .table-wrapper {
     position: relative;
@@ -1897,6 +1878,8 @@ body.light-mode .table-container {
     background: linear-gradient(135deg, rgba(13, 17, 32, 0.98) 0%, rgba(90, 33, 182, 0.35) 43%, rgba(13, 17, 32, 0.98) 100%);
     border-radius: 1.15rem;
     padding: 0.5rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 body.light-mode .table-wrapper {
@@ -2741,7 +2724,7 @@ body.light-mode .statement-col-balance {
     color: #1e293b;
 }
 
-/* Pagination Section */
+/* Pagination Section - Part of scrollable card-container */
 .pagination-section {
     display: flex;
     align-items: center;
@@ -2750,15 +2733,14 @@ body.light-mode .statement-col-balance {
     border-top: 1px solid rgba(0, 0, 0, 0.12);
     flex-wrap: wrap;
     gap: 1rem;
+    flex: 0 0 auto;
     flex-shrink: 0;
-    flex-grow: 0;
     background: #ffffff;
     min-height: fit-content;
     visibility: visible;
     overflow: visible;
     position: relative;
     z-index: 1;
-    margin-top: auto;
 }
 
 body:not(.light-mode) .pagination-section {
@@ -3157,8 +3139,7 @@ body.light-mode .dense-toggle-text {
 @media (max-width: 768px) {
     .container {
         padding: 0.875rem;
-        padding-bottom: 1.5rem;
-        overflow: visible;
+        overflow: hidden;
     }
 
     .page-header-section {
@@ -3192,10 +3173,15 @@ body.light-mode .dense-toggle-text {
     }
 
     .card-container {
-        overflow: visible;
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch !important;
+        display: flex !important;
+        flex-direction: column !important;
+        min-height: 0 !important;
+        max-height: calc(100vh - 180px) !important;
+        height: calc(100vh - 180px) !important;
+        flex: 1 1 0 !important;
     }
 
     .tabs-container {
@@ -3284,39 +3270,38 @@ body.light-mode .dense-toggle-text {
     }
 
     .table-container {
-        overflow-x: auto;
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
+        overflow: visible;
         margin: 0;
         padding: 0;
         width: 100%;
         position: relative;
-        flex: 1;
-        min-height: 300px;
-        max-height: calc(100vh - 500px);
+        flex: 0 0 auto;
+    }
+    
+    .table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
         scrollbar-width: thin;
         scrollbar-color: rgba(167, 139, 250, 0.6) rgba(58, 10, 78, 0.2);
     }
-
-    .table-container::-webkit-scrollbar {
+    
+    .table-wrapper::-webkit-scrollbar {
         display: block;
-        height: 12px;
+        height: 8px;
+        width: 8px;
     }
-
-    .table-container::-webkit-scrollbar-track {
+    
+    .table-wrapper::-webkit-scrollbar-track {
         background: rgba(58, 10, 78, 0.2);
-        border-radius: 6px;
-        margin: 0 1rem;
+        border-radius: 4px;
     }
-
-    .table-container::-webkit-scrollbar-thumb {
+    
+    .table-wrapper::-webkit-scrollbar-thumb {
         background: rgba(167, 139, 250, 0.7);
-        border-radius: 6px;
-        border: 2px solid rgba(58, 10, 78, 0.2);
-        min-width: 50px;
+        border-radius: 4px;
     }
-
-    .table-container::-webkit-scrollbar-thumb:hover {
+    
+    .table-wrapper::-webkit-scrollbar-thumb:hover {
         background: rgba(167, 139, 250, 0.9);
     }
 
@@ -3357,8 +3342,13 @@ body.light-mode .dense-toggle-text {
 
     .card-container {
         border-radius: 12px;
-        overflow: visible;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
         min-height: 0;
+        max-height: calc(100vh - 150px);
+        height: calc(100vh - 150px);
+        flex: 1 1 0;
     }
 
     .page-header-section {
@@ -3431,11 +3421,22 @@ body.light-mode .dense-toggle-text {
     }
 
     .table-container {
+        overflow: visible;
         margin: 0;
         padding: 0;
         width: 100%;
-        max-height: calc(100vh - 450px);
-        min-height: 250px;
+        flex: 0 0 auto;
+    }
+    
+    .table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(167, 139, 250, 0.6) rgba(58, 10, 78, 0.2);
+    }
+    
+    body.insights-page .card-container {
+        max-height: calc(100vh - 150px);
     }
 
     .table-container::-webkit-scrollbar {
