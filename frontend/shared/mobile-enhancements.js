@@ -34,9 +34,9 @@ class MobileEnhancements {
         // Only enable pull-to-refresh on insights page for the table container
         const isInsightsPage = document.body.classList.contains('insights-page');
         
-        // For insights page, use table container instead of main content
+        // For insights page, use card-container (the actual scrollable element) instead of main content
         const targetElement = isInsightsPage 
-            ? document.querySelector('.table-container')
+            ? document.querySelector('.card-container')
             : document.querySelector('.main-content, .insights-section, .home-container');
             
         if (!targetElement) return;
@@ -63,24 +63,35 @@ class MobileEnhancements {
         };
 
         const handleTouchMove = (e) => {
-            // Check scroll position
+            // Check scroll position - allow normal scrolling when not at top
             if (isInsightsPage) {
-                const tableContainer = e.currentTarget;
-                if (tableContainer.scrollTop > 0) return;
+                const scrollContainer = e.currentTarget;
+                // If user has scrolled down at all, allow normal scrolling
+                if (scrollContainer.scrollTop > 0) {
+                    isPulling = false;
+                    return; // Don't interfere with normal scrolling
+                }
             } else {
-                if (window.scrollY > 0) return;
+                if (window.scrollY > 0) {
+                    isPulling = false;
+                    return; // Don't interfere with normal scrolling
+                }
             }
             
             touchCurrentY = e.touches[0].clientY;
             const pullDistance = touchCurrentY - touchStartY;
 
-            // Only prevent default if we're actually pulling down (positive distance)
-            if (pullDistance > 0 && pullDistance < 200) {
+            // Only prevent default if we're at the very top (scrollTop === 0) AND pulling down
+            // This ensures normal scrolling works when not at the top
+            if (pullDistance > 10 && pullDistance < 200) {
                 isPulling = true;
                 e.preventDefault();
                 
                 const pullProgress = Math.min(pullDistance / 100, 1);
                 this.updatePullIndicator(pullIndicator, pullDistance, pullProgress);
+            } else if (pullDistance <= 0) {
+                // User is scrolling up or sideways, allow it
+                isPulling = false;
             }
         };
 

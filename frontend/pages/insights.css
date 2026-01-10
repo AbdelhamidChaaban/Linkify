@@ -555,6 +555,7 @@ body.light-mode .page-title {
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
+    touch-action: pan-y pan-x;
     width: 100%;
     box-sizing: border-box;
     flex: 1 1 0;
@@ -565,6 +566,9 @@ body.light-mode .page-title {
     height: calc(100vh - 200px);
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
+    will-change: scroll-position;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
 }
 
 .card-container::-webkit-scrollbar {
@@ -590,12 +594,16 @@ body.light-mode .page-title {
 /* On mobile, card container scrolls with adjusted max-height */
 @media (max-width: 768px) {
     body.insights-page .card-container {
-        overflow-y: auto;
-        overflow-x: hidden;
-        -webkit-overflow-scrolling: touch;
-        max-height: calc(100vh - 180px);
-        height: calc(100vh - 180px);
-        flex: 1 1 0;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-y pan-x !important;
+        max-height: calc(100vh - 180px) !important;
+        height: calc(100vh - 180px) !important;
+        flex: 1 1 0 !important;
+        will-change: scroll-position !important;
+        transform: translateZ(0) !important;
+        -webkit-transform: translateZ(0) !important;
     }
 }
 
@@ -3393,13 +3401,17 @@ body.light-mode .dense-toggle-text {
 
     .card-container {
         border-radius: 12px;
-        overflow-y: auto;
-        overflow-x: hidden;
-        -webkit-overflow-scrolling: touch;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-y pan-x !important;
         min-height: 0;
-        max-height: calc(100vh - 150px);
-        height: calc(100vh - 150px);
-        flex: 1 1 0;
+        max-height: calc(100vh - 150px) !important;
+        height: calc(100vh - 150px) !important;
+        flex: 1 1 0 !important;
+        will-change: scroll-position !important;
+        transform: translateZ(0) !important;
+        -webkit-transform: translateZ(0) !important;
     }
 
     .page-header-section {
