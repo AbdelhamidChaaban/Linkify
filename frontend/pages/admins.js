@@ -121,6 +121,7 @@ class AdminsManager {
                     console.log('ℹ️ Loaded admins from cache (offline mode)');
                 } else if (snapshot) {
                     console.log('✅ Loaded admins from server');
+
                 }
             } catch (error) {
                 console.warn('⚠️ Firestore query timeout or error:', error.message);
@@ -1214,5 +1215,6 @@ let adminsManager;
 document.addEventListener('DOMContentLoaded', () => {
     adminsManager = new AdminsManager();
 });
+
 
 

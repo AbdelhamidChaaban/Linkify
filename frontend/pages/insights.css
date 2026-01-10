@@ -277,6 +277,7 @@ html.insights-page,
 body.insights-page {
     overflow-y: auto;
     overflow-x: hidden;
+    height: 100%;
     min-height: 100vh;
     min-height: 100dvh;
     position: relative;
@@ -291,6 +292,7 @@ body.insights-page .main-content {
     flex-direction: column;
     padding: 0 !important;
     position: relative;
+    height: auto;
 }
 
 /* Override main-content padding for insights page on mobile */
@@ -301,6 +303,9 @@ body.insights-page .main-content {
         overflow-x: hidden;
         position: relative;
         width: 100%;
+        height: auto;
+        min-height: 100vh;
+        min-height: 100dvh;
     }
     
     body.insights-page .main-content {
@@ -308,14 +313,23 @@ body.insights-page .main-content {
         min-height: calc(100vh - 70px);
         min-height: calc(100dvh - 70px);
         overflow: visible;
+        height: auto;
     }
 }
 
 @media (max-width: 480px) {
+    html.insights-page,
+    body.insights-page {
+        height: auto;
+        min-height: 100vh;
+        min-height: 100dvh;
+    }
+    
     body.insights-page .main-content {
         padding: 0 !important;
         min-height: calc(100vh - 60px);
         min-height: calc(100dvh - 60px);
+        height: auto;
     }
 }
 
@@ -332,21 +346,27 @@ body.insights-page .main-content {
     flex-direction: column;
     overflow: visible;
     min-height: 0;
+    height: auto;
+    padding-bottom: 2rem;
 }
 
 @media (max-width: 768px) {
     body.insights-page .container {
         padding: 0.875rem;
+        padding-bottom: 1.5rem;
         overflow: visible;
         display: flex;
         flex-direction: column;
+        height: auto;
     }
 }
 
 @media (max-width: 480px) {
     body.insights-page .container {
         padding: 0.5rem;
+        padding-bottom: 1rem;
         overflow: visible;
+        height: auto;
     }
 }
 
@@ -1801,8 +1821,8 @@ body:not(.light-mode) .filter-icon-btn:hover {
     width: 100%;
     position: relative;
     flex: 1 1 0;
-    min-height: 0;
-    max-height: calc(100vh - 400px);
+    min-height: 200px;
+    max-height: calc(100vh - 450px);
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
     /* Card-like styling with gradient border */
@@ -1811,6 +1831,20 @@ body:not(.light-mode) .filter-icon-btn:hover {
     border-radius: 1.2rem;
     box-shadow: 0px 1rem 1.5rem -0.9rem rgba(0, 0, 0, 0.88);
     touch-action: pan-y pan-x;
+}
+
+@media (max-width: 768px) {
+    .table-container {
+        max-height: calc(100vh - 500px);
+        min-height: 300px;
+    }
+}
+
+@media (max-width: 480px) {
+    .table-container {
+        max-height: calc(100vh - 450px);
+        min-height: 250px;
+    }
 }
 
 body:not(.light-mode) .table-container {
@@ -2724,6 +2758,7 @@ body.light-mode .statement-col-balance {
     overflow: visible;
     position: relative;
     z-index: 1;
+    margin-top: auto;
 }
 
 body:not(.light-mode) .pagination-section {
@@ -3122,7 +3157,8 @@ body.light-mode .dense-toggle-text {
 @media (max-width: 768px) {
     .container {
         padding: 0.875rem;
-        overflow: hidden;
+        padding-bottom: 1.5rem;
+        overflow: visible;
     }
 
     .page-header-section {
@@ -3256,8 +3292,8 @@ body.light-mode .dense-toggle-text {
         width: 100%;
         position: relative;
         flex: 1;
-        min-height: 0;
-        max-height: 500px;
+        min-height: 300px;
+        max-height: calc(100vh - 500px);
         scrollbar-width: thin;
         scrollbar-color: rgba(167, 139, 250, 0.6) rgba(58, 10, 78, 0.2);
     }
@@ -3398,7 +3434,8 @@ body.light-mode .dense-toggle-text {
         margin: 0;
         padding: 0;
         width: 100%;
-        max-height: 400px;
+        max-height: calc(100vh - 450px);
+        min-height: 250px;
     }
 
     .table-container::-webkit-scrollbar {
