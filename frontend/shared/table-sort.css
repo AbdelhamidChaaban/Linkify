@@ -1,0 +1,81 @@
+/**
+ * Table Sorting Styles
+ * Shared styles for sortable table headers across all pages
+ */
+
+/* Sortable header base styles - preserve table cell display */
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    transition: color 0.2s ease;
+    white-space: nowrap;
+}
+
+th.sortable:hover {
+    color: #c084fc;
+}
+
+body.light-mode th.sortable:hover {
+    color: #9333ea;
+}
+
+/* Sort icon styles */
+th.sortable .sort-icon {
+    width: 16px;
+    height: 16px;
+    margin-left: 0.25rem;
+    opacity: 0.5;
+    transition: opacity 0.2s ease;
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+th.sortable:hover .sort-icon {
+    opacity: 1;
+}
+
+th.sortable.sort-active .sort-icon {
+    opacity: 1;
+}
+
+/* Active sort indicator */
+th.sortable.sort-active {
+    color: #c084fc;
+    font-weight: 600;
+}
+
+body.light-mode th.sortable.sort-active {
+    color: #9333ea;
+}
+
+/* Sort direction indicators */
+th.sortable.sort-asc .sort-icon,
+th.sortable.sort-desc .sort-icon {
+    opacity: 1;
+}
+
+/* Ensure sort icons align properly - use inline layout, not flex */
+.actions-table th.sortable,
+.subscribers-table th.sortable,
+.admins-table th.sortable,
+.profit-table th.sortable,
+.owner-table th.sortable,
+.flow-table th.sortable {
+    white-space: nowrap;
+}
+
+/* Preserve text alignment classes - table cells use text-align, not justify-content */
+th.sortable.text-right {
+    text-align: right;
+}
+
+th.sortable.text-center {
+    text-align: center;
+}
+
+th.sortable.text-left {
+    text-align: left;
+}
+

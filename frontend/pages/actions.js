@@ -216,18 +216,40 @@ class ActionsManager {
         this.filteredLogs.sort((a, b) => {
             let aVal, bVal;
             
-            if (this.sortField === 'date') {
-                aVal = new Date(a.timestamp || a.createdAt).getTime();
-                bVal = new Date(b.timestamp || b.createdAt).getTime();
-            } else {
-                aVal = a[this.sortField] || '';
-                bVal = b[this.sortField] || '';
+            switch(this.sortField) {
+                case 'date':
+                    aVal = new Date(a.timestamp || a.createdAt).getTime();
+                    bVal = new Date(b.timestamp || b.createdAt).getTime();
+                    break;
+                case 'admin':
+                    aVal = (a.adminName || a.admin || '').toLowerCase();
+                    bVal = (b.adminName || b.admin || '').toLowerCase();
+                    break;
+                case 'action':
+                    aVal = (a.action || '').toLowerCase();
+                    bVal = (b.action || '').toLowerCase();
+                    break;
+                case 'numbers':
+                    aVal = parseInt(a.numbers || a.numberCount || 0);
+                    bVal = parseInt(b.numbers || b.numberCount || 0);
+                    break;
+                case 'quotas':
+                    aVal = parseFloat(a.quotas || a.quota || 0);
+                    bVal = parseFloat(b.quotas || b.quota || 0);
+                    break;
+                case 'status':
+                    aVal = (a.status || '').toLowerCase();
+                    bVal = (b.status || '').toLowerCase();
+                    break;
+                default:
+                    aVal = a[this.sortField] || '';
+                    bVal = b[this.sortField] || '';
             }
             
             if (this.sortDirection === 'asc') {
-                return aVal > bVal ? 1 : -1;
+                return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
             } else {
-                return aVal < bVal ? 1 : -1;
+                return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
             }
         });
         
@@ -542,18 +564,89 @@ class ActionsManager {
             });
         }
         
-        // Sortable header
-        const sortableHeader = document.querySelector('.sortable');
-        if (sortableHeader) {
-            sortableHeader.addEventListener('click', () => {
-                if (this.sortDirection === 'desc') {
-                    this.sortDirection = 'asc';
-                } else {
-                    this.sortDirection = 'desc';
+        // Initialize table sorting
+        this.initTableSorting();
+    }
+    
+    initTableSorting() {
+        const table = document.getElementById('actionsTable');
+        if (!table) return;
+        
+        const headers = table.querySelectorAll('thead th[data-sort]');
+        
+        headers.forEach(header => {
+            const field = header.getAttribute('data-sort');
+            
+            // Add sortable class if not already present
+            if (!header.classList.contains('sortable')) {
+                header.classList.add('sortable');
+            }
+            
+            // Add sort icon if not present
+            if (!header.querySelector('.sort-icon')) {
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                icon.classList.add('sort-icon');
+                icon.setAttribute('viewBox', '0 0 24 24');
+                icon.setAttribute('fill', 'none');
+                icon.setAttribute('stroke', 'currentColor');
+                icon.setAttribute('stroke-width', '2');
+                icon.innerHTML = '<path d="M12 16V8M12 16l-4-4M12 16l4-4"/>';
+                
+                // If header has no child elements, append icon directly to preserve structure
+                if (header.children.length === 0) {
+                    const text = header.textContent.trim();
+                    header.textContent = '';
+                    header.appendChild(document.createTextNode(text));
                 }
+                header.appendChild(icon);
+            }
+            
+            // Add click handler
+            header.addEventListener('click', () => {
+                // Remove active class from all headers
+                headers.forEach(h => {
+                    h.classList.remove('sort-active', 'sort-asc', 'sort-desc');
+                    const icon = h.querySelector('.sort-icon');
+                    if (icon) {
+                        icon.classList.remove('sort-asc', 'sort-desc');
+                    }
+                });
+                
+                // Toggle direction if same field, otherwise set to asc
+                if (this.sortField === field) {
+                    this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    this.sortField = field;
+                    this.sortDirection = 'asc';
+                }
+                
+                // Update header
+                header.classList.add('sort-active', `sort-${this.sortDirection}`);
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.classList.add(`sort-${this.sortDirection}`);
+                    if (this.sortDirection === 'asc') {
+                        icon.innerHTML = '<path d="M12 5v14M12 5l4 4M12 5L8 9"/>';
+                    } else {
+                        icon.innerHTML = '<path d="M12 19V5M12 19l-4-4M12 19l4-4"/>';
+                    }
+                }
+                
+                // Apply filters and re-render
                 this.applyFilters();
                 this.renderTable();
             });
+        });
+        
+        // Set initial sort state (date, desc)
+        const dateHeader = table.querySelector('th[data-sort="date"]');
+        if (dateHeader) {
+            dateHeader.classList.add('sort-active', 'sort-desc');
+            const icon = dateHeader.querySelector('.sort-icon');
+            if (icon) {
+                icon.classList.add('sort-desc');
+                icon.innerHTML = '<path d="M12 19V5M12 19l-4-4M12 19l4-4"/>';
+            }
         }
     }
     

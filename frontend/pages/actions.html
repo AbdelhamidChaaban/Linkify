@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/shared/layout.css">
+    <link rel="stylesheet" href="/shared/table-sort.css">
     <link rel="stylesheet" href="/pages/actions.css">
     <link rel="stylesheet" href="/shared/mobile-enhancements.css">
     <link rel="stylesheet" href="/shared/ui-polish.css">
@@ -283,17 +284,12 @@
                 <table class="actions-table" id="actionsTable">
                 <thead>
                     <tr>
-                        <th>Admin</th>
-                        <th>Action</th>
-                        <th>Numbers</th>
-                        <th>Quotas</th>
-                        <th class="sortable" data-sort="date">
-                            Date
-                            <svg class="sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M12 16V8M12 16l-4-4M12 16l4-4"/>
-                            </svg>
-                        </th>
-                        <th>Status</th>
+                        <th class="sortable" data-sort="admin">Admin</th>
+                        <th class="sortable" data-sort="action">Action</th>
+                        <th class="sortable" data-sort="numbers">Numbers</th>
+                        <th class="sortable" data-sort="quotas">Quotas</th>
+                        <th class="sortable" data-sort="date">Date</th>
+                        <th class="sortable" data-sort="status">Status</th>
                     </tr>
                 </thead>
                 <tbody id="actionsTableBody">

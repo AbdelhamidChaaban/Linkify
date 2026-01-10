@@ -279,9 +279,7 @@ body.light-mode .actions-table th {
 .actions-table th.sortable {
     cursor: pointer;
     user-select: none;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    white-space: nowrap;
 }
 
 .actions-table th.sortable:hover {
@@ -293,11 +291,14 @@ body.light-mode .actions-table th.sortable:hover {
     color: #9333ea;
 }
 
-.sort-icon {
+.actions-table th.sortable .sort-icon {
     width: 16px;
     height: 16px;
+    margin-left: 0.25rem;
     opacity: 0.5;
     transition: opacity 0.2s ease;
+    display: inline-block;
+    vertical-align: middle;
 }
 
 .actions-table th.sortable:hover .sort-icon {

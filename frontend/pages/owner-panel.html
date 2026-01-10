@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/shared/layout.css">
+    <link rel="stylesheet" href="/shared/table-sort.css">
     <link rel="stylesheet" href="/pages/owner-panel.css">
     <link rel="stylesheet" href="/shared/mobile-enhancements.css">
     <link rel="stylesheet" href="/shared/ui-polish.css">
@@ -181,14 +182,14 @@
                     </div>
                 </div>
                 <div class="table-wrapper">
-                    <table class="owner-table">
+                        <table class="owner-table">
                         <thead>
                             <tr>
-                                <th>Email</th>
-                                <th>Name</th>
-                                <th>Phone</th>
-                                <th>Status</th>
-                                <th>Created</th>
+                                <th class="sortable" data-sort="email">Email</th>
+                                <th class="sortable" data-sort="name">Name</th>
+                                <th class="sortable" data-sort="phone">Phone</th>
+                                <th class="sortable" data-sort="status">Status</th>
+                                <th class="sortable" data-sort="created">Created</th>
                                 <th class="actions-col">Actions</th>
                             </tr>
                         </thead>
@@ -233,9 +234,9 @@
                         <table class="owner-table">
                             <thead>
                                 <tr>
-                                    <th>User</th>
-                                    <th>Admins</th>
-                                    <th>Admin Limit</th>
+                                    <th class="sortable" data-sort="user">User</th>
+                                    <th class="sortable" data-sort="admins">Admins</th>
+                                    <th class="sortable" data-sort="adminLimit">Admin Limit</th>
                                 </tr>
                             </thead>
                             <tbody id="limitationsTableBody">
@@ -325,10 +326,10 @@
                         <table class="owner-table">
                             <thead>
                                 <tr>
-                                    <th>Email</th>
-                                    <th>Name</th>
-                                    <th>Phone</th>
-                                    <th>Created</th>
+                                    <th class="sortable" data-sort="email">Email</th>
+                                    <th class="sortable" data-sort="name">Name</th>
+                                    <th class="sortable" data-sort="phone">Phone</th>
+                                    <th class="sortable" data-sort="created">Created</th>
                                     <th class="actions-col">Actions</th>
                                 </tr>
                             </thead>

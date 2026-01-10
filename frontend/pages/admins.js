@@ -7,6 +7,8 @@ class AdminsManager {
         this.searchQuery = ''; // Current search query
         // Removed selectedRows - using status indicators instead
         this.denseMode = false;
+        this.sortField = 'name';
+        this.sortDirection = 'asc';
         this.modal = null;
         this.form = null;
         this.editingAdminId = null; // Track which admin is being edited
@@ -181,14 +183,7 @@ class AdminsManager {
             });
             
             // Sort alphabetically by name (A to Z) - optimized
-            if (this.admins.length > 0) {
-                this.admins.sort((a, b) => {
-                    const nameA = (a.name || '').toLowerCase();
-                    const nameB = (b.name || '').toLowerCase();
-                    return nameA.localeCompare(nameB);
-                });
-            }
-            
+            // Sorting is now handled in applySearchFilter() after filtering
             // Apply search filter if there's a search query
             this.applySearchFilter();
             
@@ -923,6 +918,93 @@ class AdminsManager {
             toggle.checked = !toggle.checked;
             toggle.dispatchEvent(new Event('change'));
         });
+        
+        // Initialize table sorting
+        this.initTableSorting();
+    }
+    
+    initTableSorting() {
+        const table = document.getElementById('adminsTable');
+        if (!table) return;
+        
+        const headers = table.querySelectorAll('thead th[data-sort]');
+        
+        headers.forEach(header => {
+            const field = header.getAttribute('data-sort');
+            
+            // Add sortable class if not already present
+            if (!header.classList.contains('sortable')) {
+                header.classList.add('sortable');
+            }
+            
+            // Add sort icon if not present
+            if (!header.querySelector('.sort-icon')) {
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                icon.classList.add('sort-icon');
+                icon.setAttribute('viewBox', '0 0 24 24');
+                icon.setAttribute('fill', 'none');
+                icon.setAttribute('stroke', 'currentColor');
+                icon.setAttribute('stroke-width', '2');
+                icon.innerHTML = '<path d="M12 16V8M12 16l-4-4M12 16l4-4"/>';
+                
+                // If header has no child elements, append icon directly to preserve structure
+                if (header.children.length === 0) {
+                    const text = header.textContent.trim();
+                    header.textContent = '';
+                    header.appendChild(document.createTextNode(text));
+                }
+                header.appendChild(icon);
+            }
+            
+            // Add click handler
+            header.addEventListener('click', () => {
+                // Remove active class from all headers
+                headers.forEach(h => {
+                    h.classList.remove('sort-active', 'sort-asc', 'sort-desc');
+                    const icon = h.querySelector('.sort-icon');
+                    if (icon) {
+                        icon.classList.remove('sort-asc', 'sort-desc');
+                    }
+                });
+                
+                // Toggle direction if same field, otherwise set to asc
+                if (this.sortField === field) {
+                    this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    this.sortField = field;
+                    this.sortDirection = 'asc';
+                }
+                
+                // Update header
+                header.classList.add('sort-active', `sort-${this.sortDirection}`);
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.classList.add(`sort-${this.sortDirection}`);
+                    if (this.sortDirection === 'asc') {
+                        icon.innerHTML = '<path d="M12 5v14M12 5l4 4M12 5L8 9"/>';
+                    } else {
+                        icon.innerHTML = '<path d="M12 19V5M12 19l-4-4M12 19l4-4"/>';
+                    }
+                }
+                
+                // Apply filters and re-render
+                this.applySearchFilter();
+                this.renderTable();
+                this.updatePagination();
+                this.updatePageInfo();
+            });
+        });
+        
+        // Set initial sort state (name, asc)
+        const nameHeader = table.querySelector('th[data-sort="name"]');
+        if (nameHeader) {
+            nameHeader.classList.add('sort-active', 'sort-asc');
+            const icon = nameHeader.querySelector('.sort-icon');
+            if (icon) {
+                icon.classList.add('sort-asc');
+                icon.innerHTML = '<path d="M12 5v14M12 5l4 4M12 5L8 9"/>';
+            }
+        }
     }
     
     applySearchFilter() {
@@ -937,6 +1019,43 @@ class AdminsManager {
             const phone = (admin.phone || '').toLowerCase();
             return name.includes(query) || phone.includes(query);
         });
+        
+        // Apply sorting after filtering
+        this.filteredAdmins = this.sortAdmins(this.filteredAdmins);
+    }
+    
+    sortAdmins(admins) {
+        const sorted = [...admins];
+        
+        sorted.sort((a, b) => {
+            let aVal, bVal;
+            
+            switch(this.sortField) {
+                case 'name':
+                    aVal = (a.name || '').toLowerCase();
+                    bVal = (b.name || '').toLowerCase();
+                    break;
+                case 'phone':
+                    aVal = (a.phone || '').toLowerCase();
+                    bVal = (b.phone || '').toLowerCase();
+                    break;
+                case 'status':
+                    aVal = (a.status || '').toLowerCase();
+                    bVal = (b.status || '').toLowerCase();
+                    break;
+                default:
+                    aVal = '';
+                    bVal = '';
+            }
+            
+            if (this.sortDirection === 'asc') {
+                return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+            } else {
+                return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+            }
+        });
+        
+        return sorted;
     }
     
     renderTable() {

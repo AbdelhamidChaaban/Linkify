@@ -14,6 +14,8 @@ class InsightsManager {
             search: '',
             availableServices: false
         };
+        this.sortField = 'name';
+        this.sortDirection = 'asc';
         
         // Map to store recent manual lastUpdate values (from refresh operations)
         // Key: subscriber ID, Value: { timestamp: Date, setAt: number (ms) }
@@ -1163,14 +1165,7 @@ class InsightsManager {
                 };
             });
             
-            // Sort alphabetically by name (A to Z) - optimized
-            if (this.subscribers.length > 0) {
-                this.subscribers.sort((a, b) => {
-                    const nameA = (a.name || '').toLowerCase();
-                    const nameB = (b.name || '').toLowerCase();
-                    return nameA.localeCompare(nameB);
-                });
-            }
+            // Sorting is now handled in applyFilters() after filtering
             
             // Update immediately for better responsiveness (no animation delay)
             this.applyFilters();
@@ -1526,6 +1521,9 @@ class InsightsManager {
                 this.openAddSubscribersModal();
             });
         }
+        
+        // Initialize table sorting
+        this.initTableSorting();
     }
     
     setActiveTab(tab) {
@@ -1675,6 +1673,169 @@ class InsightsManager {
             
             return true;
         });
+        
+        // Apply sorting after filtering
+        this.filteredSubscribers = this.sortSubscribers(this.filteredSubscribers);
+    }
+    
+    sortSubscribers(subscribers) {
+        const sorted = [...subscribers];
+        
+        sorted.sort((a, b) => {
+            let aVal, bVal;
+            
+            // Get field value based on sortField
+            switch(this.sortField) {
+                case 'name':
+                    aVal = (a.name || '').toLowerCase();
+                    bVal = (b.name || '').toLowerCase();
+                    break;
+                case 'totalConsumption':
+                    aVal = parseFloat(a.totalConsumption) || 0;
+                    bVal = parseFloat(b.totalConsumption) || 0;
+                    break;
+                case 'subscriptionDate':
+                    aVal = this.parseDate(a.subscriptionDate);
+                    bVal = this.parseDate(b.subscriptionDate);
+                    break;
+                case 'validityDate':
+                    aVal = this.parseDate(a.validityDate);
+                    bVal = this.parseDate(b.validityDate);
+                    break;
+                case 'subscribersCount':
+                    const aCount = a.subscribersActiveCount !== undefined ? a.subscribersActiveCount : a.subscribersCount;
+                    const bCount = b.subscribersActiveCount !== undefined ? b.subscribersActiveCount : b.subscribersCount;
+                    aVal = parseFloat(aCount) || 0;
+                    bVal = parseFloat(bCount) || 0;
+                    break;
+                case 'adminConsumption':
+                    aVal = parseFloat(a.adminConsumption) || 0;
+                    bVal = parseFloat(b.adminConsumption) || 0;
+                    break;
+                case 'balance':
+                    aVal = parseFloat(a.balance) || 0;
+                    bVal = parseFloat(b.balance) || 0;
+                    break;
+                case 'expiration':
+                    aVal = typeof a.expiration === 'number' ? a.expiration : parseInt(a.expiration) || 0;
+                    bVal = typeof b.expiration === 'number' ? b.expiration : parseInt(b.expiration) || 0;
+                    break;
+                case 'lastUpdate':
+                    aVal = a.lastUpdate ? new Date(a.lastUpdate).getTime() : 0;
+                    bVal = b.lastUpdate ? new Date(b.lastUpdate).getTime() : 0;
+                    break;
+                case 'status':
+                    aVal = (a.status || '').toLowerCase();
+                    bVal = (b.status || '').toLowerCase();
+                    break;
+                default:
+                    aVal = '';
+                    bVal = '';
+            }
+            
+            if (this.sortDirection === 'asc') {
+                return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+            } else {
+                return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+            }
+        });
+        
+        return sorted;
+    }
+    
+    parseDate(dateStr) {
+        if (!dateStr || dateStr === 'N/A' || dateStr.includes('NaN')) return 0;
+        const parts = String(dateStr).trim().split('/');
+        if (parts.length !== 3) return 0;
+        const day = parseInt(parts[0]);
+        const month = parseInt(parts[1]) - 1;
+        const year = parseInt(parts[2]);
+        if (isNaN(day) || isNaN(month) || isNaN(year)) return 0;
+        return new Date(year, month, day).getTime();
+    }
+    
+    initTableSorting() {
+        const table = document.getElementById('subscribersTable');
+        if (!table) return;
+        
+        const headers = table.querySelectorAll('thead th[data-sort]');
+        
+        headers.forEach(header => {
+            const field = header.getAttribute('data-sort');
+            
+            // Add sortable class if not already present
+            if (!header.classList.contains('sortable')) {
+                header.classList.add('sortable');
+            }
+            
+            // Add sort icon if not present
+            if (!header.querySelector('.sort-icon')) {
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                icon.classList.add('sort-icon');
+                icon.setAttribute('viewBox', '0 0 24 24');
+                icon.setAttribute('fill', 'none');
+                icon.setAttribute('stroke', 'currentColor');
+                icon.setAttribute('stroke-width', '2');
+                icon.innerHTML = '<path d="M12 16V8M12 16l-4-4M12 16l4-4"/>';
+                
+                // If header has no child elements, append icon directly to preserve structure
+                if (header.children.length === 0) {
+                    const text = header.textContent.trim();
+                    header.textContent = '';
+                    header.appendChild(document.createTextNode(text));
+                }
+                header.appendChild(icon);
+            }
+            
+            // Add click handler
+            header.addEventListener('click', () => {
+                // Remove active class from all headers
+                headers.forEach(h => {
+                    h.classList.remove('sort-active', 'sort-asc', 'sort-desc');
+                    const icon = h.querySelector('.sort-icon');
+                    if (icon) {
+                        icon.classList.remove('sort-asc', 'sort-desc');
+                    }
+                });
+                
+                // Toggle direction if same field, otherwise set to asc
+                if (this.sortField === field) {
+                    this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    this.sortField = field;
+                    this.sortDirection = 'asc';
+                }
+                
+                // Update header
+                header.classList.add('sort-active', `sort-${this.sortDirection}`);
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.classList.add(`sort-${this.sortDirection}`);
+                    if (this.sortDirection === 'asc') {
+                        icon.innerHTML = '<path d="M12 5v14M12 5l4 4M12 5L8 9"/>';
+                    } else {
+                        icon.innerHTML = '<path d="M12 19V5M12 19l-4-4M12 19l4-4"/>';
+                    }
+                }
+                
+                // Apply filters and re-render
+                this.applyFilters();
+                this.renderTable();
+                this.updatePagination();
+                this.updatePageInfo();
+            });
+        });
+        
+        // Set initial sort state (name, asc)
+        const nameHeader = table.querySelector('th[data-sort="name"]');
+        if (nameHeader) {
+            nameHeader.classList.add('sort-active', 'sort-asc');
+            const icon = nameHeader.querySelector('.sort-icon');
+            if (icon) {
+                icon.classList.add('sort-asc');
+                icon.innerHTML = '<path d="M12 5v14M12 5l4 4M12 5L8 9"/>';
+            }
+        }
     }
     
     updateTabCounts() {

@@ -13,6 +13,8 @@ class ProfitEngine {
         this.statusFilter = 'all'; // 'all', 'complete', 'incomplete'
         this.dateFilter = 'this-month'; // 'today', 'yesterday', 'this-month', 'last-month', 'custom'
         this.dateRange = null; // { start: Date, end: Date } for custom dates
+        this.sortField = 'admin';
+        this.sortDirection = 'asc';
         this.currentUserId = null;
         this.unsubscribe = null;
         this.currentAdminId = null; // For modals
@@ -305,6 +307,9 @@ class ProfitEngine {
         
         // Set Prices Modal
         this.bindPricesModal();
+        
+        // Initialize table sorting
+        this.initTableSorting();
     }
     
     /**
@@ -842,6 +847,143 @@ class ProfitEngine {
             
             return true;
         });
+        
+        // Apply sorting after filtering
+        this.filteredServices = this.sortServices(this.filteredServices);
+    }
+    
+    sortServices(services) {
+        const sorted = [...services];
+        
+        sorted.sort((a, b) => {
+            let aVal, bVal;
+            
+            switch(this.sortField) {
+                case 'admin':
+                    aVal = (a.adminName || a.adminNumber || '').toLowerCase();
+                    bVal = (b.adminName || b.adminNumber || '').toLowerCase();
+                    break;
+                case 'size':
+                    aVal = (a.size || '').toLowerCase();
+                    bVal = (b.size || '').toLowerCase();
+                    break;
+                case 'quota':
+                    aVal = parseFloat(a.quota) || 0;
+                    bVal = parseFloat(b.quota) || 0;
+                    break;
+                case 'cost':
+                    aVal = parseFloat(a.cost) || 0;
+                    bVal = parseFloat(b.cost) || 0;
+                    break;
+                case 'revenue':
+                    aVal = parseFloat(a.revenue) || 0;
+                    bVal = parseFloat(b.revenue) || 0;
+                    break;
+                case 'profit':
+                    aVal = parseFloat(a.profit) || 0;
+                    bVal = parseFloat(b.profit) || 0;
+                    break;
+                case 'margin':
+                    aVal = parseFloat(a.margin) || 0;
+                    bVal = parseFloat(b.margin) || 0;
+                    break;
+                default:
+                    aVal = '';
+                    bVal = '';
+            }
+            
+            if (this.sortDirection === 'asc') {
+                return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+            } else {
+                return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+            }
+        });
+        
+        return sorted;
+    }
+    
+    initTableSorting() {
+        const table = document.getElementById('profitTable');
+        if (!table) return;
+        
+        const headers = table.querySelectorAll('thead th[data-sort]');
+        
+        headers.forEach(header => {
+            const field = header.getAttribute('data-sort');
+            
+            // Add sortable class if not already present
+            if (!header.classList.contains('sortable')) {
+                header.classList.add('sortable');
+            }
+            
+            // Add sort icon if not present
+            if (!header.querySelector('.sort-icon')) {
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                icon.classList.add('sort-icon');
+                icon.setAttribute('viewBox', '0 0 24 24');
+                icon.setAttribute('fill', 'none');
+                icon.setAttribute('stroke', 'currentColor');
+                icon.setAttribute('stroke-width', '2');
+                icon.innerHTML = '<path d="M12 16V8M12 16l-4-4M12 16l4-4"/>';
+                
+                // If header has no child elements, append icon directly to preserve structure
+                if (header.children.length === 0) {
+                    const text = header.textContent.trim();
+                    header.textContent = '';
+                    header.appendChild(document.createTextNode(text));
+                }
+                header.appendChild(icon);
+            }
+            
+            // Add click handler
+            header.addEventListener('click', () => {
+                // Remove active class from all headers
+                headers.forEach(h => {
+                    h.classList.remove('sort-active', 'sort-asc', 'sort-desc');
+                    const icon = h.querySelector('.sort-icon');
+                    if (icon) {
+                        icon.classList.remove('sort-asc', 'sort-desc');
+                    }
+                });
+                
+                // Toggle direction if same field, otherwise set to asc
+                if (this.sortField === field) {
+                    this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    this.sortField = field;
+                    this.sortDirection = 'asc';
+                }
+                
+                // Update header
+                header.classList.add('sort-active', `sort-${this.sortDirection}`);
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.classList.add(`sort-${this.sortDirection}`);
+                    if (this.sortDirection === 'asc') {
+                        icon.innerHTML = '<path d="M12 5v14M12 5l4 4M12 5L8 9"/>';
+                    } else {
+                        icon.innerHTML = '<path d="M12 19V5M12 19l-4-4M12 19l4-4"/>';
+                    }
+                }
+                
+                // Apply filters and re-render
+                this.applyFilters();
+                this.renderTable();
+                this.updatePagination();
+                this.updateSummary();
+            });
+        });
+        
+        // Set initial sort state (admin, asc)
+        const adminHeader = table.querySelector('th[data-sort="admin"]');
+        if (adminHeader) {
+            adminHeader.classList.add('sort-active', 'sort-asc');
+            const icon = adminHeader.querySelector('.sort-icon');
+            if (icon) {
+                icon.classList.add('sort-asc');
+                icon.innerHTML = '<path d="M12 5v14M12 5l4 4M12 5L8 9"/>';
+            }
+        }
     }
     
     /**

@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/shared/layout.css">
+    <link rel="stylesheet" href="/shared/table-sort.css">
     <link rel="stylesheet" href="/pages/admins.css">
     <link rel="stylesheet" href="/shared/mobile-enhancements.css">
     <link rel="stylesheet" href="/shared/ui-polish.css">
@@ -282,9 +283,9 @@
                             <thead>
                                 <tr>
                                     <th class="status-indicator-col">Status</th>
-                                    <th>Name</th>
-                                    <th>Phone</th>
-                                    <th>Status</th>
+                                    <th class="sortable" data-sort="name">Name</th>
+                                    <th class="sortable" data-sort="phone">Phone</th>
+                                    <th class="sortable" data-sort="status">Status</th>
                                     <th></th>
                                 </tr>
                             </thead>

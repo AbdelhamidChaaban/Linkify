@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/shared/layout.css">
+    <link rel="stylesheet" href="/shared/table-sort.css">
     <link rel="stylesheet" href="/pages/insights.css">
     <link rel="stylesheet" href="/pages/add-subscribers-modal.css">
     <link rel="stylesheet" href="/pages/edit-subscribers-modal.css">
@@ -18,6 +19,7 @@
     <link rel="stylesheet" href="/shared/mobile-scroll-fix.css">
     <link rel="stylesheet" href="/shared/mobile-fixes.css">
     <link rel="stylesheet" href="/shared/notification-panel.css">
+    <script src="/shared/table-sort.js"></script>
     <!-- Global Error Handler - Must load early to catch errors -->
     <script src="/shared/error-handler.js"></script>
     <!-- Theme Loader - Must run synchronously before page renders -->
@@ -408,16 +410,16 @@
                             <thead>
                                 <tr>
                                     <th class="status-indicator-col"></th>
-                                    <th>Name</th>
-                                    <th>Total Consumption</th>
-                                    <th>Subscription Date</th>
-                                    <th>Validity Date</th>
-                                    <th>Subscribers Count</th>
-                                    <th>Admin Consumption</th>
-                                    <th>Balance</th>
-                                    <th>Expiration</th>
-                                    <th>Last Update</th>
-                                    <th>Status</th>
+                                    <th class="sortable" data-sort="name">Name</th>
+                                    <th class="sortable" data-sort="totalConsumption">Total Consumption</th>
+                                    <th class="sortable" data-sort="subscriptionDate">Subscription Date</th>
+                                    <th class="sortable" data-sort="validityDate">Validity Date</th>
+                                    <th class="sortable" data-sort="subscribersCount">Subscribers Count</th>
+                                    <th class="sortable" data-sort="adminConsumption">Admin Consumption</th>
+                                    <th class="sortable" data-sort="balance">Balance</th>
+                                    <th class="sortable" data-sort="expiration">Expiration</th>
+                                    <th class="sortable" data-sort="lastUpdate">Last Update</th>
+                                    <th class="sortable" data-sort="status">Status</th>
                                     <th class="actions-col"></th>
                                 </tr>
                             </thead>
