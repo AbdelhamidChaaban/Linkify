@@ -544,48 +544,72 @@ app.post('/api/subscribers/add', async (req, res) => {
             html = JSON.stringify(response.data);
         }
 
-        const errorPatterns = [
-            /error|Error|ERROR/,
-            /invalid|Invalid|INVALID/,
-            /failed|Failed|FAILED/,
-            /already exists|already added|duplicate/i,
-            /not found|does not exist/i
-        ];
-
-        const hasError = errorPatterns.some(pattern => pattern.test(html));
-        const successPatterns = [/success|Success|SUCCESS/, /added successfully|subscriber added/i];
-        const hasSuccess = successPatterns.some(pattern => pattern.test(html));
         const isRedirect = response.status >= 300 && response.status < 400;
         const is200 = response.status === 200;
 
-        if (hasError && !hasSuccess) {
-            const errorMatch = html.match(/(error|Error)[^<]*([^<]{0,100})/i);
-            const errorMessage = errorMatch ? errorMatch[0].substring(0, 200) : 'Unknown error from Alfa';
-            console.error(`❌ [Add Subscriber] Error detected: ${errorMessage}`);
-            
-            // Log failed action
+        // If we got a redirect, follow it to check for errors
+        if (isRedirect && !location.includes('/login')) {
+            console.log(`🔄 [Add Subscriber] Following redirect to check for errors...`);
+            try {
+                const redirectUrl = location.startsWith('http') ? location : `${ALFA_BASE_URL}${location}`;
+                const redirectResponse = await axios.get(redirectUrl, {
+                    headers: {
+                        'Cookie': cookieHeader,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': url
+                    },
+                    maxRedirects: 5,
+                    validateStatus: (status) => status >= 200 && status < 400,
+                    timeout: 20000
+                });
+                
+                // Get redirected HTML
+                if (redirectResponse.data && typeof redirectResponse.data === 'string') {
+                    html = redirectResponse.data;
+                } else if (redirectResponse.data) {
+                    html = JSON.stringify(redirectResponse.data);
+                }
+            } catch (redirectError) {
+                console.warn(`⚠️ [Add Subscriber] Error following redirect: ${redirectError.message}`);
+                // Continue with original HTML if redirect fails
+            }
+        }
+
+        // Simplified error detection: Just check for alert-danger marker
+        const hasAlertDanger = html.includes('alert-danger') || /alert-danger/i.test(html);
+        const hasAlertSuccess = html.includes('alert-success') || /alert-success/i.test(html);
+        
+        // Check for subscriber card (success indicator)
+        const subscriberCardPattern = new RegExp(`(?:961|0)?${cleanSubscriberNumber}`, 'i');
+        const hasSubscriberCard = subscriberCardPattern.test(html) && 
+                                 html.includes('secondary-numbers') &&
+                                 (html.includes('ushare-numbers') || html.includes('col-sm-4'));
+        
+        console.log(`🔍 [Add Subscriber] Detection: hasAlertDanger=${hasAlertDanger}, hasAlertSuccess=${hasAlertSuccess}, hasSubscriberCard=${hasSubscriberCard}`);
+        
+        // If alert-danger is found, it's an error
+        if (hasAlertDanger) {
+            console.error(`❌ [Add Subscriber] Error detected (alert-danger found)`);
             try {
                 const userId = adminData.userId || null;
                 if (userId) {
-                    await logAction(userId, adminId, adminData.name || 'Unknown', adminData.phone, 'add', cleanSubscriberNumber, quotaNum, false, errorMessage);
+                    await logAction(userId, adminId, adminData.name || 'Unknown', adminData.phone, 'add', cleanSubscriberNumber, quotaNum, false, 'Operation failed');
                 }
             } catch (logError) {
                 console.warn(`⚠️ Could not log action (non-critical):`, logError?.message);
             }
-            
             return res.status(400).json({
                 success: false,
-                error: `Failed to add subscriber: ${errorMessage}`
+                error: 'Operation failed'
             });
         }
 
-        // Invalidate cache
-        const { invalidateUshareCache } = require('./services/ushareHtmlParser');
-        if (isRedirect && !location.includes('/login')) {
-            console.log(`✅ [Add Subscriber] Got ${response.status} redirect (success)`);
+        // Only report success if explicit success markers are found
+        if (hasAlertSuccess || hasSubscriberCard) {
+            console.log(`✅ [Add Subscriber] Success detected (explicit markers found)`);
+            const { invalidateUshareCache } = require('./services/ushareHtmlParser');
             invalidateUshareCache(adminData.phone).catch(() => {});
             
-            // Log action (get userId from adminData)
             try {
                 const userId = adminData.userId || null;
                 if (userId) {
@@ -601,47 +625,20 @@ app.post('/api/subscribers/add', async (req, res) => {
             });
         }
 
-        // For 200 OK, do brief verification
-        if (is200) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            const { fetchUshareHtml } = require('./services/ushareHtmlParser');
-            const verifyResult = await fetchUshareHtml(adminData.phone, cookies, false).catch(() => null);
-            
-            if (verifyResult && verifyResult.success && verifyResult.data) {
-                const subscribers = verifyResult.data.subscribers || [];
-                const subscriberExists = subscribers.some(sub => {
-                    const subNumber = sub.phoneNumber || sub.fullPhoneNumber || '';
-                    return subNumber.replace(/^961/, '').replace(/\D/g, '') === cleanSubscriberNumber;
-                });
-                
-                if (subscriberExists) {
-                    console.log(`✅ [Add Subscriber] Verified: Subscriber ${cleanSubscriberNumber} exists`);
-                }
-            }
-            await invalidateUshareCache(adminData.phone).catch(() => {});
-            
-            // Log action (get userId from adminData)
-            try {
-                const userId = adminData.userId || null;
-                if (userId) {
-                    await logAction(userId, adminId, adminData.name || 'Unknown', adminData.phone, 'add', cleanSubscriberNumber, quotaNum, true);
-                }
-            } catch (logError) {
-                console.warn(`⚠️ Could not log action (non-critical):`, logError?.message);
-            }
-        }
-
-        // Store as pending subscriber in Firebase
-        const { addPendingSubscriber } = require('./services/firebaseDbService');
+        // No success markers found - treat as failure
+        console.error(`❌ [Add Subscriber] No success markers found - treating as failure`);
         try {
-            await addPendingSubscriber(adminId, cleanSubscriberNumber, quotaNum);
-        } catch (pendingError) {
-            console.warn(`⚠️ Could not add pending subscriber (non-critical):`, pendingError?.message);
+            const userId = adminData.userId || null;
+            if (userId) {
+                await logAction(userId, adminId, adminData.name || 'Unknown', adminData.phone, 'add', cleanSubscriberNumber, quotaNum, false, 'Operation failed - no success markers found');
+            }
+        } catch (logError) {
+            console.warn(`⚠️ Could not log action (non-critical):`, logError?.message);
         }
-
-        res.json({
-            success: true,
-            message: 'Subscriber added successfully'
+        
+        return res.status(400).json({
+            success: false,
+            error: 'Operation failed'
         });
 
     } catch (error) {
@@ -765,7 +762,8 @@ async function startServer() {
         // Start scheduled refresh service (non-blocking)
         console.log('🔧 Initializing scheduled refresh service...');
         scheduledRefresh.startScheduledRefresh();
-        scheduledRefresh.startScheduledCleanup();
+        // Removed: startScheduledCleanup() - cleanup now happens automatically when consumption renews (totalConsumption and adminConsumption are both 0)
+        // scheduledRefresh.startScheduledCleanup();
         
         // Start background cookie refresh worker (proactive cookie renewal) - non-blocking
         console.log('🔧 Starting background cookie refresh worker...');

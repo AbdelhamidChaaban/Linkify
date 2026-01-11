@@ -324,57 +324,67 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       console.log(`ℹ️ [${adminId}] No detectedRemovedActiveSubscribers in dashboardData - preserving existing ${removedActiveSubscribersToSave.length} removed subscriber(s) from Firebase`);
     }
     
-    // CRITICAL: Clear removedActiveSubscribers when validity date passes (billing cycle reset)
-    // Cleanup happens when today is AFTER the validity date (at 00:00:00 on the day after validity date)
-    // Example: If validity date is 22/12/2025, cleanup happens at 00:00:00 on 23/12/2025
-    // Track last cleanup date to prevent multiple cleanups
-    const validityDateStr = cleanDashboardData.validityDate || 
-                           currentData.alfaData?.validityDate || 
-                           currentData._cachedDates?.validityDate?.value;
+    // CRITICAL: Clear removedActiveSubscribers when consumption renews (data package reset)
+    // Cleanup happens when both totalConsumption and adminConsumption are 0 (data package renewed)
+    // Track last cleanup date to prevent duplicate cleanups on the same day
+    // Helper function to parse consumption value from string (format: "X / Y GB" or "X / Y MB")
+    const parseConsumptionValue = (consumptionStr) => {
+      if (!consumptionStr || typeof consumptionStr !== 'string') return null;
+      // Extract first number (consumed amount) from strings like "0 / 70 GB" or "0.0 / 70 GB"
+      const match = consumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
+      if (match) {
+        return parseFloat(match[1]) || 0;
+      }
+      // Try to parse as simple number
+      const numValue = parseFloat(consumptionStr);
+      return isNaN(numValue) ? null : numValue;
+    };
     
-    if (validityDateStr && typeof validityDateStr === 'string' && validityDateStr.trim()) {
-      // Parse validity date (format: "DD/MM/YYYY" like "22/12/2025" or "DD-MM-YYYY")
-      const dateMatch = validityDateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-      if (dateMatch) {
-        const [, day, month, year] = dateMatch;
-        const validityDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-        validityDate.setHours(23, 59, 59, 999); // End of validity date day
+    // Get consumption values from cleanDashboardData (current scan) and currentData (previous scan)
+    const currentTotalConsumption = cleanDashboardData.totalConsumption || currentData.alfaData?.totalConsumption || null;
+    const currentAdminConsumption = cleanDashboardData.adminConsumption || currentData.alfaData?.adminConsumption || null;
+    
+    // Check if both consumptions are 0 (data package renewed)
+    const currentTotalValue = parseConsumptionValue(currentTotalConsumption);
+    const currentAdminValue = parseConsumptionValue(currentAdminConsumption);
+    
+    const isConsumptionRenewed = currentTotalValue === 0 && currentAdminValue === 0;
+    
+    if (isConsumptionRenewed) {
+      // Check if we already had non-zero consumption before (to avoid clearing on first scan)
+      const previousTotalConsumption = currentData.alfaData?.totalConsumption || null;
+      const previousAdminConsumption = currentData.alfaData?.adminConsumption || null;
+      const previousTotalValue = parseConsumptionValue(previousTotalConsumption);
+      const previousAdminValue = parseConsumptionValue(previousAdminConsumption);
+      
+      // Only clear if there were removed subscribers AND consumption was previously non-zero
+      // This ensures we don't clear on first scan or if consumption was already 0
+      const hadPreviousConsumption = (previousTotalValue !== null && previousTotalValue > 0) || 
+                                      (previousAdminValue !== null && previousAdminValue > 0);
+      
+      // Check if cleanup already happened today (prevent duplicate cleanups on same day)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = today.toISOString().split('T')[0]; // Format: "YYYY-MM-DD"
+      const lastCleanupDateStr = currentData._lastRemovedCleanupDate || null;
+      const shouldCleanup = lastCleanupDateStr !== todayStr;
+      
+      if (hadPreviousConsumption && shouldCleanup && (removedActiveSubscribersToSave.length > 0 || removedSubscribersToSave.length > 0)) {
+        console.log(`🔄 [${adminId}] [Cleanup] Consumption renewed (total: ${currentTotalConsumption}, admin: ${currentAdminConsumption}) - clearing removed subscribers (data package reset)`);
+        console.log(`   [Cleanup] Removed subscribers cleared for admin ${adminId}`);
+        console.log(`   [Cleanup] Clearing ${removedActiveSubscribersToSave.length} removed active subscriber(s) and ${removedSubscribersToSave.length} removed subscriber phone(s)`);
+        removedActiveSubscribersToSave = []; // Clear the list for new data package
+        removedSubscribersToSave = []; // Clear the list for new data package
         
-        const today = new Date();
-        today.setHours(0, 0, 0, 0); // Start of today
-        
-        // Check if today is AFTER validity date (i.e., today > validity date)
-        // This means validity date has passed, so we should clear removed subscribers
-        if (today.getTime() > validityDate.getTime()) {
-          // Get last cleanup date from currentData (format: "YYYY-MM-DD")
-          const lastCleanupDateStr = currentData._lastRemovedCleanupDate || null;
-          const todayStr = today.toISOString().split('T')[0]; // Format: "YYYY-MM-DD"
-          
-          // Check if we need to perform cleanup
-          // Cleanup should happen once per day when validity date has passed
-          // We check if cleanup hasn't happened today yet
-          const shouldCleanup = lastCleanupDateStr !== todayStr;
-          
-          if (shouldCleanup) {
-            if (removedActiveSubscribersToSave.length > 0 || removedSubscribersToSave.length > 0) {
-              console.log(`🔄 [${adminId}] [Cleanup] Validity date (${validityDateStr}) has passed - clearing removed subscribers (billing cycle reset)`);
-              console.log(`   [Cleanup] Removed subscribers cleared for admin ${adminId}`);
-              console.log(`   [Cleanup] Clearing ${removedActiveSubscribersToSave.length} removed active subscriber(s) and ${removedSubscribersToSave.length} removed subscriber phone(s)`);
-              removedActiveSubscribersToSave = []; // Clear the list for new billing cycle
-              removedSubscribersToSave = []; // Clear the list for new billing cycle
-              
-              // Track that cleanup happened today (will be saved to Firebase below)
-              currentData._lastRemovedCleanupDate = todayStr;
-              console.log(`   [Cleanup] Marked cleanup date as ${todayStr} to prevent duplicate cleanups`);
-            } else {
-              // No subscribers to clean, but still mark cleanup date to prevent repeated checks
-              currentData._lastRemovedCleanupDate = todayStr;
-              console.log(`ℹ️ [${adminId}] [Cleanup] Validity date (${validityDateStr}) has passed, but no removed subscribers to clean`);
-            }
-          } else {
-            console.log(`ℹ️ [${adminId}] [Cleanup] Cleanup already performed today (${todayStr}) - skipping to prevent duplicate cleanups`);
-          }
-        }
+        // Track that cleanup happened today (will be saved to Firebase below)
+        currentData._lastRemovedCleanupDate = todayStr;
+        console.log(`   [Cleanup] Marked cleanup date as ${todayStr} to prevent duplicate cleanups on same day`);
+      } else if (!hadPreviousConsumption) {
+        console.log(`ℹ️ [${adminId}] [Cleanup] Consumption is 0 but no previous consumption found - skipping cleanup (first scan or already cleared)`);
+      } else if (!shouldCleanup) {
+        console.log(`ℹ️ [${adminId}] [Cleanup] Consumption is 0 but cleanup already performed today (${todayStr}) - skipping to prevent duplicate cleanups`);
+      } else {
+        console.log(`ℹ️ [${adminId}] [Cleanup] Consumption renewed but no removed subscribers to clean`);
       }
     }
     
@@ -388,8 +398,8 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       userId: currentData.userId || null, // CRITICAL: Preserve userId for data isolation
       pendingSubscribers: Array.isArray(currentData.pendingSubscribers) ? currentData.pendingSubscribers : [], // CRITICAL: Preserve pending subscribers (always array)
       removedSubscribers: removedSubscribersToSave, // Merged with detected removed subscribers (for backward compatibility)
-      removedActiveSubscribers: removedActiveSubscribersToSave, // Merged with detected removed subscribers, cleared if validity date matched
-      _lastRemovedCleanupDate: currentData._lastRemovedCleanupDate || null, // Track when removed subscribers were last cleaned up (prevents duplicate cleanups)
+      removedActiveSubscribers: removedActiveSubscribersToSave, // Merged with detected removed subscribers, cleared if consumption renewed
+      _lastRemovedCleanupDate: currentData._lastRemovedCleanupDate || null, // Track when removed subscribers were last cleaned up (prevents duplicate cleanups on same day)
       createdAt: currentData.createdAt,
       updatedAt: currentData.updatedAt
     };

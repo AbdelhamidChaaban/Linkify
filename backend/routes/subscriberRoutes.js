@@ -281,54 +281,63 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
             html = JSON.stringify(response.data);
         }
         
-        // Check for error messages in the HTML
-        const errorPatterns = [
-            /error|Error|ERROR/,
-            /invalid|Invalid|INVALID/,
-            /failed|Failed|FAILED/,
-            /already exists|already added|duplicate/i,
-            /not found|does not exist/i
-        ];
-        
-        // Look for common error messages
-        const hasError = errorPatterns.some(pattern => pattern.test(html));
-        
-        // Also check for success indicators
-        const successPatterns = [
-            /success|Success|SUCCESS/,
-            /added successfully|subscriber added/i
-        ];
-        
-        const hasSuccess = successPatterns.some(pattern => pattern.test(html));
-        
-        // If we got a redirect (302), that usually means success in Alfa's system
         const isRedirect = response.status >= 300 && response.status < 400;
         const is200 = response.status === 200;
         
-        // Log what we found
-        if (hasError && !hasSuccess) {
-            console.error(`❌ [Add Subscriber] Error detected in response HTML`);
-            // Try to extract the actual error message
-            const errorMatch = html.match(/(error|Error)[^<]*([^<]{0,100})/i);
-            const errorMessage = errorMatch ? errorMatch[0].substring(0, 200) : 'Unknown error from Alfa';
-            console.error(`   Error message: ${errorMessage}`);
-            // Log failed action
-            const adminData = await getAdminData(adminId).catch(() => null);
-            await logAction(req.userId, adminId, adminData?.name || 'Unknown', adminPhone, 'add', cleanSubscriberNumber, quota, false, errorMessage);
-            return res.status(400).json(createErrorResponse(`Failed to add subscriber: ${errorMessage}`));
+        // If we got a redirect, follow it to check for errors
+        if (isRedirect && !location.includes('/login')) {
+            console.log(`🔄 [Add Subscriber] Following redirect to check for errors...`);
+            try {
+                const redirectUrl = location.startsWith('http') ? location : `${ALFA_BASE_URL}${location}`;
+                const redirectResponse = await axios.get(redirectUrl, {
+                    headers: {
+                        'Cookie': cookieHeader,
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': url
+                    },
+                    maxRedirects: 5,
+                    validateStatus: (status) => status >= 200 && status < 400,
+                    timeout: 20000
+                });
+                
+                // Get redirected HTML
+                if (redirectResponse.data && typeof redirectResponse.data === 'string') {
+                    html = redirectResponse.data;
+                } else if (redirectResponse.data) {
+                    html = JSON.stringify(redirectResponse.data);
+                }
+            } catch (redirectError) {
+                console.warn(`⚠️ [Add Subscriber] Error following redirect: ${redirectError.message}`);
+                // Continue with original HTML if redirect fails
+            }
         }
         
-        // Optimize: Skip verification for 302 redirects (they indicate success, saves ~15 seconds)
-        // Only verify for 200 OK responses (which might contain error messages)
-        const { fetchUshareHtml, invalidateUshareCache } = require('../services/ushareHtmlParser');
+        // Simplified error detection: Just check for alert-danger marker
+        const hasAlertDanger = html.includes('alert-danger') || /alert-danger/i.test(html);
+        const hasAlertSuccess = html.includes('alert-success') || /alert-success/i.test(html);
         
-        // If we got a 302 redirect (not to login), it means success - skip verification
-        if (isRedirect && !location.includes('/login')) {
-            console.log(`✅ [Add Subscriber] Got ${response.status} redirect (success), skipping verification`);
-            // Invalidate cache and return immediately (saves ~15 seconds)
+        // Check for subscriber card (success indicator)
+        const subscriberCardPattern = new RegExp(`(?:961|0)?${cleanSubscriberNumber}`, 'i');
+        const hasSubscriberCard = subscriberCardPattern.test(html) && 
+                                 html.includes('secondary-numbers') &&
+                                 (html.includes('ushare-numbers') || html.includes('col-sm-4'));
+        
+        console.log(`🔍 [Add Subscriber] Detection: hasAlertDanger=${hasAlertDanger}, hasAlertSuccess=${hasAlertSuccess}, hasSubscriberCard=${hasSubscriberCard}`);
+        
+        // If alert-danger is found, it's an error
+        if (hasAlertDanger) {
+            console.error(`❌ [Add Subscriber] Error detected (alert-danger found)`);
+            const adminData = await getAdminData(adminId).catch(() => null);
+            await logAction(req.userId, adminId, adminData?.name || 'Unknown', adminPhone, 'add', cleanSubscriberNumber, quota, false, 'Operation failed');
+            return res.status(400).json(createErrorResponse('Operation failed'));
+        }
+        
+        // Only report success if explicit success markers are found
+        if (hasAlertSuccess || hasSubscriberCard) {
+            console.log(`✅ [Add Subscriber] Success detected (explicit markers found)`);
+            const { invalidateUshareCache } = require('../services/ushareHtmlParser');
             invalidateUshareCache(adminPhone).catch(() => {});
             
-            // Log action
             const adminData = await getAdminData(adminId).catch(() => null);
             await logAction(req.userId, adminId, adminData?.name || 'Unknown', adminPhone, 'add', cleanSubscriberNumber, quota, true);
             
@@ -339,6 +348,16 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
                 cacheInvalidated: true
             }));
         }
+        
+        // No success markers found - treat as failure
+        console.error(`❌ [Add Subscriber] No success markers found - treating as failure`);
+        const adminData = await getAdminData(adminId).catch(() => null);
+        await logAction(req.userId, adminId, adminData?.name || 'Unknown', adminPhone, 'add', cleanSubscriberNumber, quota, false, 'Operation failed - no success markers found');
+        
+        return res.status(400).json(createErrorResponse('Operation failed'));
+        
+        // For 200 responses without clear indicators, do verification
+        const { fetchUshareHtml, invalidateUshareCache } = require('../services/ushareHtmlParser');
         
         // Only verify for 200 OK (might have error messages)
         let verifyResult = null;
@@ -374,9 +393,9 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
                 }));
             } else {
                 console.warn(`⚠️ [Add Subscriber] Subscriber ${cleanSubscriberNumber} not found in list after adding`);
-                // Still might be success if it's a pending subscriber
-                if (isRedirect || (is200 && hasSuccess)) {
-                    console.log(`   But got redirect/success response, assuming pending subscriber`);
+                // Still might be success if it's a pending subscriber (redirect usually means success)
+                if (isRedirect) {
+                    console.log(`   But got redirect response, assuming pending subscriber`);
                     // Invalidate cache (already required above)
                     await invalidateUshareCache(adminPhone).catch(err => {
                         console.warn('⚠️ Failed to invalidate cache:', err.message);
@@ -402,7 +421,7 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
             }
         } else {
             // Couldn't verify, but if we got a redirect that's usually success
-            if (isRedirect || (is200 && hasSuccess)) {
+            if (isRedirect) {
                 console.log(`✅ [Add Subscriber] Got redirect/success response, assuming success`);
                 // Invalidate cache (already required above)
                 await invalidateUshareCache(adminPhone).catch(err => {

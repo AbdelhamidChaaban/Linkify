@@ -14,7 +14,7 @@ class InsightsManager {
             search: '',
             availableServices: false
         };
-        this.sortField = 'name';
+        this.sortField = 'validityDate';
         this.sortDirection = 'asc';
         
         // Map to store recent manual lastUpdate values (from refresh operations)
@@ -1826,11 +1826,11 @@ class InsightsManager {
             });
         });
         
-        // Set initial sort state (name, asc)
-        const nameHeader = table.querySelector('th[data-sort="name"]');
-        if (nameHeader) {
-            nameHeader.classList.add('sort-active', 'sort-asc');
-            const icon = nameHeader.querySelector('.sort-icon');
+        // Set initial sort state (validityDate, asc) - nearest to farthest
+        const validityDateHeader = table.querySelector('th[data-sort="validityDate"]');
+        if (validityDateHeader) {
+            validityDateHeader.classList.add('sort-active', 'sort-asc');
+            const icon = validityDateHeader.querySelector('.sort-icon');
             if (icon) {
                 icon.classList.add('sort-asc');
                 icon.innerHTML = '<path d="M12 5v14M12 5l4 4M12 5L8 9"/>';
@@ -4992,13 +4992,13 @@ class InsightsManager {
             modal.classList.add('show');
             document.body.style.overflow = 'hidden';
             
+            // Get search input element
+            const searchInput = document.getElementById('adminSelectorSearch');
+            
             // Only auto-focus search input on desktop (not mobile to avoid keyboard popup)
             const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
-            if (!isMobile) {
-                const searchInput = document.getElementById('adminSelectorSearch');
-                if (searchInput) {
-                    setTimeout(() => searchInput.focus(), 100);
-                }
+            if (!isMobile && searchInput) {
+                setTimeout(() => searchInput.focus(), 100);
             }
             
             // Bind search functionality
@@ -5206,6 +5206,52 @@ class InsightsManager {
         }
     }
     
+    /**
+     * Copy text to clipboard - uses fallback method first for better compatibility
+     */
+    async copyToClipboard(text) {
+        // Try execCommand first (more reliable, works in more contexts)
+        try {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            textArea.style.top = '-999999px';
+            textArea.style.opacity = '0';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            
+            // Use setSelectionRange for mobile devices
+            if (textArea.setSelectionRange) {
+                textArea.setSelectionRange(0, text.length);
+            }
+            
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textArea);
+            
+            if (successful) {
+                console.log('✅ Copied to clipboard:', text);
+                return true;
+            }
+        } catch (err) {
+            console.warn('execCommand failed, trying Clipboard API:', err);
+        }
+        
+        // Fallback to modern Clipboard API
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                console.log('✅ Copied to clipboard (Clipboard API):', text);
+                return true;
+            }
+        } catch (err) {
+            console.error('❌ Both clipboard methods failed:', err);
+        }
+        
+        return false;
+    }
+    
     async handleAddSubscribersSubmit() {
         // Prevent duplicate submissions
         if (this.isSubmittingAddForm) {
@@ -5326,51 +5372,57 @@ class InsightsManager {
             const successCount = results.filter(r => r.success).length;
             const failCount = results.filter(r => !r.success).length;
             
-            // Copy message to clipboard based on success/failure
+            // Handle results based on success/failure
             if (failCount === 0) {
-                // All succeeded - copy success message
+                // All succeeded - copy success message and show toast
                 const firstSuccess = results.find(r => r.success);
                 if (firstSuccess) {
                     const firstItem = items.find(item => item.subscriber === firstSuccess.subscriber);
                     if (firstItem) {
                         const admin = this.subscribers.find(s => s.id === firstItem.adminId);
                         const adminPhone = admin?.phone || firstItem.adminId;
-                        const message = `Send ${adminPhone} to 1323`;
-                        try {
-                            await navigator.clipboard.writeText(message);
-                            console.log('✅ Copied to clipboard:', message);
-                        } catch (clipError) {
-                            console.warn('Failed to copy to clipboard:', clipError);
-                        }
+                        const quota = firstItem.quota !== undefined && firstItem.quota !== null ? firstItem.quota : 0;
+                        const message = `Send ${adminPhone} to 1323 (${quota} GB)`;
+                        await this.copyToClipboard(message);
                     }
                 }
                 
-                alert(`✅ Successfully added ${successCount} subscriber(s)!`);
-                this.closeAddSubscribersModal();
-                // Optionally refresh the page or reload subscribers
-                this.loadSubscribers();
-            } else {
-                // Some failed - copy cancel message
-                const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
-                try {
-                    await navigator.clipboard.writeText(cancelMessage);
-                    console.log('✅ Copied to clipboard:', cancelMessage);
-                } catch (clipError) {
-                    console.warn('Failed to copy to clipboard:', clipError);
+                // Show toast notification
+                if (typeof notification !== 'undefined') {
+                    notification.set({ delay: 3000 });
+                    notification.success('Operation succeeded');
+                } else {
+                    alert(`✅ Successfully added ${successCount} subscriber(s)!`);
                 }
                 
-                const failedSubscribers = results.filter(r => !r.success)
-                    .map(r => `${r.subscriber}: ${r.message}`)
-                    .join('\n');
-                alert(`⚠️ Added ${successCount} subscriber(s), but ${failCount} failed:\n\n${failedSubscribers}`);
-                if (successCount > 0) {
-                    this.closeAddSubscribersModal();
-                    this.loadSubscribers();
+                this.closeAddSubscribersModal();
+                this.loadSubscribers();
+                this.initAddSubscribersModal();
+            } else {
+                // Errors occurred - copy cancel message and show toast
+                const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
+                await this.copyToClipboard(cancelMessage);
+                
+                // Show toast notification
+                if (typeof notification !== 'undefined') {
+                    notification.set({ delay: 3000 });
+                    notification.error('Cancel message copied to clipboard automatically');
+                } else {
+                    alert('Cancel message copied to clipboard automatically');
                 }
+                
+                // Re-enable submit button and reset loading state
+                this.hideAddModalLoading();
+                this.isSubmittingAddForm = false;
+                if (submitBtn && originalButtonText) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalButtonText;
+                }
+                
+                // Don't close modal or show success alert - let user see the error
+                // Don't reset form - return early
+                return;
             }
-            
-            // Reset form
-            this.initAddSubscribersModal();
         } catch (error) {
             console.error('Error adding subscribers:', error);
             alert('Failed to add subscribers. Please try again.');
