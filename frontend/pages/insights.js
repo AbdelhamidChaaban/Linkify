@@ -5046,6 +5046,118 @@ class InsightsManager {
         }
     }
     
+    /**
+     * Helper function to calculate admin details for selector display
+     * Uses values already calculated in the insights table (this.subscribers)
+     */
+    calculateAdminSelectorData(admin) {
+        const alfaData = admin.alfaData || {};
+        
+        // Use values directly from insights table (already calculated)
+        const packageSize = admin.totalLimit || 0;
+        const adminQuota = admin.adminLimit || 0;
+        
+        // Use subscriber counts from insights table
+        const activeCount = admin.subscribersActiveCount || 0;
+        const requestedCount = admin.subscribersRequestedCount || 0;
+        const removedActiveSubscribers = admin.removedActiveSubscribers || [];
+        const outCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
+        const subscriberCount = activeCount + requestedCount + outCount;
+        
+        // Get subscriber quotas from secondarySubscribers (active/requested) and removedActiveSubscribers (out)
+        const secondarySubscribers = alfaData.secondarySubscribers || [];
+        const subscriberQuotas = [];
+        
+        // Add quotas from active/requested subscribers
+        if (Array.isArray(secondarySubscribers)) {
+            secondarySubscribers.forEach(sub => {
+                if (sub && sub.phoneNumber) {
+                    let quota = 0;
+                    
+                    // Try multiple sources for quota (same logic as flow-manager.js)
+                    if (typeof sub.quota === 'number') {
+                        quota = sub.quota;
+                    } else if (sub.totalQuota) {
+                        quota = parseFloat(sub.totalQuota) || 0;
+                    } else if (sub.consumptionText) {
+                        // Parse from consumptionText (format: "0.48 / 30 GB") - get the number after "/"
+                        const consumptionMatch = sub.consumptionText.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                        if (consumptionMatch) {
+                            quota = parseFloat(consumptionMatch[2]) || 0; // Second number is the quota
+                        }
+                    } else if (sub.consumption) {
+                        // Parse from consumption string (format: "1.18 / 30 GB") - get the number after "/"
+                        const consumptionStr = String(sub.consumption);
+                        const consumptionMatch = consumptionStr.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                        if (consumptionMatch) {
+                            quota = parseFloat(consumptionMatch[2]) || 0; // Second number is the quota
+                        }
+                    } else if (sub.limit) {
+                        quota = parseFloat(sub.limit) || 0;
+                    }
+                    
+                    if (quota > 0) {
+                        subscriberQuotas.push(quota);
+                    }
+                }
+            });
+        }
+        
+        // Add quotas from out subscribers (removedActiveSubscribers)
+        if (Array.isArray(removedActiveSubscribers)) {
+            removedActiveSubscribers.forEach(sub => {
+                if (sub && sub.phoneNumber) {
+                    let quota = 0;
+                    
+                    // Try multiple sources for quota
+                    if (typeof sub.quota === 'number') {
+                        quota = sub.quota;
+                    } else if (sub.limit) {
+                        quota = parseFloat(sub.limit) || 0;
+                    }
+                    
+                    if (quota > 0) {
+                        subscriberQuotas.push(quota);
+                    }
+                }
+            });
+        }
+        
+        // Calculate free space: package size - (admin quota + sum of all subscriber quotas)
+        const totalSubscriberQuota = subscriberQuotas.reduce((sum, q) => sum + q, 0);
+        const freeSpace = Math.max(0, packageSize - (adminQuota + totalSubscriberQuota));
+        
+        // Get validity date and calculate days remaining
+        const validityDate = alfaData.validityDate || admin.validityDate || '';
+        let daysRemaining = null;
+        if (validityDate && validityDate !== 'N/A' && validityDate.trim() !== '') {
+            const parts = String(validityDate).trim().split('/');
+            if (parts.length === 3) {
+                const day = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10) - 1;
+                const year = parseInt(parts[2], 10);
+                if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+                    const validityDateObj = new Date(year, month, day);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    validityDateObj.setHours(0, 0, 0, 0);
+                    const diffTime = validityDateObj.getTime() - today.getTime();
+                    daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                }
+            }
+        }
+        
+        return {
+            packageSize,
+            adminQuota,
+            subscriberCount,
+            subscriberQuotas,
+            freeSpace,
+            validityDate,
+            daysRemaining
+        };
+    }
+    
     populateAdminSelector(admins) {
         const list = document.getElementById('adminSelectorList');
         if (!list) return;
@@ -5057,16 +5169,72 @@ class InsightsManager {
             return;
         }
         
-        admins.forEach((admin, index) => {
+        // Sort admins by validity date from farthest to nearest (descending order by date)
+        const sortedAdmins = [...admins].sort((a, b) => {
+            const alfaDataA = a.alfaData || {};
+            const alfaDataB = b.alfaData || {};
+            const validityDateA = alfaDataA.validityDate || '';
+            const validityDateB = alfaDataB.validityDate || '';
+            
+            if (!validityDateA && !validityDateB) return 0;
+            if (!validityDateA) return 1; // A goes last
+            if (!validityDateB) return -1; // B goes last
+            
+            // Parse dates (DD/MM/YYYY format)
+            const parseDate = (dateStr) => {
+                const parts = String(dateStr).trim().split('/');
+                if (parts.length !== 3) return null;
+                const day = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10) - 1;
+                const year = parseInt(parts[2], 10);
+                if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+                return new Date(year, month, day);
+            };
+            
+            const dateA = parseDate(validityDateA);
+            const dateB = parseDate(validityDateB);
+            
+            if (!dateA && !dateB) return 0;
+            if (!dateA) return 1;
+            if (!dateB) return -1;
+            
+            // Sort in descending order (farthest date first)
+            return dateB.getTime() - dateA.getTime();
+        });
+        
+        sortedAdmins.forEach((admin, index) => {
+            const data = this.calculateAdminSelectorData(admin);
             const item = document.createElement('div');
             item.className = 'admin-selector-item';
             item.style.animationDelay = `${index * 0.05}s`;
             item.onclick = () => this.selectAdmin(admin);
             
+            // Format subscriber quotas
+            const subscriberQuotasStr = data.subscriberQuotas.length > 0
+                ? data.subscriberQuotas.map(q => `${q} GB`).join(', ')
+                : '';
+            const subscribersInfo = data.subscriberCount > 0 
+                ? (subscriberQuotasStr 
+                    ? `Subscribers: ${data.subscriberCount} (${subscriberQuotasStr})`
+                    : `Subscribers: ${data.subscriberCount}`)
+                : 'Subscribers: 0';
+            
+            // Format validity date info
+            const validityInfo = data.validityDate && data.daysRemaining !== null
+                ? `Expiry Date: ${data.validityDate} (${data.daysRemaining} days)`
+                : data.validityDate || '';
+            
             item.innerHTML = `
                 <div class="admin-selector-item-info">
-                    <div class="admin-selector-item-name">${admin.name || 'Unknown'}</div>
+                    <div class="admin-selector-item-header">
+                        <span class="admin-selector-item-name">${admin.name || 'Unknown'}</span>
+                        ${data.packageSize > 0 ? `<span class="admin-selector-package-badge">${data.packageSize} GB</span>` : ''}
+                    </div>
+                    <div class="admin-selector-item-details">
+                        Admin: ${data.adminQuota} GB | ${subscribersInfo} | Free: ${data.freeSpace.toFixed(1)} GB
+                    </div>
                     <div class="admin-selector-item-phone">${admin.phone || ''}</div>
+                    ${validityInfo ? `<div class="admin-selector-item-validity">${validityInfo}</div>` : ''}
                 </div>
                 <svg class="admin-selector-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M9 18l6-6-6-6"/>
@@ -5100,15 +5268,38 @@ class InsightsManager {
         }
         
         filtered.forEach((admin, index) => {
+            const data = this.calculateAdminSelectorData(admin);
             const item = document.createElement('div');
             item.className = 'admin-selector-item';
             item.style.animationDelay = `${index * 0.05}s`;
             item.onclick = () => this.selectAdmin(admin);
             
+            // Format subscriber quotas
+            const subscriberQuotasStr = data.subscriberQuotas.length > 0
+                ? data.subscriberQuotas.map(q => `${q} GB`).join(', ')
+                : '';
+            const subscribersInfo = data.subscriberCount > 0 
+                ? (subscriberQuotasStr 
+                    ? `Subscribers: ${data.subscriberCount} (${subscriberQuotasStr})`
+                    : `Subscribers: ${data.subscriberCount}`)
+                : 'Subscribers: 0';
+            
+            // Format validity date info
+            const validityInfo = data.validityDate && data.daysRemaining !== null
+                ? `Expiry Date: ${data.validityDate} (${data.daysRemaining} days)`
+                : data.validityDate || '';
+            
             item.innerHTML = `
                 <div class="admin-selector-item-info">
-                    <div class="admin-selector-item-name">${admin.name || 'Unknown'}</div>
+                    <div class="admin-selector-item-header">
+                        <span class="admin-selector-item-name">${admin.name || 'Unknown'}</span>
+                        ${data.packageSize > 0 ? `<span class="admin-selector-package-badge">${data.packageSize} GB</span>` : ''}
+                    </div>
+                    <div class="admin-selector-item-details">
+                        Admin: ${data.adminQuota} GB | ${subscribersInfo} | Free: ${data.freeSpace.toFixed(1)} GB
+                    </div>
                     <div class="admin-selector-item-phone">${admin.phone || ''}</div>
+                    ${validityInfo ? `<div class="admin-selector-item-validity">${validityInfo}</div>` : ''}
                 </div>
                 <svg class="admin-selector-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M9 18l6-6-6-6"/>
