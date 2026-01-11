@@ -92,10 +92,10 @@ body.home-page .main-content {
     }
 }
 
-/* Mobile: 2 cards per row */
+/* Mobile: 1 card per row for larger rectangular cards */
 @media (max-width: 768px) {
     .cards-container {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: 1fr;
         gap: 1rem;
         padding: 0;
     }
@@ -104,7 +104,9 @@ body.home-page .main-content {
         width: 100%;
         max-width: 100%;
         margin: 0;
-        min-height: 220px;
+        height: auto;
+        min-height: 110px;
+        aspect-ratio: auto;
     }
 
     .welcome-section {
@@ -160,8 +162,8 @@ body.home-page .main-content {
         width: 100%;
         max-width: 100%;
         margin: 0;
-        height: 200px;
-        min-height: 200px;
+        height: auto;
+        min-height: 100px;
     }
 
     .welcome-section {
@@ -869,17 +871,59 @@ body:not(.light-mode) .available-services-table .action-btn:hover {
         padding: 1rem;
     }
 
+    .available-services-modal-header h2 {
+        font-size: 1.25rem;
+    }
+
     .available-services-modal-body {
-        padding: 1rem;
+        padding: 0.75rem;
     }
 
     .available-services-table {
-        font-size: 0.75rem;
+        font-size: 0.6875rem;
     }
 
-    .available-services-table th,
+    .available-services-table th {
+        padding: 0.5rem 0.375rem;
+        font-size: 0.6875rem;
+    }
+
     .available-services-table td {
-        padding: 0.5rem;
+        padding: 0.5rem 0.375rem;
+        font-size: 0.6875rem;
+    }
+
+    .available-services-table .progress-container {
+        gap: 0.25rem;
+    }
+
+    .available-services-table .progress-bar {
+        height: 6px;
+        min-width: 100px;
+    }
+
+    .available-services-table .progress-text {
+        font-size: 0.6875rem;
+    }
+
+    .available-services-table .subscriber-name {
+        font-size: 0.6875rem;
+    }
+
+    .available-services-table .subscriber-phone {
+        font-size: 0.625rem;
+        margin-top: 0.125rem;
+    }
+
+    .available-services-table .action-btn {
+        width: 28px;
+        height: 28px;
+        padding: 0.25rem;
+    }
+
+    .available-services-table .action-btn svg {
+        width: 16px;
+        height: 16px;
     }
 }
 
@@ -893,6 +937,66 @@ body:not(.light-mode) .available-services-table .action-btn:hover {
 
     .available-services-modal-inner {
         border-radius: 0;
+    }
+
+    .available-services-modal-header {
+        padding: 0.75rem;
+    }
+
+    .available-services-modal-header h2 {
+        font-size: 1.125rem;
+    }
+
+    .available-services-modal-body {
+        padding: 0.5rem;
+    }
+
+    .available-services-table {
+        font-size: 0.625rem;
+    }
+
+    .available-services-table th {
+        padding: 0.375rem 0.25rem;
+        font-size: 0.625rem;
+        letter-spacing: 0.5px;
+    }
+
+    .available-services-table td {
+        padding: 0.375rem 0.25rem;
+        font-size: 0.625rem;
+    }
+
+    .available-services-table .progress-container {
+        gap: 0.1875rem;
+    }
+
+    .available-services-table .progress-bar {
+        height: 5px;
+        min-width: 80px;
+    }
+
+    .available-services-table .progress-text {
+        font-size: 0.625rem;
+    }
+
+    .available-services-table .subscriber-name {
+        font-size: 0.625rem;
+    }
+
+    .available-services-table .subscriber-phone {
+        font-size: 0.5625rem;
+        margin-top: 0.125rem;
+    }
+
+    .available-services-table .action-btn {
+        width: 24px;
+        height: 24px;
+        padding: 0.1875rem;
+    }
+
+    .available-services-table .action-btn svg {
+        width: 14px;
+        height: 14px;
     }
 }
 
@@ -1156,31 +1260,98 @@ body:not(.light-mode) .view-details-table .progress-text {
     }
     
     .view-details-modal-header {
-        padding: 1.5rem 1.5rem 1rem;
+        padding: 1rem 1rem 0.75rem;
     }
     
     .view-details-modal-header h2 {
-        font-size: 1.25rem;
+        font-size: 1.125rem;
     }
     
     .view-details-modal-body {
-        padding: 1rem 1.5rem 1.5rem;
+        padding: 0.75rem 1rem 1rem;
     }
     
-    .view-details-table th,
+    .view-details-table th {
+        padding: 0.625rem 0.75rem;
+        font-size: 0.6875rem;
+        letter-spacing: 0.5px;
+    }
+    
     .view-details-table td {
-        padding: 0.875rem 1rem;
+        padding: 0.625rem 0.75rem;
+        font-size: 0.75rem;
+    }
+
+    .view-details-table .total-row td {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+        font-size: 0.8125rem;
+    }
+
+    .view-details-table .progress-container {
+        gap: 0.375rem;
+        min-width: 150px;
+    }
+
+    .view-details-table .progress-bar {
+        height: 6px;
+    }
+
+    .view-details-table .progress-text {
+        font-size: 0.6875rem;
     }
 }
 
 @media (max-width: 480px) {
-    .view-details-table {
-        font-size: 0.8125rem;
+    .view-details-modal {
+        margin: 0.25rem;
+        border-radius: 12px;
+    }
+
+    .view-details-modal-header {
+        padding: 0.75rem 0.75rem 0.5rem;
     }
     
-    .view-details-table th,
+    .view-details-modal-header h2 {
+        font-size: 1rem;
+    }
+
+    .view-details-modal-body {
+        padding: 0.5rem 0.75rem 0.75rem;
+    }
+
+    .view-details-table {
+        font-size: 0.6875rem;
+    }
+    
+    .view-details-table th {
+        padding: 0.5rem 0.5rem;
+        font-size: 0.625rem;
+        letter-spacing: 0.4px;
+    }
+    
     .view-details-table td {
-        padding: 0.75rem;
+        padding: 0.5rem 0.5rem;
+        font-size: 0.6875rem;
+    }
+
+    .view-details-table .total-row td {
+        padding-top: 0.75rem;
+        padding-bottom: 0.75rem;
+        font-size: 0.75rem;
+    }
+
+    .view-details-table .progress-container {
+        gap: 0.25rem;
+        min-width: 120px;
+    }
+
+    .view-details-table .progress-bar {
+        height: 5px;
+    }
+
+    .view-details-table .progress-text {
+        font-size: 0.625rem;
     }
 }
 
