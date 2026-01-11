@@ -2125,13 +2125,17 @@ class InsightsManager {
         // Admin limit should always be the quota set when creating the admin (not from API)
         // Use subscriber.quota as the source of truth for admin limit
         // Parse quota if it's a string (e.g., "15 GB" or "15")
+        // For closed admins, adminLimit should be 0 (no quota)
+        const isClosedAdmin = subscriber.type === 'Closed' || subscriber.type === 'closed' || (subscriber.status && subscriber.status.includes('Closed'));
         let adminLimit = 0;
-        if (subscriber.quota) {
-            const quotaStr = String(subscriber.quota).trim();
-            const quotaMatch = quotaStr.match(/^([\d.]+)/);
-            adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
-        } else if (subscriber.adminLimit) {
-            adminLimit = subscriber.adminLimit;
+        if (!isClosedAdmin) {
+            if (subscriber.quota) {
+                const quotaStr = String(subscriber.quota).trim();
+                const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+            } else if (subscriber.adminLimit) {
+                adminLimit = subscriber.adminLimit;
+            }
         }
         
         // Extract totalLimit from PackageValue if it's missing, 0, equals admin quota, or equals totalConsumption (wrong!)
@@ -2372,7 +2376,7 @@ class InsightsManager {
                 <td>${subscriber.status === 'inactive' ? '' : (subscriber.validityDate && !subscriber.validityDate.includes('NaN') ? subscriber.validityDate : '')}</td>
                 <td>${subscriber.status === 'inactive' ? '' : this.formatSubscribersCount(subscriber.subscribersActiveCount !== undefined ? subscriber.subscribersActiveCount : subscriber.subscribersCount, subscriber.subscribersRequestedCount !== undefined ? subscriber.subscribersRequestedCount : subscriber.pendingCount)}</td>
                 <td>
-                    ${subscriber.status === 'inactive' ? '' : `
+                    ${(subscriber.status === 'inactive' || subscriber.type === 'Closed' || subscriber.type === 'closed' || (subscriber.status && subscriber.status.includes('Closed'))) ? '' : `
                     <div class="progress-container">
                         <div class="progress-bar">
                             <div class="${adminProgressClass}" style="width: ${adminPercent}%"></div>

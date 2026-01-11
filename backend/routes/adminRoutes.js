@@ -49,13 +49,20 @@ router.post('/', authenticateJWT, async (req, res) => {
             });
         }
 
-        // Validate quota
-        const quotaNum = parseInt(quota) || 0;
-        if (isNaN(quotaNum) || quotaNum < 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Quota must be a valid number (0 or greater)'
-            });
+        // Validate quota - only required for Open admins, not Closed
+        let quotaNum = 0;
+        if (type === 'Closed') {
+            // Closed admins don't have quota - set to 0
+            quotaNum = 0;
+        } else {
+            // Open admins require quota
+            quotaNum = parseInt(quota) || 0;
+            if (isNaN(quotaNum) || quotaNum < 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Quota must be a valid number (0 or greater)'
+                });
+            }
         }
 
         const adminDbInstance = getAdminDb();

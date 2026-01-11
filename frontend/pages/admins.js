@@ -388,7 +388,38 @@ class AdminsManager {
             }
         });
         
+        // Listen for admin type changes to show/hide quota field
+        const adminTypeSelect = document.getElementById('adminType');
+        if (adminTypeSelect) {
+            adminTypeSelect.addEventListener('change', () => this.handleAdminTypeChange());
+        }
+        
         this.form.addEventListener('submit', (e) => this.handleSubmit(e));
+    }
+    
+    handleAdminTypeChange() {
+        const adminType = document.getElementById('adminType').value;
+        const quotaField = document.getElementById('adminQuota');
+        const quotaLabel = quotaField ? quotaField.closest('.form-field') : null;
+        
+        if (adminType === 'Closed') {
+            // Hide quota field for closed admins
+            if (quotaLabel) {
+                quotaLabel.style.display = 'none';
+            }
+            if (quotaField) {
+                quotaField.required = false;
+                quotaField.value = '';
+            }
+        } else {
+            // Show quota field for open admins
+            if (quotaLabel) {
+                quotaLabel.style.display = '';
+            }
+            if (quotaField) {
+                quotaField.required = true;
+            }
+        }
     }
     
     openModal(adminId = null) {
@@ -420,6 +451,8 @@ class AdminsManager {
                 document.getElementById('adminPassword').value = ''; // Don't populate password for security
                 document.getElementById('adminQuota').value = admin.quota || 0;
                 document.getElementById('adminNotUShare').checked = admin.notUShare === true;
+                // Handle quota field visibility based on type
+                this.handleAdminTypeChange();
             }
         } else {
             // Create mode
@@ -523,15 +556,21 @@ class AdminsManager {
             }
         }
         
-        // Validate quota
-        if (!quota) {
-            this.showError('quota', 'Admin quota is required');
-            isValid = false;
-        } else if (isNaN(quota) || parseInt(quota) < 0) {
-            this.showError('quota', 'Admin quota must be a valid number (0 or greater)');
-            isValid = false;
-        } else {
+        // Validate quota - only required for Open admins, not Closed
+        if (type === 'Closed') {
+            // Quota is not required for closed admins
             this.clearError('quota');
+        } else {
+            // Quota is required for open admins
+            if (!quota) {
+                this.showError('quota', 'Admin quota is required');
+                isValid = false;
+            } else if (isNaN(quota) || parseInt(quota) < 0) {
+                this.showError('quota', 'Admin quota must be a valid number (0 or greater)');
+                isValid = false;
+            } else {
+                this.clearError('quota');
+            }
         }
         
         return isValid;
