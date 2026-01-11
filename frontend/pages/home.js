@@ -1013,6 +1013,29 @@ class HomeManager {
         }
     }
 
+    // Helper function to build table rows with limit and "see more" functionality
+    buildTableRowsWithLimit(services, buildRowCallback, limit = 4) {
+        if (services.length === 0) {
+            return { rows: '', hasMore: false };
+        }
+
+        const rowsToShow = services.slice(0, limit);
+        const hasMore = services.length > limit;
+
+        let rows = '';
+        rowsToShow.forEach((service, index) => {
+            rows += buildRowCallback(service, index);
+        });
+
+        if (hasMore) {
+            services.slice(limit).forEach((service, index) => {
+                rows += buildRowCallback(service, index + limit, true); // true = hidden
+            });
+        }
+
+        return { rows, hasMore };
+    }
+
     showAvailableServicesModal(services) {
         // Remove existing modal if any
         const existingModal = document.getElementById('availableServicesModal');
@@ -1020,23 +1043,25 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (services.length === 0) {
             tableRows = `
                 <tr>
-                    <td colspan="5" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                    <td colspan="6" style="text-align: center; padding: 3rem; color: #94a3b8;">
                         No available services found (all services have more than 5% usage)
                     </td>
                 </tr>
             `;
         } else {
-            services.forEach(service => {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
                 const usagePercent = service.usageLimit > 0 ? (service.usage / service.usageLimit) * 100 : 0;
                 const progressClass = usagePercent >= 90 ? 'progress-fill error' : 'progress-fill';
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
                 
-                tableRows += `
-                    <tr>
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
@@ -1066,7 +1091,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -1101,6 +1128,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -1115,6 +1143,18 @@ class HomeManager {
                 this.viewSubscriberDetails(id, services);
             });
         });
+
+        // Bind see more button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                seeMoreBtn.remove();
+            });
+        }
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
