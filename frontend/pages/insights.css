@@ -172,7 +172,7 @@ tr.refresh-success td {
     opacity: 1;
 }
 
-/* Status Indicator Styles */
+/* Status Checkbox Styles */
 .status-indicator-col {
     width: 60px;
     text-align: center;
@@ -183,84 +183,293 @@ tr.refresh-success td {
     padding: 1rem 0.5rem !important;
 }
 
-.status-indicator {
-    display: inline-flex;
+.status-indicator-wrapper {
+    display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    cursor: help;
-    transition: all 0.2s ease;
+    gap: 0.5rem;
     position: relative;
+    min-height: 50px;
 }
 
-.status-indicator svg {
+.waiting-balance-mark-icon {
+    display: inline-block;
+    color: #8b5cf6;
+    font-weight: bold;
+    font-size: 0.875rem;
+    padding: 0.125rem 0.25rem;
+    background: rgba(139, 92, 246, 0.1);
+    border-radius: 0.25rem;
+    margin-top: 0.25rem;
+}
+
+.waiting-balance-dollar-btn {
+    display: none;
+    background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+    border: none;
+    color: white;
+    font-weight: bold;
+    font-size: 0.875rem;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 6px rgba(139, 92, 246, 0.4);
+    margin-top: 0.25rem;
+    flex-shrink: 0;
+}
+
+.waiting-balance-dollar-btn:hover {
+    background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+    transform: scale(1.1);
+    box-shadow: 0 4px 8px rgba(139, 92, 246, 0.5);
+}
+
+.waiting-balance-dollar-btn:active {
+    transform: scale(0.95);
+}
+
+/* From Uiverse.io by Danishrehman786 - Adapted for smaller size */
+.flam-checkbox-holder {
+    display: inline-block;
+    margin: 0;
+    perspective: 1000px;
+}
+
+.flam-trigger {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.flam-switch {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    cursor: pointer;
+}
+
+.flam-cube {
     width: 18px;
     height: 18px;
-    stroke-width: 2.5;
+    position: relative;
+    transform-style: preserve-3d;
+    transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    background: linear-gradient(145deg, #0f0020, #070a15);
+    border: 1.5px solid #7d00ff;
+    border-radius: 3px;
+    box-shadow:
+        inset 1.5px 1.5px 3px rgba(0, 0, 0, 0.7),
+        inset -1.5px -1.5px 3px rgba(80, 0, 150, 0.3),
+        0 0 6px rgba(125, 0, 255, 0.5);
 }
 
-.status-indicator.status-active {
-    background: rgba(16, 185, 129, 0.15);
-    color: #10b981;
+.flam-indicator {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    color: white;
+    font-size: 10px;
+    font-weight: bold;
+    opacity: 0;
+    transition: all 0.3s ease;
+    z-index: 2;
+    text-shadow: 0 0 4px #8b5cf6;
 }
 
-body:not(.light-mode) .status-indicator.status-active {
-    background: rgba(16, 185, 129, 0.25);
-    color: #34d399;
+.flam-aura {
+    position: absolute;
+    top: -5px;
+    left: -5px;
+    right: -5px;
+    bottom: -5px;
+    border-radius: 6px;
+    background: radial-gradient(circle, rgba(125, 0, 255, 0.3), transparent 70%);
+    filter: blur(6px);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: -1;
 }
 
-.status-indicator.status-active:hover {
-    background: rgba(16, 185, 129, 0.25);
-    transform: scale(1.1);
+.flam-fire-container {
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100%;
+    height: 30px;
+    opacity: 0;
+    transition: opacity 0.3s;
+    z-index: 1;
+    pointer-events: none;
 }
 
-body:not(.light-mode) .status-indicator.status-active:hover {
-    background: rgba(16, 185, 129, 0.35);
+.flam-flame {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 15px;
+    height: 0;
+    background: linear-gradient(to top, transparent, #8b5cf6 40%, #a78bfa);
+    border-radius: 50% 50% 20% 20%;
+    filter: blur(2px);
+    animation:
+        flame-expand 0.5s forwards,
+        flame-flicker 1.5s infinite alternate 0.5s;
 }
 
-.status-indicator.status-warning {
-    background: rgba(245, 158, 11, 0.15);
-    color: #f59e0b;
+.flam-flame::before {
+    content: "";
+    position: absolute;
+    top: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 12px;
+    height: 0;
+    background: linear-gradient(to top, transparent 30%, #a78bfa 70%, rgba(255, 255, 255, 0.8));
+    border-radius: 50% 50% 20% 20%;
+    filter: blur(2px);
+    animation: flame-inner-expand 0.5s 0.1s forwards;
 }
 
-body:not(.light-mode) .status-indicator.status-warning {
-    background: rgba(245, 158, 11, 0.25);
-    color: #fbbf24;
+.flam-sparks {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 0.3s;
 }
 
-.status-indicator.status-warning:hover {
-    background: rgba(245, 158, 11, 0.25);
-    transform: scale(1.1);
-    animation: pulse-warning 1.5s ease-in-out infinite;
+.flam-spark {
+    position: absolute;
+    background: #a78bfa;
+    border-radius: 50%;
+    filter: blur(0.5px);
+    animation: spark-launch 1s forwards;
 }
 
-body:not(.light-mode) .status-indicator.status-warning:hover {
-    background: rgba(245, 158, 11, 0.35);
+.flam-switch:hover .flam-cube {
+    transform: translateZ(8px) scale(1.05);
+    box-shadow:
+        inset 1.5px 1.5px 3px rgba(0, 0, 0, 0.7),
+        inset -1.5px -1.5px 3px rgba(80, 0, 150, 0.4),
+        0 0 10px rgba(125, 0, 255, 0.8);
 }
 
-.status-indicator.status-expired,
-.status-indicator.status-inactive {
-    background: rgba(239, 68, 68, 0.15);
-    color: #ef4444;
+.flam-switch:hover {
+    color: #00f7ff;
+    text-shadow: 0 0 8px rgba(0, 247, 255, 0.9);
 }
 
-body:not(.light-mode) .status-indicator.status-expired,
-body:not(.light-mode) .status-indicator.status-inactive {
-    background: rgba(239, 68, 68, 0.25);
-    color: #f87171;
+.flam-switch:hover .flam-aura {
+    opacity: 0.7;
 }
 
-.status-indicator.status-expired:hover,
-.status-indicator.status-inactive:hover {
-    background: rgba(239, 68, 68, 0.25);
-    transform: scale(1.1);
+.flam-trigger:checked + .flam-switch .flam-cube {
+    background: linear-gradient(145deg, #5b21b6, #0f0020);
+    border-color: #8b5cf6;
+    box-shadow:
+        inset 1.5px 1.5px 3px rgba(0, 0, 0, 0.7),
+        inset -1.5px -1.5px 3px rgba(139, 92, 246, 0.4),
+        0 0 12px rgba(139, 92, 246, 0.8);
+    animation: cube-shake 0.1s ease;
 }
 
-body:not(.light-mode) .status-indicator.status-expired:hover,
-body:not(.light-mode) .status-indicator.status-inactive:hover {
-    background: rgba(239, 68, 68, 0.35);
+.flam-trigger:checked + .flam-switch .flam-indicator {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+    animation: indicator-pop 0.4s ease-out;
+}
+
+.flam-trigger:checked + .flam-switch {
+    color: #8b5cf6;
+    text-shadow: 0 0 6px rgba(139, 92, 246, 0.9);
+}
+
+.flam-trigger:checked + .flam-switch .flam-aura {
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.5), transparent 70%);
+    opacity: 1;
+}
+
+.flam-trigger:checked + .flam-switch .flam-fire-container,
+.flam-trigger:checked + .flam-switch .flam-sparks {
+    opacity: 1;
+}
+
+@keyframes flame-expand {
+    0% {
+        height: 0;
+    }
+    100% {
+        height: 22px;
+    }
+}
+
+@keyframes flame-inner-expand {
+    0% {
+        height: 0;
+    }
+    100% {
+        height: 18px;
+    }
+}
+
+@keyframes flame-flicker {
+    0%,
+    100% {
+        height: 22px;
+        opacity: 1;
+    }
+    50% {
+        height: 24px;
+        opacity: 0.9;
+    }
+}
+
+@keyframes spark-launch {
+    0% {
+        transform: translate(0, 0) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(
+            calc(var(--spark-offset-x) * 0.5px),
+            calc(var(--spark-offset-y) * -0.5px)
+        ) scale(0);
+        opacity: 0;
+    }
+}
+
+@keyframes cube-shake {
+    0%, 100% {
+        transform: translateX(0);
+    }
+    25% {
+        transform: translateX(-2px);
+    }
+    75% {
+        transform: translateX(2px);
+    }
+}
+
+@keyframes indicator-pop {
+    0% {
+        transform: translate(-50%, -50%) scale(0);
+        opacity: 0;
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(1.2);
+    }
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 1;
+    }
 }
 
 @keyframes pulse-warning {

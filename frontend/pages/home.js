@@ -312,10 +312,13 @@ class HomeManager {
             console.log('📊 [Home] No admins found, setting all counts to 0');
             this.setCardCount('1', 0); // Available Services
             this.setCardCount('2', 0); // Expired Numbers
+            this.setCardCount('10', 0); // Services Expired Yesterday
             this.setCardCount('3', 0); // Services To Expire Today
+            this.setCardCount('11', 0); // Services To Expire Tomorrow
             this.setCardCount('6', 0); // Finished Services
             this.setCardCount('7', 0); // High Admin Consumption
             this.setCardCount('9', 0); // Inactive Numbers
+            this.setCardCount('12', 0); // Coming Soon
             return;
         }
 
@@ -333,7 +336,9 @@ class HomeManager {
         // Calculate counts for each card
         const availableServices = this.filterAvailableServices(snapshot);
         const expiredNumbers = this.filterExpiredNumbers(snapshot);
+        const expiredYesterday = this.filterServicesExpiredYesterday(snapshot);
         const expiringToday = this.filterServicesToExpireToday(snapshot);
+        const expiringTomorrow = this.filterServicesToExpireTomorrow(snapshot);
         const finishedServices = this.filterFinishedServices(snapshot);
         const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
         const requestedServices = this.filterRequestedServices(snapshot);
@@ -342,16 +347,23 @@ class HomeManager {
         // Update card counts
         this.setCardCount('1', availableServices.length); // Available Services
         this.setCardCount('2', expiredNumbers.length); // Expired Numbers
+        this.setCardCount('10', expiredYesterday.length); // Services Expired Yesterday
         this.setCardCount('3', expiringToday.length); // Services To Expire Today
+        this.setCardCount('11', expiringTomorrow.length); // Services To Expire Tomorrow
         this.setCardCount('6', finishedServices.length); // Finished Services
         this.setCardCount('7', highAdminConsumption.length); // High Admin Consumption
         this.setCardCount('8', requestedServices.length); // Requested Services
         this.setCardCount('9', inactiveNumbers.length); // Inactive Numbers
+        // Waiting Balance count
+        const waitingBalanceCount = this.getWaitingBalanceData().length;
+        this.setCardCount('12', waitingBalanceCount);
 
         console.log(`📊 [Home] Card counts updated:`, {
             availableServices: availableServices.length,
             expiredNumbers: expiredNumbers.length,
+            expiredYesterday: expiredYesterday.length,
             expiringToday: expiringToday.length,
+            expiringTomorrow: expiringTomorrow.length,
             finishedServices: finishedServices.length,
             highAdminConsumption: highAdminConsumption.length,
             requestedServices: requestedServices.length,
@@ -475,9 +487,17 @@ class HomeManager {
         else if (cardId === '2') {
             this.openExpiredNumbersModal();
         }
+        // Handle "Services Expired Yesterday" card (card-id="10")
+        else if (cardId === '10') {
+            this.openServicesExpiredYesterdayModal();
+        }
         // Handle "Services To Expire Today" card (card-id="3")
         else if (cardId === '3') {
             this.openServicesToExpireTodayModal();
+        }
+        // Handle "Services To Expire Tomorrow" card (card-id="11")
+        else if (cardId === '11') {
+            this.openServicesToExpireTomorrowModal();
         }
         // Handle "Finished Services" card (card-id="6")
         else if (cardId === '6') {
@@ -494,6 +514,10 @@ class HomeManager {
         // Handle "Inactive Numbers" card (card-id="9")
         else if (cardId === '9') {
             this.openInactiveNumbersModal();
+        }
+        // Handle "Waiting Balance" card (card-id="12")
+        else if (cardId === '12') {
+            this.openWaitingBalanceModal();
         }
         // Future cards will be handled here
     }
@@ -1171,14 +1195,21 @@ class HomeManager {
             return;
         }
 
+        // Get the full admin object from this.admins to ensure we have all fields (including quota)
+        const fullAdmin = this.admins.find(a => a.id === id);
+        if (!fullAdmin) {
+            console.error('Full admin not found:', id);
+            return;
+        }
+
         // Reuse the view details functionality from insights.js
         // We need to create a subscriber-like object for compatibility
         const subscriber = {
-            id: service.id,
-            name: service.name,
-            phone: service.phone,
-            alfaData: service.alfaData,
-            quota: service.quota || null // Admin's quota (e.g., 15 GB) - NOT usageLimit (total bundle)
+            id: fullAdmin.id,
+            name: fullAdmin.name || service.name,
+            phone: fullAdmin.phone || service.phone,
+            alfaData: fullAdmin.alfaData || service.alfaData,
+            quota: fullAdmin.quota || null // Admin's quota (e.g., 15 GB) - NOT usageLimit (total bundle)
         };
 
         // Import and use insights manager's view details method
@@ -1554,6 +1585,47 @@ class HomeManager {
         return div.innerHTML;
     }
 
+    // Services Expired Yesterday Modal
+    async openServicesExpiredYesterdayModal() {
+        try {
+            // Show loading state
+            this.showLoadingModal();
+
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
+                snapshot = firebaseSnapshot;
+            }
+            
+            // Process and filter admins
+            const expiredYesterday = this.filterServicesExpiredYesterday(snapshot);
+            
+            // Hide loading and show modal with data
+            this.hideLoadingModal();
+            this.showServicesExpiredYesterdayModal(expiredYesterday);
+        } catch (error) {
+            console.error('Error opening Services Expired Yesterday modal:', error);
+            this.hideLoadingModal();
+            alert('Error loading data: ' + error.message);
+        }
+    }
+
     // Services To Expire Today Modal
     async openServicesToExpireTodayModal() {
         try {
@@ -1593,6 +1665,137 @@ class HomeManager {
             this.hideLoadingModal();
             alert('Error loading data: ' + error.message);
         }
+    }
+
+    // Services To Expire Tomorrow Modal
+    async openServicesToExpireTomorrowModal() {
+        try {
+            // Show loading state
+            this.showLoadingModal();
+
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
+                snapshot = firebaseSnapshot;
+            }
+            
+            // Process and filter admins
+            const expiringTomorrow = this.filterServicesToExpireTomorrow(snapshot);
+            
+            // Hide loading and show modal with data
+            this.hideLoadingModal();
+            this.showServicesToExpireTomorrowModal(expiringTomorrow);
+        } catch (error) {
+            console.error('Error opening Services To Expire Tomorrow modal:', error);
+            this.hideLoadingModal();
+            alert('Error loading data: ' + error.message);
+        }
+    }
+
+    filterServicesExpiredYesterday(snapshot) {
+        const expiredYesterday = [];
+        
+        // Get yesterday's date in DD/MM/YYYY format
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayFormatted = this.formatDateDDMMYYYY(yesterday);
+
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const alfaData = data.alfaData || {};
+            
+            // Skip if admin is inactive (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                return;
+            }
+            
+            // Get validity date
+            let validityDate = '';
+            if (alfaData.validityDate) {
+                validityDate = alfaData.validityDate;
+            } else {
+                // Fallback: calculate from createdAt + 30 days
+                let createdAt = new Date();
+                if (data.createdAt) {
+                    createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
+                }
+                validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+            }
+
+            // Check if validity date matches yesterday
+            if (validityDate === yesterdayFormatted) {
+                // Parse balance
+                let balance = 0;
+                if (alfaData.balance) {
+                    const balanceStr = String(alfaData.balance).trim();
+                    const match = balanceStr.replace(/\$/g, '').trim().match(/-?[\d.]+/);
+                    balance = match ? parseFloat(match[0]) : 0;
+                }
+
+                // Get bundle size (total limit from total consumption)
+                let bundleSize = 0;
+                if (alfaData.totalConsumption) {
+                    const parsed = this.parseConsumption(alfaData.totalConsumption);
+                    bundleSize = parsed.total || 0;
+                } else if (data.quota) {
+                    const quotaStr = String(data.quota).trim();
+                    const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                    bundleSize = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+                }
+
+                // Get subscribers count
+                let subscribersCount = 0;
+                if (alfaData.secondarySubscribers && Array.isArray(alfaData.secondarySubscribers)) {
+                    subscribersCount = alfaData.secondarySubscribers.length;
+                } else if (alfaData.subscribersCount !== undefined) {
+                    subscribersCount = typeof alfaData.subscribersCount === 'number' 
+                        ? alfaData.subscribersCount 
+                        : parseInt(alfaData.subscribersCount) || 0;
+                }
+
+                // Get expiration (days)
+                let expiration = 0;
+                if (alfaData.expiration !== undefined) {
+                    expiration = typeof alfaData.expiration === 'number' 
+                        ? alfaData.expiration 
+                        : parseInt(alfaData.expiration) || 0;
+                }
+
+                // Calculate needed balance status
+                const neededBalanceStatus = this.calculateNeededBalanceStatus(bundleSize, balance);
+
+                expiredYesterday.push({
+                    id: doc.id,
+                    name: data.name || 'N/A',
+                    phone: data.phone || 'N/A',
+                    balance: balance,
+                    bundleSize: bundleSize,
+                    subscribersCount: subscribersCount,
+                    neededBalanceStatus: neededBalanceStatus,
+                    expiration: expiration,
+                    validityDate: validityDate,
+                    alfaData: alfaData
+                });
+            }
+        });
+
+        return expiredYesterday;
     }
 
     filterServicesToExpireToday(snapshot) {
@@ -1684,6 +1887,96 @@ class HomeManager {
         return expiringToday;
     }
 
+    filterServicesToExpireTomorrow(snapshot) {
+        const expiringTomorrow = [];
+        
+        // Get tomorrow's date in DD/MM/YYYY format
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowFormatted = this.formatDateDDMMYYYY(tomorrow);
+
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const alfaData = data.alfaData || {};
+            
+            // Skip if admin is inactive (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                return;
+            }
+            
+            // Get validity date
+            let validityDate = '';
+            if (alfaData.validityDate) {
+                validityDate = alfaData.validityDate;
+            } else {
+                // Fallback: calculate from createdAt + 30 days
+                let createdAt = new Date();
+                if (data.createdAt) {
+                    createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
+                }
+                validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+            }
+
+            // Check if validity date matches tomorrow
+            if (validityDate === tomorrowFormatted) {
+                // Parse balance
+                let balance = 0;
+                if (alfaData.balance) {
+                    const balanceStr = String(alfaData.balance).trim();
+                    const match = balanceStr.replace(/\$/g, '').trim().match(/-?[\d.]+/);
+                    balance = match ? parseFloat(match[0]) : 0;
+                }
+
+                // Get bundle size (total limit from total consumption)
+                let bundleSize = 0;
+                if (alfaData.totalConsumption) {
+                    const parsed = this.parseConsumption(alfaData.totalConsumption);
+                    bundleSize = parsed.total || 0;
+                } else if (data.quota) {
+                    const quotaStr = String(data.quota).trim();
+                    const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                    bundleSize = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+                }
+
+                // Get subscribers count
+                let subscribersCount = 0;
+                if (alfaData.secondarySubscribers && Array.isArray(alfaData.secondarySubscribers)) {
+                    subscribersCount = alfaData.secondarySubscribers.length;
+                } else if (alfaData.subscribersCount !== undefined) {
+                    subscribersCount = typeof alfaData.subscribersCount === 'number' 
+                        ? alfaData.subscribersCount 
+                        : parseInt(alfaData.subscribersCount) || 0;
+                }
+
+                // Get expiration (days)
+                let expiration = 0;
+                if (alfaData.expiration !== undefined) {
+                    expiration = typeof alfaData.expiration === 'number' 
+                        ? alfaData.expiration 
+                        : parseInt(alfaData.expiration) || 0;
+                }
+
+                // Calculate needed balance status
+                const neededBalanceStatus = this.calculateNeededBalanceStatus(bundleSize, balance);
+
+                expiringTomorrow.push({
+                    id: doc.id,
+                    name: data.name || 'N/A',
+                    phone: data.phone || 'N/A',
+                    balance: balance,
+                    bundleSize: bundleSize,
+                    subscribersCount: subscribersCount,
+                    neededBalanceStatus: neededBalanceStatus,
+                    expiration: expiration,
+                    validityDate: validityDate,
+                    alfaData: alfaData
+                });
+            }
+        });
+
+        return expiringTomorrow;
+    }
+
     formatDateDDMMYYYY(date) {
         if (!date) return '';
         const d = new Date(date);
@@ -1715,6 +2008,220 @@ class HomeManager {
             // Default: if bundle size doesn't match any known size, use 77 GB logic
             return balance >= 31 ? 'Ready To Renew' : 'Not Ready To Renew';
         }
+    }
+
+    showServicesExpiredYesterdayModal(services) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('servicesExpiredYesterdayModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // Build table rows
+        let tableRows = '';
+        if (services.length === 0) {
+            tableRows = `
+                <tr>
+                    <td colspan="7" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No services expired yesterday found
+                    </td>
+                </tr>
+            `;
+        } else {
+            services.forEach(service => {
+                const statusClass = service.neededBalanceStatus === 'Ready To Renew' ? 'ready' : 'not-ready';
+                
+                tableRows += `
+                    <tr>
+                        <td>
+                            <div>
+                                <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                            </div>
+                        </td>
+                        <td>$${service.balance.toFixed(2)}</td>
+                        <td>${service.bundleSize.toFixed(2)} GB</td>
+                        <td>${service.subscribersCount}</td>
+                        <td>
+                            <span class="needed-balance-status ${statusClass}">${this.escapeHtml(service.neededBalanceStatus)}</span>
+                        </td>
+                        <td>${service.expiration}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        const modal = document.createElement('div');
+        modal.id = 'servicesExpiredYesterdayModal';
+        modal.className = 'available-services-modal-overlay';
+        modal.innerHTML = `
+            <div class="available-services-modal">
+                <div class="available-services-modal-inner">
+                    <div class="available-services-modal-header">
+                        <h2>Services Expired Yesterday</h2>
+                        <button class="modal-close-btn" onclick="this.closest('.available-services-modal-overlay').remove()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="available-services-modal-body">
+                        <div class="table-container">
+                            <table class="available-services-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Balance</th>
+                                        <th>Bundle Size</th>
+                                        <th>Subscribers</th>
+                                        <th>Needed Balance</th>
+                                        <th>Expiration</th>
+                                        <th class="actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Bind view buttons
+        modal.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.viewSubscriberDetails(id, services);
+            });
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+    }
+
+    showServicesToExpireTomorrowModal(services) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('servicesToExpireTomorrowModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // Build table rows
+        let tableRows = '';
+        if (services.length === 0) {
+            tableRows = `
+                <tr>
+                    <td colspan="7" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No services expiring tomorrow found
+                    </td>
+                </tr>
+            `;
+        } else {
+            services.forEach(service => {
+                const statusClass = service.neededBalanceStatus === 'Ready To Renew' ? 'ready' : 'not-ready';
+                
+                tableRows += `
+                    <tr>
+                        <td>
+                            <div>
+                                <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                            </div>
+                        </td>
+                        <td>$${service.balance.toFixed(2)}</td>
+                        <td>${service.bundleSize.toFixed(2)} GB</td>
+                        <td>${service.subscribersCount}</td>
+                        <td>
+                            <span class="needed-balance-status ${statusClass}">${this.escapeHtml(service.neededBalanceStatus)}</span>
+                        </td>
+                        <td>${service.expiration}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        const modal = document.createElement('div');
+        modal.id = 'servicesToExpireTomorrowModal';
+        modal.className = 'available-services-modal-overlay';
+        modal.innerHTML = `
+            <div class="available-services-modal">
+                <div class="available-services-modal-inner">
+                    <div class="available-services-modal-header">
+                        <h2>Services To Expire Tomorrow</h2>
+                        <button class="modal-close-btn" onclick="this.closest('.available-services-modal-overlay').remove()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="available-services-modal-body">
+                        <div class="table-container">
+                            <table class="available-services-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Balance</th>
+                                        <th>Bundle Size</th>
+                                        <th>Subscribers</th>
+                                        <th>Needed Balance</th>
+                                        <th>Expiration</th>
+                                        <th class="actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Bind view buttons
+        modal.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.viewSubscriberDetails(id, services);
+            });
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
     }
 
     showServicesToExpireTodayModal(services) {
@@ -2374,23 +2881,175 @@ class HomeManager {
             }
 
             // Parse admin consumption - this is the key metric
-            let adminConsumption = 0;
+            // Get admin limit from quota (this is the admin's quota, e.g., 15 GB, NOT the total bundle limit)
+            // Also check if data.adminLimit exists (might be pre-calculated)
             let adminLimit = 0;
-            
-            // Admin limit is always the quota set when creating admin (extract number only)
-            if (data.quota) {
+            if (data.adminLimit !== undefined && data.adminLimit !== null) {
+                adminLimit = parseFloat(data.adminLimit) || 0;
+            } else if (data.quota) {
                 const quotaStr = String(data.quota).trim();
                 const quotaMatch = quotaStr.match(/^([\d.]+)/);
                 adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
             }
             
-            // Get admin consumption from alfaData.adminConsumption (format: "X / Y GB")
-            if (alfaData.adminConsumption) {
-                const adminConsumptionStr = String(alfaData.adminConsumption).trim();
-                const match = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
-                if (match) {
-                    adminConsumption = parseFloat(match[1]) || 0;
-                    // adminLimit is from quota, not from the adminConsumption string
+            // Get total limit FIRST (needed for validation of admin consumption string)
+            let totalLimitForValidation = 0;
+            if (alfaData.totalConsumption) {
+                const parsed = this.parseConsumption(alfaData.totalConsumption);
+                totalLimitForValidation = parsed.total || 0;
+            } else if (data.quota) {
+                const quotaStr = String(data.quota).trim();
+                const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                totalLimitForValidation = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+            }
+            
+            // Extract admin consumption - handle multiple formats (similar to processSubscribers in insights.js)
+            // First check if adminConsumption is already calculated in the data object (from insights processing)
+            let adminConsumption = 0;
+            if (data.adminConsumption !== undefined && data.adminConsumption !== null) {
+                adminConsumption = parseFloat(data.adminConsumption) || 0;
+            }
+            
+            // Try to get admin consumption from alfaData.adminConsumption first (backend-built string like "17.11 / 15 GB")
+            // Check if the property exists (even if it's 0, null, or empty string)
+            const hasAlfaData = alfaData && typeof alfaData === 'object';
+            if (adminConsumption === 0 && hasAlfaData && alfaData.hasOwnProperty('adminConsumption')) {
+                try {
+                    if (alfaData.adminConsumption === null || alfaData.adminConsumption === undefined || alfaData.adminConsumption === '') {
+                        // Empty/null - will try fallbacks
+                    } else if (typeof alfaData.adminConsumption === 'number') {
+                        adminConsumption = alfaData.adminConsumption;
+                    } else if (typeof alfaData.adminConsumption === 'string') {
+                        const adminConsumptionStr = alfaData.adminConsumption.trim();
+                        
+                        // Handle two formats:
+                        // 1. "X / Y GB" format (old format with limit)
+                        // 2. "X GB" format (new format without limit - frontend will add limit from quota)
+                        const matchWithLimit = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
+                        const matchWithoutLimit = adminConsumptionStr.match(/^([\d.]+)\s*(GB|MB)/i);
+                        
+                        if (matchWithLimit) {
+                            // Old format: "X / Y GB"
+                            const extractedConsumption = parseFloat(matchWithLimit[1]) || 0;
+                            const extractedLimit = parseFloat(matchWithLimit[2]) || 0;
+                            
+                            // IMPORTANT: Check if the limit matches totalLimit (not adminLimit)
+                            // If it matches totalLimit, this is actually total consumption, not admin consumption
+                            // Admin consumption should have a limit that matches admin quota, not total bundle size
+                            const adminQuota = adminLimit || 0;
+                            const totalBundleLimit = totalLimitForValidation || 0;
+                            // If extracted limit is closer to totalLimit than adminQuota, it's likely total consumption
+                            const isLikelyTotalConsumption = adminQuota > 0 && extractedLimit > adminQuota && 
+                                                             (totalBundleLimit === 0 || Math.abs(extractedLimit - totalBundleLimit) < Math.abs(extractedLimit - adminQuota));
+                            
+                            if (isLikelyTotalConsumption) {
+                                // This looks like total consumption (e.g., "71.21 / 77 GB" where 77 is totalLimit, not adminLimit)
+                                // Don't use it as admin consumption - will try fallback extraction
+                                adminConsumption = 0;
+                            } else {
+                                // This looks like valid admin consumption (e.g., "17.11 / 15 GB" where 15 is admin quota)
+                                // Convert MB to GB if needed
+                                if (matchWithLimit[3] && matchWithLimit[3].toUpperCase() === 'MB' && extractedConsumption > 0) {
+                                    adminConsumption = extractedConsumption / 1024;
+                                } else {
+                                    adminConsumption = extractedConsumption;
+                                }
+                            }
+                        } else if (matchWithoutLimit) {
+                            // New format: "X GB" (without limit)
+                            adminConsumption = parseFloat(matchWithoutLimit[1]) || 0;
+                            // Convert MB to GB if needed
+                            if (matchWithoutLimit[2] && matchWithoutLimit[2].toUpperCase() === 'MB' && adminConsumption > 0) {
+                                adminConsumption = adminConsumption / 1024;
+                            }
+                        } else {
+                            // Try to extract just the number
+                            const numMatch = adminConsumptionStr.match(/^([\d.]+)/);
+                            if (numMatch) {
+                                adminConsumption = parseFloat(numMatch[1]) || 0;
+                            }
+                        }
+                    }
+                } catch (parseError) {
+                    console.warn('⚠️ Error parsing adminConsumption:', parseError);
+                }
+            }
+            
+            // Fallback 1: Extract from consumptions array (U-Share Main circle) if adminConsumption is still 0
+            if (adminConsumption === 0 && alfaData.consumptions && Array.isArray(alfaData.consumptions) && alfaData.consumptions.length > 0) {
+                const uShareMain = alfaData.consumptions.find(c => 
+                    c.planName && c.planName.toLowerCase().includes('u-share main')
+                ) || alfaData.consumptions[0]; // Fallback to first circle
+                
+                if (uShareMain) {
+                    if (uShareMain.used) {
+                        const usedStr = String(uShareMain.used).trim();
+                        const usedMatch = usedStr.match(/^([\d.]+)/);
+                        adminConsumption = usedMatch ? parseFloat(usedMatch[1]) : parseFloat(usedStr) || 0;
+                    } else if (uShareMain.usage) {
+                        const usageStr = String(uShareMain.usage).trim();
+                        const usageMatch = usageStr.match(/^([\d.]+)/);
+                        adminConsumption = usageMatch ? parseFloat(usageMatch[1]) : parseFloat(usageStr) || 0;
+                    }
+                }
+            }
+            
+            // Fallback 2: Extract from primaryData (raw API response) if still not found (same as insights.js)
+            if (adminConsumption === 0 && hasAlfaData && alfaData.primaryData) {
+                try {
+                    const primaryData = alfaData.primaryData;
+                    
+                    // Look for U-Share Main service for admin consumption (NOT Mobile Internet!)
+                    if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue) && primaryData.ServiceInformationValue.length > 0) {
+                        // First pass: Look for U-Share Main service
+                        for (const service of primaryData.ServiceInformationValue) {
+                            const serviceName = (service.ServiceNameValue || '').toLowerCase();
+                            
+                            // Skip Mobile Internet - that's total consumption, not admin consumption
+                            if (serviceName.includes('mobile internet')) {
+                                continue;
+                            }
+                            
+                            // Look for U-Share Main service
+                            if (serviceName.includes('u-share') && serviceName.includes('main')) {
+                                if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                    for (const details of service.ServiceDetailsInformationValue) {
+                                        // Look for U-Share Main circle in SecondaryValue
+                                        if (details.SecondaryValue && Array.isArray(details.SecondaryValue)) {
+                                            const uShareMain = details.SecondaryValue.find(secondary => {
+                                                const bundleName = (secondary.BundleNameValue || '').toLowerCase();
+                                                return bundleName.includes('u-share main') || bundleName.includes('main');
+                                            });
+                                            
+                                            if (uShareMain && uShareMain.ConsumptionValue) {
+                                                let consumption = parseFloat(uShareMain.ConsumptionValue) || 0;
+                                                const consumptionUnit = uShareMain.ConsumptionUnitValue || '';
+                                                if (consumptionUnit === 'MB' && consumption > 0) {
+                                                    consumption = consumption / 1024;
+                                                }
+                                                adminConsumption = consumption;
+                                                break;
+                                            }
+                                        }
+                                        
+                                        // Fallback: Use ConsumptionValue from U-Share Main service details
+                                        if (adminConsumption === 0 && details.ConsumptionValue) {
+                                            let consumption = parseFloat(details.ConsumptionValue) || 0;
+                                            const consumptionUnit = details.ConsumptionUnitValue || '';
+                                            if (consumptionUnit === 'MB' && consumption > 0) {
+                                                consumption = consumption / 1024;
+                                            }
+                                            adminConsumption = consumption;
+                                            break;
+                                        }
+                                    }
+                                    if (adminConsumption > 0) break;
+                                }
+                            }
+                        }
+                    }
+                } catch (primaryError) {
+                    console.warn(`⚠️ Error extracting adminConsumption from primaryData for admin ${doc.id}:`, primaryError);
                 }
             }
 
@@ -2409,11 +3068,21 @@ class HomeManager {
                 totalLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
             }
 
-            // Check if admin consumption is fully used or exceeds admin quota
-            const isAdminQuotaFull = adminLimit > 0 && adminConsumption >= adminLimit - 0.01;
+            // Check if admin consumption is 95% or more of admin quota
+            // Note: 100% users are already excluded via Finished Services filter above
+            const adminPercent = adminLimit > 0 ? (adminConsumption / adminLimit) * 100 : 0;
+            const isHighAdminConsumption = adminLimit > 0 && adminConsumption > 0 && adminPercent >= 95;
             
-            // Show only if admin quota is full (and we already excluded Finished Services admins above)
-            if (isAdminQuotaFull) {
+            // Debug logging (can be removed later)
+            if (adminLimit > 0) {
+                console.log(`[High Admin Consumption Filter] ${data.name || data.phone}: adminConsumption=${adminConsumption.toFixed(2)} GB, adminLimit=${adminLimit.toFixed(2)} GB, percent=${adminPercent.toFixed(2)}%, isHigh=${isHighAdminConsumption ? 'YES' : 'NO'}`);
+                if (adminConsumption === 0) {
+                    console.log(`  ⚠️ Debug: alfaData.adminConsumption=`, alfaData.adminConsumption, `consumptions=`, alfaData.consumptions ? `${alfaData.consumptions.length} items` : 'missing');
+                }
+            }
+            
+            // Show only if admin quota usage is 95% or more (and we already excluded Finished Services admins above)
+            if (isHighAdminConsumption) {
                 // Get validity date
                 let validityDate = '';
                 if (alfaData.validityDate) {
@@ -2464,11 +3133,13 @@ class HomeManager {
         } else {
             services.forEach(service => {
                 const adminPercent = service.adminLimit > 0 ? (service.adminConsumption / service.adminLimit) * 100 : 0;
-                const adminProgressClass = adminPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+                // All admins in this table have 95%+ admin consumption, so show error (red) for all
+                const adminProgressClass = adminPercent >= 95 ? 'progress-fill error' : 'progress-fill';
                 const adminProgressWidth = Math.min(adminPercent, 100);
                 
                 const totalPercent = service.totalLimit > 0 ? (service.totalConsumption / service.totalLimit) * 100 : 0;
-                const totalProgressClass = totalPercent >= 100 ? 'progress-fill error' : (totalPercent >= 90 ? 'progress-fill error' : (totalPercent >= 70 ? 'progress-fill warning' : 'progress-fill'));
+                // Total progress bar: error at 90%+ (matching available-services table logic)
+                const totalProgressClass = totalPercent >= 90 ? 'progress-fill error' : 'progress-fill';
                 const totalProgressWidth = Math.min(totalPercent, 100);
                 
                 tableRows += `
@@ -2880,5 +3551,458 @@ window.addEventListener('beforeunload', () => {
             clearInterval(homeManagerInstance.periodicRefreshInterval);
             console.log('🔄 [Home] Periodic refresh cleared');
         }
+    }
+});
+
+// Add waiting balance functions to HomeManager class
+Object.assign(HomeManager.prototype, {
+    getWaitingBalanceData() {
+        try {
+            const userId = this.getCurrentUserId() || 'default';
+            const key = `waitingBalance_${userId}`;
+            const data = localStorage.getItem(key);
+            return data ? JSON.parse(data) : [];
+        } catch (error) {
+            console.error('Error getting waiting balance data:', error);
+            return [];
+        }
+    },
+    
+    setWaitingBalanceData(data) {
+        try {
+            const userId = this.getCurrentUserId() || 'default';
+            const key = `waitingBalance_${userId}`;
+            localStorage.setItem(key, JSON.stringify(data));
+            this.updateCardCounts();
+        } catch (error) {
+            console.error('Error setting waiting balance data:', error);
+        }
+    },
+    
+    removeFromWaitingBalance(adminId) {
+        const waitingBalance = this.getWaitingBalanceData();
+        const filtered = waitingBalance.filter(item => item.adminId !== adminId);
+        this.setWaitingBalanceData(filtered);
+    },
+    
+    async openWaitingBalanceModal() {
+        try {
+            this.showLoadingModal();
+            const waitingBalance = this.getWaitingBalanceData();
+            if (waitingBalance.length === 0) {
+                this.hideLoadingModal();
+                this.showWaitingBalanceModal([]);
+                return;
+            }
+            
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized.');
+                }
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
+                snapshot = firebaseSnapshot;
+            }
+            
+            const waitingBalanceData = [];
+            const waitingBalanceMap = new Map(waitingBalance.map(item => [item.adminId, item]));
+            
+            snapshot.docs.forEach(doc => {
+                const markedData = waitingBalanceMap.get(doc.id);
+                if (markedData) {
+                    const data = doc.data();
+                    const alfaData = data.alfaData || {};
+                    
+                    let currentBalance = 0;
+                    if (alfaData.balance) {
+                        const balanceStr = String(alfaData.balance).trim();
+                        const match = balanceStr.replace(/\$/g, '').trim().match(/-?[\d.]+/);
+                        currentBalance = match ? parseFloat(match[0]) : 0;
+                    }
+                    
+                    waitingBalanceData.push({
+                        id: doc.id,
+                        name: data.name || 'N/A',
+                        phone: data.phone || 'N/A',
+                        markedBalance: markedData.markedBalance,
+                        currentBalance: currentBalance,
+                        difference: currentBalance - markedData.markedBalance,
+                        alfaData: alfaData
+                    });
+                }
+            });
+            
+            this.hideLoadingModal();
+            this.showWaitingBalanceModal(waitingBalanceData);
+        } catch (error) {
+            console.error('Error opening Waiting Balance modal:', error);
+            this.hideLoadingModal();
+            alert('Error loading data: ' + error.message);
+        }
+    },
+    
+    showWaitingBalanceModal(data) {
+        const existingModal = document.getElementById('waitingBalanceModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        let tableRows = '';
+        if (data.length === 0) {
+            tableRows = `
+                <tr>
+                    <td colspan="5" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No admins in waiting balance
+                    </td>
+                </tr>
+            `;
+        } else {
+            data.forEach(item => {
+                const differenceColor = item.difference >= 0 ? '#10b981' : '#ef4444';
+                tableRows += `
+                    <tr>
+                        <td>
+                            <div>
+                                <div class="subscriber-name">${this.escapeHtml(item.name)}</div>
+                                <div class="subscriber-phone">${this.escapeHtml(item.phone)}</div>
+                            </div>
+                        </td>
+                        <td>$${item.markedBalance.toFixed(2)}</td>
+                        <td>$${item.currentBalance.toFixed(2)}</td>
+                        <td style="color: ${differenceColor}; font-weight: bold;">
+                            ${item.difference >= 0 ? '+' : ''}$${item.difference.toFixed(2)}
+                        </td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn view-btn" data-subscriber-id="${item.id}" title="View Details">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${item.id}">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+        
+        const modal = document.createElement('div');
+        modal.id = 'waitingBalanceModal';
+        modal.className = 'available-services-modal-overlay';
+        modal.innerHTML = `
+            <div class="available-services-modal">
+                <div class="available-services-modal-inner">
+                    <div class="available-services-modal-header">
+                        <h2>Waiting Balance</h2>
+                        <button class="modal-close-btn" onclick="this.closest('.available-services-modal-overlay').remove()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="available-services-modal-body">
+                        <div class="table-container">
+                            <table class="available-services-table">
+                                <thead>
+                                    <tr>
+                                        <th>Admin</th>
+                                        <th>Marked $</th>
+                                        <th>Current $</th>
+                                        <th>Difference</th>
+                                        <th class="actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        
+        modal.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.subscriberId;
+                const admin = data.find(item => item.id === id);
+                if (admin) {
+                    this.viewSubscriberDetails(id, data);
+                }
+            });
+        });
+        
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleWaitingBalanceMenu(id, e.currentTarget, data);
+            });
+        });
+        
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+    },
+    
+    toggleWaitingBalanceMenu(id, button, data) {
+        document.querySelectorAll('.dropdown-menu').forEach(menu => {
+            if (menu.dataset.subscriberId !== id) {
+                menu.remove();
+            }
+        });
+        
+        let menu = document.querySelector(`.dropdown-menu[data-subscriber-id="${id}"]`);
+        if (menu) {
+            menu.remove();
+            return;
+        }
+        
+        menu = document.createElement('div');
+        menu.className = 'dropdown-menu';
+        menu.dataset.subscriberId = id;
+        menu.innerHTML = `
+            <div class="dropdown-item" data-action="unmark" style="color: #ef4444;">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                </svg>
+                Unmark
+            </div>
+        `;
+        
+        const rect = button.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.top = `${rect.bottom + 4}px`;
+        menu.style.right = `${window.innerWidth - rect.right}px`;
+        menu.style.zIndex = '10000';
+        
+        document.body.appendChild(menu);
+        
+        menu.querySelectorAll('.dropdown-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = item.dataset.action;
+                this.handleWaitingBalanceMenuAction(action, id, data);
+                menu.remove();
+            });
+        });
+        
+        setTimeout(() => {
+            const clickHandler = (e) => {
+                if (!menu.contains(e.target) && e.target !== button) {
+                    menu.remove();
+                    document.removeEventListener('click', clickHandler);
+                }
+            };
+            document.addEventListener('click', clickHandler);
+        }, 0);
+    },
+    
+    async     handleWaitingBalanceMenuAction(action, id, data) {
+        if (action === 'unmark') {
+            this.removeFromWaitingBalance(id);
+            this.openWaitingBalanceModal();
+            window.dispatchEvent(new Event('storage'));
+        }
+    },
+    
+    async showWaitingBalanceStatement(adminId, data) {
+        // Find admin name from data
+        const admin = data.find(item => item.id === adminId);
+        const adminName = admin ? admin.name : 'Admin';
+        
+        // Show modal immediately with loading state
+        this.createWaitingBalanceStatementModal(adminId, adminName, null);
+        
+        try {
+            // Fetch balance history from backend
+            const baseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
+            const response = await fetch(`${baseURL}/api/admin/${adminId}/balance-history`);
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.error('❌ Error fetching balance history:', result.error);
+                this.updateWaitingBalanceStatementModal(adminId, [], 'error');
+                return;
+            }
+            
+            const balanceHistory = result.data || [];
+            this.updateWaitingBalanceStatementModal(adminId, balanceHistory);
+        } catch (error) {
+            console.error('❌ Error showing statement:', error);
+            this.updateWaitingBalanceStatementModal(adminId, [], 'error');
+        }
+    },
+    
+    createWaitingBalanceStatementModal(adminId, adminName, balanceHistory) {
+        const existingModal = document.getElementById('waitingBalanceStatementModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        let content = '';
+        if (balanceHistory === null) {
+            content = `
+                <div class="statement-loading">
+                    <div class="statement-spinner"></div>
+                    <p>Loading balance history...</p>
+                </div>
+            `;
+        } else if (balanceHistory.length === 0) {
+            content = `
+                <div class="statement-empty">
+                    <p>No balance history available yet.</p>
+                    <p class="statement-empty-hint">Balance history will appear here after successful refreshes.</p>
+                </div>
+            `;
+        } else {
+            content = `
+                <div class="statement-table">
+                    <div class="statement-table-header">
+                        <div class="statement-col-date">Date</div>
+                        <div class="statement-col-balance">Balance</div>
+                    </div>
+                    <div class="statement-table-body">
+                        ${balanceHistory.map(entry => {
+                            const dateTime = this.formatDateTime(new Date(entry.timestamp || entry.date));
+                            return `
+                                <div class="statement-table-row">
+                                    <div class="statement-col-date">${dateTime.date} ${dateTime.time}</div>
+                                    <div class="statement-col-balance">${this.escapeHtml(entry.balance || 'N/A')}</div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        const modal = document.createElement('div');
+        modal.id = 'waitingBalanceStatementModal';
+        modal.className = 'statement-modal-overlay';
+        modal.innerHTML = `
+            <div class="statement-modal-container">
+                <div class="statement-modal-header">
+                    <h3>Statement - ${this.escapeHtml(adminName)}</h3>
+                    <button class="statement-modal-close" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="statement-modal-content">
+                    ${content}
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        const closeBtn = modal.querySelector('.statement-modal-close');
+        closeBtn.addEventListener('click', () => {
+            modal.remove();
+        });
+        
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+        
+        const escapeHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escapeHandler);
+            }
+        };
+        document.addEventListener('keydown', escapeHandler);
+    },
+    
+    updateWaitingBalanceStatementModal(adminId, balanceHistory, error = null) {
+        const modal = document.getElementById('waitingBalanceStatementModal');
+        if (!modal) return;
+        
+        const contentDiv = modal.querySelector('.statement-modal-content');
+        if (!contentDiv) return;
+        
+        let content = '';
+        if (error === 'error') {
+            content = `
+                <div class="statement-empty">
+                    <p>Failed to load balance history.</p>
+                    <p class="statement-empty-hint">Please try again later.</p>
+                </div>
+            `;
+        } else if (balanceHistory.length === 0) {
+            content = `
+                <div class="statement-empty">
+                    <p>No balance history available yet.</p>
+                    <p class="statement-empty-hint">Balance history will appear here after successful refreshes.</p>
+                </div>
+            `;
+        } else {
+            content = `
+                <div class="statement-table">
+                    <div class="statement-table-header">
+                        <div class="statement-col-date">Date</div>
+                        <div class="statement-col-balance">Balance</div>
+                    </div>
+                    <div class="statement-table-body">
+                        ${balanceHistory.map(entry => {
+                            const dateTime = this.formatDateTime(new Date(entry.timestamp || entry.date));
+                            return `
+                                <div class="statement-table-row">
+                                    <div class="statement-col-date">${dateTime.date} ${dateTime.time}</div>
+                                    <div class="statement-col-balance">${this.escapeHtml(entry.balance || 'N/A')}</div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        contentDiv.innerHTML = content;
+    },
+    
+    formatDateTime(date) {
+        if (!date || isNaN(date.getTime())) {
+            return { date: 'N/A', time: '' };
+        }
+        
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        
+        return {
+            date: `${day}/${month}/${year}`,
+            time: `${hours}:${minutes}`
+        };
     }
 });

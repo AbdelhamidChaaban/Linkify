@@ -1256,6 +1256,14 @@ class InsightsManager {
         // Start periodic cleanup of stale manual updates (every 30 seconds)
         this.startCacheCleanup();
         
+        // Listen for storage events to refresh table when waiting balance changes
+        window.addEventListener('storage', () => {
+            if (this.renderTable) {
+                this.renderTable();
+                this.bindActionButtons();
+            }
+        });
+        
         // Wait for Firebase Auth and Firestore to be ready
         this.waitForAuth().then(() => {
             return this.waitForFirebase();
@@ -2403,55 +2411,98 @@ class InsightsManager {
     }
     
     getStatusIndicator(subscriber) {
-        // Determine status based on admin status and expiration days
+        // Determine status based on admin status
         const isInactive = subscriber.status === 'inactive';
         const expirationDays = typeof subscriber.expiration === 'number' ? subscriber.expiration : parseInt(subscriber.expiration) || 0;
         
-        // Determine status color and icon
-        let statusClass = 'status-indicator';
-        let statusIcon = '';
+        // Determine tooltip text
         let tooltipText = '';
-        
         if (isInactive) {
-            // Red: Inactive
-            statusClass += ' status-inactive';
-            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="15" y1="9" x2="9" y2="15"/>
-                <line x1="9" y1="9" x2="15" y2="15"/>
-            </svg>`;
             tooltipText = 'Inactive';
         } else if (expirationDays <= 0) {
-            // Red: Expired
-            statusClass += ' status-expired';
-            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>`;
             tooltipText = 'Expired';
         } else if (expirationDays < 7) {
-            // Yellow: Expiring soon
-            statusClass += ' status-warning';
-            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                <line x1="12" y1="9" x2="12" y2="13"/>
-                <line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>`;
             tooltipText = `Expiring in ${expirationDays} day${expirationDays !== 1 ? 's' : ''}`;
         } else {
-            // Green: Active and healthy
-            statusClass += ' status-active';
-            statusIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                <polyline points="22 4 12 14.01 9 11.01"/>
-            </svg>`;
             tooltipText = `Active (${expirationDays} days remaining)`;
         }
         
-        return `<div class="${statusClass}" title="${tooltipText}">
-            ${statusIcon}
-        </div>`;
+        const checkboxId = `neoncheckbox-${subscriber.id}`;
+        const isMarked = this.isAdminInWaitingBalance(subscriber.id);
+        const markedIcon = isMarked ? '<span class="waiting-balance-mark-icon" title="In Waiting Balance">$</span>' : '';
+        
+        return `
+            <div class="status-indicator-wrapper">
+                <div class="flam-checkbox-holder" title="${tooltipText}">
+                    <input type="checkbox" id="${checkboxId}" class="flam-trigger" data-subscriber-id="${subscriber.id}" />
+                    <label for="${checkboxId}" class="flam-switch">
+                        <div class="flam-cube">
+                            <span class="flam-indicator">✓</span>
+                            <div class="flam-fire-container">
+                                <div class="flam-flame"></div>
+                            </div>
+                            <div class="flam-sparks">
+                                <div class="flam-spark" style="--spark-offset-x:15; --spark-offset-y:80; top:10%; left:30%; width:3px; height:3px;"></div>
+                                <div class="flam-spark" style="--spark-offset-x:-25; --spark-offset-y:90; top:5%; left:50%; width:4px; height:4px;"></div>
+                                <div class="flam-spark" style="--spark-offset-x:20; --spark-offset-y:100; top:0%; left:70%; width:3px; height:3px;"></div>
+                            </div>
+                        </div>
+                        <div class="flam-aura"></div>
+                    </label>
+                </div>
+                ${markedIcon}
+                <button class="waiting-balance-dollar-btn" data-subscriber-id="${subscriber.id}" style="display: none;" title="Add to Waiting Balance">$</button>
+            </div>
+        `;
+    }
+    
+    isAdminInWaitingBalance(adminId) {
+        const waitingBalance = this.getWaitingBalanceData();
+        return waitingBalance.some(item => item.adminId === adminId);
+    }
+    
+    getWaitingBalanceData() {
+        try {
+            const userId = this.currentUserId || 'default';
+            const key = `waitingBalance_${userId}`;
+            const data = localStorage.getItem(key);
+            return data ? JSON.parse(data) : [];
+        } catch (error) {
+            console.error('Error getting waiting balance data:', error);
+            return [];
+        }
+    }
+    
+    setWaitingBalanceData(data) {
+        try {
+            const userId = this.currentUserId || 'default';
+            const key = `waitingBalance_${userId}`;
+            localStorage.setItem(key, JSON.stringify(data));
+        } catch (error) {
+            console.error('Error setting waiting balance data:', error);
+        }
+    }
+    
+    addToWaitingBalance(adminId, balance) {
+        const waitingBalance = this.getWaitingBalanceData();
+        // Check if already exists
+        const existingIndex = waitingBalance.findIndex(item => item.adminId === adminId);
+        if (existingIndex >= 0) {
+            return false; // Already exists
+        }
+        waitingBalance.push({
+            adminId: adminId,
+            markedBalance: balance,
+            markedDate: Date.now()
+        });
+        this.setWaitingBalanceData(waitingBalance);
+        return true; // Successfully added
+    }
+    
+    removeFromWaitingBalance(adminId) {
+        const waitingBalance = this.getWaitingBalanceData();
+        const filtered = waitingBalance.filter(item => item.adminId !== adminId);
+        this.setWaitingBalanceData(filtered);
     }
     
     bindActionButtons() {
@@ -2471,6 +2522,41 @@ class InsightsManager {
                 e.preventDefault();
                 const id = e.currentTarget.dataset.subscriberId;
                 this.toggleMenu(id, e.currentTarget);
+            });
+        });
+        
+        // Checkbox change handlers - show/hide $ button
+        document.querySelectorAll('.flam-trigger').forEach(checkbox => {
+            checkbox.addEventListener('change', (e) => {
+                const adminId = e.target.dataset.subscriberId;
+                const dollarBtn = document.querySelector(`.waiting-balance-dollar-btn[data-subscriber-id="${adminId}"]`);
+                if (dollarBtn) {
+                    dollarBtn.style.display = e.target.checked ? 'inline-block' : 'none';
+                }
+            });
+        });
+        
+        // $ button click handlers - add to waiting balance
+        document.querySelectorAll('.waiting-balance-dollar-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const adminId = e.currentTarget.dataset.subscriberId;
+                const subscriber = this.subscribers.find(s => s.id === adminId);
+                if (subscriber) {
+                    const balance = (subscriber.balance != null && !isNaN(subscriber.balance)) ? subscriber.balance : 0;
+                    const added = this.addToWaitingBalance(adminId, balance);
+                    if (added) {
+                        // Refresh table to show $ icon
+                        this.renderTable();
+                        this.bindActionButtons();
+                        // Show toast notification
+                        if (typeof notification !== 'undefined') {
+                            notification.set({ delay: 3000 });
+                            notification.success('An admin marked for waiting balance');
+                        }
+                    }
+                }
             });
         });
     }
