@@ -13,6 +13,9 @@ class AdminsManager {
         this.form = null;
         this.editingAdminId = null; // Track which admin is being edited
         this.currentUserId = null; // Current authenticated user ID
+        this.unsubscribe = null; // Real-time listener unsubscribe function
+        this.isListenerActive = false; // Track if listener is active
+        this.hasReceivedInitialData = false; // Track if we've received initial data
         
         this.init();
     }
@@ -44,13 +47,25 @@ class AdminsManager {
         return /SamsungBrowser/i.test(ua) || /SAMSUNG/i.test(ua);
     }
 
-    // Load admins from Firebase/API
-    async loadAdmins() {
+    // Load admins from Firebase using real-time listener
+    loadAdmins() {
+        // CRITICAL: Unsubscribe from existing listener first to prevent multiple listeners
+        if (this.unsubscribe) {
+            console.log('🔄 [Admins] Unsubscribing from existing listener before creating new one');
+            try {
+                this.unsubscribe();
+            } catch (e) {
+                console.warn('⚠️ [Admins] Error unsubscribing:', e);
+            }
+            this.unsubscribe = null;
+            this.isListenerActive = false;
+        }
+        
         try {
             // Get current user ID - CRITICAL for data isolation
             this.currentUserId = this.getCurrentUserId();
             if (!this.currentUserId) {
-                console.error('❌ No authenticated user found. Please log in.');
+                console.error('❌ [Admins] No authenticated user found. Please log in.');
                 const tbody = document.getElementById('adminsTableBody');
                 if (tbody) {
                     tbody.innerHTML = `
@@ -65,154 +80,216 @@ class AdminsManager {
                 return;
             }
             
-            // Log browser info for debugging
-            if (this.isSamsungBrowser()) {
-                console.log('🌐 Samsung Internet browser detected - using enhanced compatibility mode');
-            }
-            
-            // Try to get all admins for this user only
-            let snapshot;
-            try {
-                // CRITICAL: Filter admins by userId to ensure each user only sees their own admins
-                // Get admins with timeout handling
-                // Firestore will automatically use cache if server is unavailable (thanks to persistence)
-                const queryPromise = db.collection('admins').where('userId', '==', this.currentUserId).get();
-                
-                // Better timeout handling for Samsung Internet browser compatibility
-                let timeoutId;
-                const timeoutPromise = new Promise((_, reject) => {
-                    timeoutId = setTimeout(() => reject(new Error('Firestore timeout')), 20000); // 20s timeout
-                });
-                
-                // Use Promise.race with cleanup for Samsung Internet compatibility
-                const isSamsung = this.isSamsungBrowser();
-                if (isSamsung) {
-                    // Samsung Internet: Try direct query first, then add timeout protection
-                    try {
-                        snapshot = await Promise.race([
-                            queryPromise.then(result => {
-                                if (timeoutId) clearTimeout(timeoutId);
-                                return result;
-                            }),
-                            timeoutPromise
-                        ]);
-                    } catch (raceError) {
-                        if (timeoutId) clearTimeout(timeoutId);
-                        // Fallback: Try direct query without timeout for Samsung Internet
-                        console.warn('⚠️ Promise.race failed on Samsung Internet, trying direct query:', raceError);
-                        try {
-                            snapshot = await queryPromise;
-                        } catch (directError) {
-                            console.error('❌ Direct query also failed:', directError);
-                            throw directError;
-                        }
-                    }
-                } else {
-                    // Other browsers: Use standard Promise.race
-                    snapshot = await Promise.race([
-                        queryPromise.then(result => {
-                            if (timeoutId) clearTimeout(timeoutId);
-                            return result;
-                        }),
-                        timeoutPromise
-                    ]);
-                }
-                
-                // Check if data is from cache (offline mode)
-                if (snapshot && snapshot.metadata && snapshot.metadata.fromCache) {
-                    console.log('ℹ️ Loaded admins from cache (offline mode)');
-                } else if (snapshot) {
-                    console.log('✅ Loaded admins from server');
-
-                }
-            } catch (error) {
-                console.warn('⚠️ Firestore query timeout or error:', error.message);
-                
-                // Firestore persistence should have cached data, but if not, show error
-                this.admins = [];
-                this.renderTable();
-                this.updatePagination();
-                this.updatePageInfo();
-                
-                // Show user-friendly error message
-                const tbody = document.getElementById('adminsTableBody');
-                if (tbody) {
-                    const isSamsung = this.isSamsungBrowser();
-                    tbody.innerHTML = `
-                        <tr>
-                            <td colspan="5" class="empty-state" style="text-align: center; padding: 3rem;">
-                                <p style="color: #f59e0b; margin-bottom: 1rem;">
-                                    ⚠️ Connection timeout. Firestore is operating in offline mode.
-                                </p>
-                                ${isSamsung ? '<p style="color: #3b82f6; margin-bottom: 1rem; font-size: 0.9rem;">Detected Samsung Internet browser. If issues persist, try updating your browser or clearing cache.</p>' : ''}
-                                <p style="color: #94a3b8; margin-bottom: 1rem; font-size: 0.9rem;">
-                                    If you have previously loaded admins, they should appear automatically when connection is restored.
-                                </p>
-                                <button onclick="location.reload()" style="padding: 0.5rem 1rem; background: #3a0a4e; color: white; border: none; border-radius: 0.5rem; cursor: pointer; margin-right: 0.5rem;">
-                                    Retry
-                                </button>
-                                ${isSamsung ? '<button onclick="window.location.href=\'/pages/home.html\'" style="padding: 0.5rem 1rem; background: #64748b; color: white; border: none; border-radius: 0.5rem; cursor: pointer;">Go to Home</button>' : ''}
-                            </td>
-                        </tr>
-                    `;
-                }
+            // Check if Firebase is available
+            if (typeof db === 'undefined') {
+                console.error('❌ [Admins] Firestore (db) is not initialized. Real-time updates disabled.');
                 return;
             }
             
-            // Process snapshot with error handling for Samsung Internet compatibility
-            if (!snapshot || !snapshot.docs) {
-                console.error('❌ Invalid snapshot received:', snapshot);
-                throw new Error('Invalid Firestore snapshot - no documents array');
+            // Log browser info for debugging
+            if (this.isSamsungBrowser()) {
+                console.log('🌐 [Admins] Samsung Internet browser detected - using enhanced compatibility mode');
             }
             
-            this.admins = [];
-            snapshot.docs.forEach(doc => {
-                try {
-                    const data = doc.data();
-                    if (data && doc.id) {
-                        this.admins.push({
-                            id: doc.id,
-                            ...data
-                        });
-                    } else {
-                        console.warn('⚠️ Skipping invalid document:', doc.id);
-                    }
-                } catch (error) {
-                    console.error('❌ Error processing document:', doc.id, error);
-                }
+            console.log(`🔄 [Admins] Setting up real-time listener for user: ${this.currentUserId}`);
+            this.isListenerActive = true;
+            
+            // Set up query aligned with Firestore rules
+            // Rule: Users can only read admins where userId matches their auth.uid
+            const adminsQuery = db.collection('admins').where('userId', '==', this.currentUserId);
+            
+            // Note: Firestore persistence is enabled in firebase-config.js with synchronizeTabs: false
+            // This provides offline support and caching without multi-tab synchronization warnings
+            
+            // Set up real-time listener with explicit error handling
+            console.log('📡 [Admins] Attaching Firestore listener with query:', {
+                collection: 'admins',
+                filter: 'userId == ' + this.currentUserId
             });
             
-            // Sort alphabetically by name (A to Z) - optimized
-            // Sorting is now handled in applySearchFilter() after filtering
-            // Apply search filter if there's a search query
-            this.applySearchFilter();
+            this.unsubscribe = adminsQuery.onSnapshot(
+                (snapshot) => {
+                    // Check if this is from cache (offline mode) or server
+                    const source = snapshot.metadata && snapshot.metadata.fromCache ? 'cache' : 'server';
+                    console.log(`📡 [Admins] Admins snapshot received: ${snapshot.docs.length} docs (source: ${source})`);
+                    
+                    // Process snapshot
+                    if (!snapshot || !snapshot.docs) {
+                        console.error('❌ [Admins] Invalid snapshot received:', snapshot);
+                        return;
+                    }
+                    
+                    const previousAdminIds = new Set(this.admins.map(a => a.id));
+                    const newAdmins = [];
+                    
+                    snapshot.docs.forEach(doc => {
+                        try {
+                            const data = doc.data();
+                            if (data && doc.id) {
+                                newAdmins.push({
+                                    id: doc.id,
+                                    ...data
+                                });
+                            }
+                        } catch (error) {
+                            console.error(`❌ [Admins] Error processing document ${doc.id}:`, error);
+                        }
+                    });
+                    
+                    // CRITICAL: Only update admins if we have valid data or this is from server
+                    const hasExistingAdmins = this.admins.length > 0;
+                    const hasNewAdmins = newAdmins.length > 0;
+                    const isFromServer = source === 'server';
+                    
+                    // Mark that we've received data if we have any admins
+                    if (hasNewAdmins) {
+                        this.hasReceivedInitialData = true;
+                    }
+                    
+                    if (isFromServer) {
+                        // Server data is authoritative - always use it
+                        this.admins = newAdmins;
+                        console.log(`✅ [Admins] Updated from server: ${newAdmins.length} admins`);
+                    } else if (hasNewAdmins) {
+                        // Cache has data - use it
+                        this.admins = newAdmins;
+                        console.log(`✅ [Admins] Updated from cache: ${newAdmins.length} admins`);
+                    } else if (hasExistingAdmins && !hasNewAdmins && source === 'cache') {
+                        // CRITICAL: Connection dropped, snapshot is empty, but we have cached data
+                        // DON'T clear - keep existing admins to prevent disappearing
+                        console.warn(`⚠️ [Admins] Connection dropped - snapshot empty but preserving ${this.admins.length} cached admins`);
+                        // DO NOT update this.admins - keep existing cached data
+                    } else if (!this.hasReceivedInitialData && !hasNewAdmins) {
+                        // First load and no data - this is okay, might be empty collection
+                        this.admins = newAdmins;
+                        this.hasReceivedInitialData = true;
+                        console.log(`ℹ️ [Admins] Initial load: ${newAdmins.length} admins (collection might be empty)`);
+                    } else {
+                        // Fallback: only update if we have new data or this is first load
+                        if (hasNewAdmins || !this.hasReceivedInitialData) {
+                            this.admins = newAdmins;
+                        } else {
+                            console.warn(`⚠️ [Admins] Ignoring empty snapshot update to preserve existing ${this.admins.length} admins`);
+                        }
+                    }
+                    
+                    // Apply search filter and render
+                    this.applySearchFilter();
+                    this.renderTable();
+                    this.updatePagination();
+                    this.updatePageInfo();
+                    
+                    // Hide loading state
+                    this.hideLoading();
+                },
+                (error) => {
+                    // Explicit error handling with detailed diagnostics
+                    console.error('❌ [Admins] Snapshot error:', {
+                        code: error.code,
+                        message: error.message,
+                        stack: error.stack
+                    });
+                    
+                    this.isListenerActive = false;
+                    
+                    // Handle specific error types with clear diagnostics
+                    if (error.code === 'permission-denied') {
+                        // Rule denial - security rules are blocking access
+                        console.error('❌ [Admins] PERMISSION DENIED - Firestore rules blocking access');
+                        console.error('❌ [Admins] Check Firestore rules allow: users can read admins where userId == auth.uid');
+                        console.error('❌ [Admins] User ID:', this.currentUserId);
+                        this.admins = [];
+                        this.applySearchFilter();
+                        this.renderTable();
+                        this.updatePagination();
+                        this.updatePageInfo();
+                        this.hideLoading();
+                        alert('Permission denied. Your Firestore security rules are blocking access to admins data.');
+                        return;
+                    } else if (error.code === 'unavailable' || error.code === 'deadline-exceeded') {
+                        // Transport/network issues
+                        console.warn('⚠️ [Admins] TRANSPORT ERROR - Firestore backend unavailable');
+                        console.warn('⚠️ [Admins] Error code:', error.code);
+                        console.warn('⚠️ [Admins] Operating in offline mode - preserving cached data');
+                        // Don't clear admins array - keep showing cached data
+                        this.hideLoading();
+                        return;
+                    } else if (error.code === 'unauthenticated' || error.message?.includes('auth')) {
+                        // Auth state issues
+                        console.error('❌ [Admins] AUTH ERROR - User authentication state invalid');
+                        console.error('❌ [Admins] Error code:', error.code);
+                        console.error('❌ [Admins] User ID:', this.currentUserId);
+                        this.hideLoading();
+                    } else {
+                        // Other unexpected errors
+                        console.error('❌ [Admins] UNEXPECTED ERROR in real-time listener');
+                        console.error('❌ [Admins] Error code:', error.code);
+                        console.error('❌ [Admins] Error message:', error.message);
+                        this.hideLoading();
+                    }
+                    
+                    // Try to reconnect after a delay (except for permission-denied)
+                    if (error.code !== 'permission-denied') {
+                        setTimeout(() => {
+                            console.log('🔄 [Admins] Attempting to reconnect real-time listener...');
+                            // Verify user is still authenticated before reconnecting
+                            const currentUserId = this.getCurrentUserId();
+                            if (currentUserId && typeof db !== 'undefined') {
+                                this.loadAdmins();
+                            } else {
+                                console.error('❌ [Admins] Cannot reconnect - user or Firebase not available');
+                                console.error('❌ [Admins] User ID:', currentUserId, 'Firebase available:', typeof db !== 'undefined');
+                            }
+                        }, 5000);
+                    }
+                }
+            );
             
-            // Update immediately for better responsiveness (no animation delay)
-            this.renderTable();
-            this.updatePagination();
-            this.updatePageInfo();
         } catch (error) {
-            console.error('Error loading admins:', error);
-            this.admins = [];
-            this.renderTable();
-            this.updatePagination();
-            this.updatePageInfo();
+            console.error('❌ [Admins] Error setting up real-time listener:', error);
+            this.isListenerActive = false;
+            this.hideLoading();
+            
+            // Show error in table
+            const tbody = document.getElementById('adminsTableBody');
+            if (tbody) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="empty-state" style="text-align: center; padding: 3rem; color: #ef4444;">
+                            <p>Error setting up real-time listener. Please refresh the page.</p>
+                            <p style="margin-top: 1rem;"><button onclick="location.reload()" style="padding: 0.5rem 1rem; background: #3a0a4e; color: white; border: none; border-radius: 0.5rem; cursor: pointer;">Retry</button></p>
+                        </td>
+                    </tr>
+                `;
+            }
         }
     }
     
     init() {
-        // Wait for Firebase auth to be ready and user to be authenticated
+        // CRITICAL: Wait for auth to be confirmed before setting up listeners
         this.waitForAuth().then(() => {
+            // Verify user is still authenticated
+            const currentUserId = this.getCurrentUserId();
+            if (!currentUserId) {
+                console.error('❌ [Admins] User not authenticated after wait - cannot initialize');
+                return;
+            }
+            
+            console.log(`✅ [Admins] User authenticated: ${currentUserId} - Initializing`);
+            
             this.bindEvents();
             this.initModal();
             this.showLoading();
             // Wait for Firebase to be ready
             return this.waitForFirebase();
         }).then(() => {
-            this.loadAdmins().then(() => {
-                // Check if we should open edit modal from URL hash (e.g., #edit-{adminId})
+            // Initialize real-time listener ONLY after auth is confirmed
+            this.loadAdmins();
+            // Check if we should open edit modal from URL hash (e.g., #edit-{adminId})
+            // Use setTimeout to ensure listener has time to load data first
+            setTimeout(() => {
                 this.checkUrlHash();
-            });
+            }, 1000);
         }).catch(error => {
             console.error('Firebase initialization error:', error);
             const tbody = document.getElementById('adminsTableBody');
@@ -230,21 +307,21 @@ class AdminsManager {
     
     async waitForAuth() {
         // Wait for Firebase auth to be available and user to be authenticated
-        // Samsung Internet browser compatibility: more robust error handling
+        // CRITICAL: Use onAuthStateChanged to ensure auth state is confirmed before proceeding
         let attempts = 0;
         const maxAttempts = 100; // Increased for slower devices
         
         while (attempts < maxAttempts) {
             try {
                 if (typeof auth !== 'undefined' && auth && auth.currentUser && auth.currentUser.uid) {
-                    // User is already logged in
+                    // User is already logged in - fast path
                     this.currentUserId = auth.currentUser.uid;
-                    console.log('✅ User already authenticated:', auth.currentUser.uid);
+                    console.log('✅ [Admins] User already authenticated (fast path):', auth.currentUser.uid);
                     return Promise.resolve();
                 }
                 
                 if (typeof auth !== 'undefined' && auth) {
-                    // Wait for auth state to be ready
+                    // Wait for auth state to be confirmed via onAuthStateChanged
                     return new Promise((resolve, reject) => {
                         let resolved = false;
                         const timeout = setTimeout(() => {
@@ -252,10 +329,12 @@ class AdminsManager {
                                 resolved = true;
                                 if (auth.currentUser && auth.currentUser.uid) {
                                     this.currentUserId = auth.currentUser.uid;
-                                    console.log('✅ User authenticated (timeout fallback):', auth.currentUser.uid);
+                                    console.log('✅ [Admins] User authenticated (timeout fallback):', auth.currentUser.uid);
+                                    unsubscribe();
                                     resolve();
                                 } else {
-                                    reject(new Error('Firebase auth timeout - user not authenticated'));
+                                    unsubscribe();
+                                    reject(new Error('Auth state timeout - user authentication state not confirmed'));
                                 }
                             }
                         }, 5000); // 5s timeout for auth state
@@ -268,19 +347,20 @@ class AdminsManager {
                                 unsubscribe(); // Stop listening after first state change
                                 if (user && user.uid) {
                                     this.currentUserId = user.uid;
-                                    console.log('✅ User authenticated:', user.uid);
+                                    console.log('✅ [Admins] Auth state confirmed - User authenticated:', user.uid);
                                     resolve();
                                 } else {
+                                    console.error('❌ [Admins] Auth state confirmed - No user signed in');
                                     reject(new Error('User not authenticated. Please log in.'));
                                 }
                             });
                             
-                            // Double-check if user logged in while setting up listener (Samsung Internet race condition)
+                            // Double-check if user logged in while setting up listener (race condition fix)
                             if (auth.currentUser && auth.currentUser.uid && !resolved) {
                                 clearTimeout(timeout);
                                 resolved = true;
                                 this.currentUserId = auth.currentUser.uid;
-                                console.log('✅ User authenticated (race condition fix):', auth.currentUser.uid);
+                                console.log('✅ [Admins] User authenticated (race condition fix):', auth.currentUser.uid);
                                 unsubscribe();
                                 resolve();
                             }
@@ -294,13 +374,13 @@ class AdminsManager {
                     });
                 }
             } catch (error) {
-                console.warn('⚠️ Auth check error (attempt ' + attempts + '):', error.message);
+                console.warn('⚠️ [Admins] Auth check error (attempt ' + attempts + '):', error.message);
             }
             
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
-        throw new Error('Firebase auth timeout - user not authenticated after ' + maxAttempts + ' attempts');
+        throw new Error('Firebase auth timeout - auth object not available after ' + maxAttempts + ' attempts');
     }
     
     checkUrlHash() {
@@ -370,6 +450,12 @@ class AdminsManager {
         }
         // Initialize filteredAdmins as empty array during loading
         this.filteredAdmins = [];
+    }
+    
+    hideLoading() {
+        // Loading state will be cleared when table is rendered with data
+        // This method exists for compatibility and can be used to clear loading state if needed
+        // No-op since renderTable() will replace the loading state
     }
     
     initModal() {

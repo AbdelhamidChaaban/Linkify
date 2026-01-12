@@ -116,27 +116,32 @@ class AIAssistantLoginForm {
             
             // IMPORTANT: Check if user is approved BEFORE allowing access
             console.log('[LOGIN CHECK] Starting approval check for user:', user.uid);
-            const userDoc = await db.collection('users').doc(user.uid).get();
+            let userDoc = await db.collection('users').doc(user.uid).get();
             
+            // Auto-create user document if it doesn't exist (with isApproved: true by default)
             if (!userDoc.exists) {
-                console.log('[LOGIN CHECK] User document does not exist - blocking login');
-                await auth.signOut();
-                localStorage.clear();
-                sessionStorage.clear();
-                throw new Error('Please contact 71829887');
+                console.log('[LOGIN CHECK] User document does not exist - auto-creating with isApproved: true');
+                await db.collection('users').doc(user.uid).set({ 
+                    isApproved: true,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+                // Re-fetch the document after creation
+                userDoc = await db.collection('users').doc(user.uid).get();
             }
             
             const userData = userDoc.data();
             console.log('[LOGIN CHECK] User data retrieved:', { isApproved: userData.isApproved, isBlocked: userData.isBlocked });
-            const isApproved = userData.isApproved === true; // Must be explicitly true
             
-            // Check approval status FIRST
-            if (!isApproved) {
-                console.log('[LOGIN CHECK] User NOT approved - blocking login and signing out');
+            // Only block if isApproved is explicitly false (allow undefined/null/true)
+            const isBlocked = userData.isApproved === false; // Only block if explicitly false
+            
+            // Check approval status - only block if explicitly set to false
+            if (isBlocked) {
+                console.log('[LOGIN CHECK] User is explicitly NOT approved (isApproved: false) - blocking login and signing out');
                 await auth.signOut();
                 localStorage.clear();
                 sessionStorage.clear();
-                throw new Error('Please contact 71829887');
+                throw new Error('Please contact 03475704');
             }
             
             console.log('[LOGIN CHECK] User is approved, checking block status...');

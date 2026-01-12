@@ -5,6 +5,8 @@ class HomeManager {
         this.unsubscribe = null;
         this.periodicRefreshInterval = null;
         this.currentUserId = null; // Current authenticated user ID
+        this.hasReceivedInitialData = false; // Track if we've received initial data from listener
+        this.isListenerActive = false; // Track if listener is currently active
         
         // Initialize after auth is ready
         this.init();
@@ -13,15 +15,36 @@ class HomeManager {
     async init() {
         // Wait for Firebase auth to be ready and user to be authenticated
         try {
+            // CRITICAL: Wait for auth to be confirmed before setting up listeners
             await this.waitForAuth();
             await this.waitForFirebase();
             
-            // Now initialize listeners and refresh
+            // Verify user is still authenticated before proceeding
+            const currentUserId = this.getCurrentUserId();
+            if (!currentUserId) {
+                console.error('❌ [Home] User not authenticated after wait - cannot initialize');
+                return;
+            }
+            
+            console.log(`✅ [Home] User authenticated: ${currentUserId} - Initializing listeners`);
+            
+            // Initialize card listeners first (doesn't depend on Firestore)
+            console.log('🔍 [Home] Initializing card listeners...');
             this.initCardListeners();
+            
+            // Initialize real-time listener ONLY after auth is confirmed
             this.initRealTimeListener();
             
-            // Also force a fresh fetch on initialization to ensure we have latest data
-            this.forceRefresh();
+            // Wait a bit for listener to get initial data, then do force refresh as backup
+            // This prevents race condition where forceRefresh clears data before listener loads
+            setTimeout(() => {
+                if (!this.hasReceivedInitialData) {
+                    console.log('⚠️ [Home] Listener hasn\'t received data yet, using forceRefresh as fallback');
+                    this.forceRefresh();
+                } else {
+                    console.log('✅ [Home] Listener already has data, skipping forceRefresh');
+                }
+            }, 2000);
             
             // Refresh when page becomes visible (user switches back to tab)
             document.addEventListener('visibilitychange', () => {
@@ -44,35 +67,53 @@ class HomeManager {
     
     async waitForAuth() {
         // Wait for Firebase auth to be available and user to be authenticated
+        // CRITICAL: Use onAuthStateChanged to ensure auth state is confirmed before proceeding
         let attempts = 0;
         while (attempts < 50) {
             if (typeof auth !== 'undefined' && auth) {
-                // Wait for auth state to be ready
+                // Wait for auth state to be confirmed via onAuthStateChanged
                 return new Promise((resolve, reject) => {
+                    let resolved = false;
                     const unsubscribe = auth.onAuthStateChanged((user) => {
                         unsubscribe(); // Stop listening after first state change
-                        if (user && user.uid) {
-                            this.currentUserId = user.uid;
-                            console.log('✅ [Home] User authenticated:', user.uid);
-                            resolve();
-                        } else {
-                            reject(new Error('User not authenticated. Please log in.'));
+                        if (!resolved) {
+                            resolved = true;
+                            if (user && user.uid) {
+                                this.currentUserId = user.uid;
+                                console.log('✅ [Home] Auth state confirmed - User authenticated:', user.uid);
+                                resolve();
+                            } else {
+                                console.error('❌ [Home] Auth state confirmed - No user signed in');
+                                reject(new Error('User not authenticated. Please log in.'));
+                            }
                         }
                     });
                     
-                    // If user is already logged in, resolve immediately
+                    // Also check if user is already logged in (faster path)
                     if (auth.currentUser && auth.currentUser.uid) {
-                        this.currentUserId = auth.currentUser.uid;
-                        console.log('✅ [Home] User already authenticated:', auth.currentUser.uid);
-                        unsubscribe();
-                        resolve();
+                        if (!resolved) {
+                            resolved = true;
+                            this.currentUserId = auth.currentUser.uid;
+                            console.log('✅ [Home] User already authenticated (fast path):', auth.currentUser.uid);
+                            unsubscribe();
+                            resolve();
+                        }
                     }
+                    
+                    // Timeout after 5 seconds if auth state doesn't change
+                    setTimeout(() => {
+                        if (!resolved) {
+                            resolved = true;
+                            unsubscribe();
+                            reject(new Error('Auth state timeout - user authentication state not confirmed'));
+                        }
+                    }, 5000);
                 });
             }
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
-        throw new Error('Firebase auth timeout - user not authenticated');
+        throw new Error('Firebase auth timeout - auth object not available');
     }
     
     async waitForFirebase() {
@@ -160,25 +201,53 @@ class HomeManager {
     }
 
     initRealTimeListener() {
+        // CRITICAL: Unsubscribe from existing listener first to prevent multiple listeners
+        if (this.unsubscribe) {
+            console.log('🔄 [Home] Unsubscribing from existing listener before creating new one');
+            try {
+                this.unsubscribe();
+            } catch (e) {
+                console.warn('⚠️ [Home] Error unsubscribing:', e);
+            }
+            this.unsubscribe = null;
+            this.isListenerActive = false;
+        }
+        
         // Check if Firebase is available
         if (typeof db === 'undefined') {
-            console.error('Firebase Firestore (db) is not initialized. Real-time updates disabled.');
+            console.error('❌ [Home] Firestore (db) is not initialized. Real-time updates disabled.');
             return;
         }
 
-        // Get current user ID - CRITICAL for data isolation
+        // CRITICAL: Verify user is authenticated before setting up listener
         const currentUserId = this.getCurrentUserId();
         if (!currentUserId) {
-            console.error('⚠️ [Home] No authenticated user found. Real-time updates disabled.');
+            console.error('❌ [Home] No authenticated user found. Real-time updates disabled.');
+            console.error('❌ [Home] This indicates an auth state issue - listener cannot be set up');
             return;
         }
         
-        // Set up real-time listener for admins collection - CRITICAL: Filter by userId
-        // Note: Compat version doesn't support includeMetadataChanges option
-        this.unsubscribe = db.collection('admins').where('userId', '==', currentUserId).onSnapshot(
+        console.log(`🔄 [Home] Setting up real-time listener for user: ${currentUserId}`);
+        this.isListenerActive = true;
+        
+        // Set up query aligned with Firestore rules
+        // Rule: Users can only read admins where userId matches their auth.uid
+        const adminsQuery = db.collection('admins').where('userId', '==', currentUserId);
+        
+        // Note: Firestore persistence is enabled in firebase-config.js with synchronizeTabs: false
+        // This provides offline support and caching without multi-tab synchronization warnings
+        
+        // Set up real-time listener with explicit error handling
+        console.log('📡 [Home] Attaching Firestore listener with query:', {
+            collection: 'admins',
+            filter: 'userId == ' + currentUserId
+        });
+        
+        this.unsubscribe = adminsQuery.onSnapshot(
             (snapshot) => {
-                // Check if this is from cache (offline mode)
+                // Check if this is from cache (offline mode) or server
                 const source = snapshot.metadata && snapshot.metadata.fromCache ? 'cache' : 'server';
+                console.log(`📡 [Home] Admins snapshot received: ${snapshot.docs.length} docs (source: ${source})`);
                 
                 // Log document changes to track deletions
                 let hasDeletions = false;
@@ -221,8 +290,47 @@ class HomeManager {
                     }
                 });
 
-                // Update admins array
-                this.admins = newAdmins;
+                // CRITICAL FIX: Prevent clearing admins when connection drops
+                // Only update admins if:
+                // 1. Data is from server (not cache), OR
+                // 2. We have valid new data, OR  
+                // 3. We've never received initial data (first load)
+                
+                const hasExistingAdmins = this.admins.length > 0;
+                const hasNewAdmins = newAdmins.length > 0;
+                const isFromServer = source === 'server';
+                
+                // Mark that we've received data if we have any admins
+                if (hasNewAdmins) {
+                    this.hasReceivedInitialData = true;
+                }
+                
+                if (isFromServer) {
+                    // Server data is authoritative - always use it
+                    this.admins = newAdmins;
+                    console.log(`✅ [Home] Updated from server: ${newAdmins.length} admins`);
+                } else if (hasNewAdmins) {
+                    // Cache has data - use it
+                    this.admins = newAdmins;
+                    console.log(`✅ [Home] Updated from cache: ${newAdmins.length} admins`);
+                } else if (hasExistingAdmins && !hasNewAdmins && source === 'cache') {
+                    // CRITICAL: Connection dropped, snapshot is empty, but we have cached data
+                    // DON'T clear - keep existing admins to prevent disappearing
+                    console.warn(`⚠️ [Home] Connection dropped - snapshot empty but preserving ${this.admins.length} cached admins`);
+                    // DO NOT update this.admins - keep existing cached data
+                } else if (!this.hasReceivedInitialData && !hasNewAdmins) {
+                    // First load and no data - this is okay, might be empty collection
+                    this.admins = newAdmins;
+                    this.hasReceivedInitialData = true; // Mark as received even if empty
+                    console.log(`ℹ️ [Home] Initial load: ${newAdmins.length} admins (collection might be empty)`);
+                } else {
+                    // Fallback: only update if we have new data or this is first load
+                    if (hasNewAdmins || !this.hasReceivedInitialData) {
+                        this.admins = newAdmins;
+                    } else {
+                        console.warn(`⚠️ [Home] Ignoring empty snapshot update to preserve existing ${this.admins.length} admins`);
+                    }
+                }
                 
                 const currentAdminIds = new Set(this.admins.map(a => a.id));
                 
@@ -248,25 +356,41 @@ class HomeManager {
                 this.updateCardCounts();
                 this.updateOpenModals();
 
-                // If using cache, warn and force a server refresh
+                // If using cache, log but don't force refresh (it will fail if offline)
                 if (source === 'cache') {
-                    console.warn('⚠️ [Home] Using cached data - forcing server refresh to ensure accuracy');
-                    // Force a server refresh to get latest data
-                    setTimeout(() => {
-                        this.forceRefresh();
-                    }, 1000);
+                    console.warn(`⚠️ [Home] Using cached data (offline mode) - ${this.admins.length} admins visible`);
+                    // Don't force refresh immediately - it will fail if offline
+                    // The periodic refresh (30s) will handle reconnection when connection is restored
                 }
             },
             (error) => {
                 console.error('❌ [Home] Real-time listener error:', error);
+                this.isListenerActive = false;
+                
+                // Handle specific error types
+                if (error.code === 'unavailable' || error.code === 'deadline-exceeded') {
+                    console.warn('⚠️ [Home] Firestore connection unavailable - operating in offline mode');
+                    // Don't clear admins array - keep showing cached data
+                    // The periodic refresh will try to reconnect
+                    return;
+                } else if (error.code === 'permission-denied') {
+                    console.error('❌ [Home] Permission denied - clearing admins');
+                    this.admins = [];
+                    this.updateCardCounts();
+                    alert('Permission denied. Please check your Firebase rules.');
+                    return;
+                }
                 
                 // Try to reconnect after a delay
                 setTimeout(() => {
-                    console.log('🔄 [Home] Attempting to reconnect to Firestore...');
-                    if (this.unsubscribe) {
-                        this.unsubscribe();
+                    console.log('🔄 [Home] Attempting to reconnect real-time listener...');
+                    // Only reconnect if we still have a user and Firebase is available
+                    const currentUserId = this.getCurrentUserId();
+                    if (currentUserId && typeof db !== 'undefined') {
+                        this.initRealTimeListener();
+                    } else {
+                        console.error('❌ [Home] Cannot reconnect - user or Firebase not available');
                     }
-                    this.initRealTimeListener();
                 }, 5000);
             }
         );
