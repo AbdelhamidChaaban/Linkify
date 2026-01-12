@@ -1,3 +1,12 @@
+/* Declare support for both light and dark color schemes to prevent browser force-darkening */
+:root {
+    color-scheme: light dark;
+}
+
+html {
+    color-scheme: light dark;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -12,6 +21,21 @@ body {
     /* Prevent pull-to-refresh on mobile browsers */
     overscroll-behavior-y: contain;
     overscroll-behavior-x: none;
+    /* Explicitly set color-scheme for dark mode (default) */
+    color-scheme: dark;
+}
+
+/* Support prefers-color-scheme for automatic theme detection */
+@media (prefers-color-scheme: light) {
+    :root {
+        color-scheme: light;
+    }
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        color-scheme: dark;
+    }
 }
 
 /* Navigation Bar */
@@ -331,10 +355,12 @@ body.insights-page .main-content {
 }
 
 /* Light Mode Styles - Support both html.light-mode (for immediate application) and body.light-mode (for compatibility) */
+/* Use pure white background to prevent browser force-darkening */
 html.light-mode body,
 body.light-mode {
-    background: #f8fafc;
+    background: #ffffff;
     color: #1e293b;
+    color-scheme: light;
 }
 
 html.light-mode .navbar,
@@ -407,13 +433,13 @@ html.light-mode .insights-section,
 body.light-mode .admins-container,
 body.light-mode .welcome-section,
 body.light-mode .insights-section {
-    background: rgba(255, 255, 255, 0.6);
+    background: #ffffff;
     border-color: rgba(58, 10, 78, 0.1);
 }
 
 html.light-mode .settings-container,
 body.light-mode .settings-container {
-    background: rgba(255, 255, 255, 0.6);
+    background: #ffffff;
     border-color: rgba(58, 10, 78, 0.1);
 }
 
@@ -1117,7 +1143,7 @@ body.light-mode .mobile-sidebar-footer {
 }
 
 body.light-mode .mobile-sidebar-overlay {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(248, 250, 252, 0.5));
+    background: rgba(255, 255, 255, 0.9);
 }
 
 body.light-mode .mobile-sidebar-theme {

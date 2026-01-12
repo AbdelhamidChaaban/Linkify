@@ -293,7 +293,7 @@ html.light-mode .empty-state-icon svg {
 
 /* ==================== Enhanced Dark Mode ==================== */
 body:not(.light-mode) {
-    /* Better contrast for dark mode */
+    /* Better contrast for dark mode - explicit colors to prevent over-darkening */
     --bg-primary: #0a0a0f;
     --bg-secondary: #0f0f14;
     --bg-tertiary: #151520;
@@ -302,6 +302,8 @@ body:not(.light-mode) {
     --text-tertiary: #94a3b8;
     --border-color: rgba(139, 92, 246, 0.2);
     --shadow-color: rgba(0, 0, 0, 0.5);
+    /* Explicitly set color-scheme for dark mode */
+    color-scheme: dark;
 }
 
 body:not(.light-mode) .navbar {
