@@ -39,7 +39,7 @@ function getAdminDb() {
 router.post('/', authenticateJWT, async (req, res) => {
     try {
         const userId = req.userId; // From JWT token (Firebase UID)
-        const { name, phone, type, password, quota, notUShare } = req.body;
+        let { name, phone, type, password, quota, notUShare } = req.body;
 
         // Validate required fields
         if (!name || !phone || !type || !password) {
@@ -48,6 +48,21 @@ router.post('/', authenticateJWT, async (req, res) => {
                 error: 'Name, phone, type, and password are required'
             });
         }
+        
+        // Normalize phone number: Remove spaces and Lebanon country code (+961 or 961)
+        phone = phone.trim().replace(/\s+/g, ''); // Remove spaces first
+        
+        // Handle +961 prefix (e.g., "+96171935446")
+        if (phone.startsWith('+961')) {
+            phone = phone.substring(4); // Remove "+961"
+        }
+        // Handle 961 prefix (e.g., "96171935446")
+        else if (phone.startsWith('961') && phone.length >= 11) {
+            phone = phone.substring(3); // Remove "961"
+        }
+        
+        // Remove any remaining non-digit characters
+        phone = phone.replace(/\D/g, '');
 
         // Validate quota - only required for Open admins, not Closed
         let quotaNum = 0;
@@ -160,7 +175,7 @@ router.put('/:adminId', authenticateJWT, async (req, res) => {
     try {
         const userId = req.userId;
         const { adminId } = req.params;
-        const { name, phone, type, password, quota, notUShare } = req.body;
+        let { name, phone, type, password, quota, notUShare } = req.body;
 
         // Validate required fields
         if (!name || !phone || !type) {
@@ -169,6 +184,21 @@ router.put('/:adminId', authenticateJWT, async (req, res) => {
                 error: 'Name, phone, and type are required'
             });
         }
+        
+        // Normalize phone number: Remove spaces and Lebanon country code (+961 or 961)
+        phone = phone.trim().replace(/\s+/g, ''); // Remove spaces first
+        
+        // Handle +961 prefix (e.g., "+96171935446")
+        if (phone.startsWith('+961')) {
+            phone = phone.substring(4); // Remove "+961"
+        }
+        // Handle 961 prefix (e.g., "96171935446")
+        else if (phone.startsWith('961') && phone.length >= 11) {
+            phone = phone.substring(3); // Remove "961"
+        }
+        
+        // Remove any remaining non-digit characters
+        phone = phone.replace(/\D/g, '');
 
         const adminDbInstance = getAdminDb();
         if (!adminDbInstance) {

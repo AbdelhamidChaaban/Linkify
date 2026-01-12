@@ -38,6 +38,35 @@ class InsightsManager {
         return null;
     }
     
+    /**
+     * Normalize phone number by removing Lebanon country code (+961 or 961) and spaces
+     * Examples:
+     *   "+96171935446" -> "71935446"
+     *   "96171935446" -> "71935446"
+     *   "71 935 446" -> "71935446"
+     *   "71935446" -> "71935446" (no change)
+     */
+    normalizePhoneNumber(phone) {
+        if (!phone) return phone;
+        
+        // Remove all spaces first
+        let cleaned = phone.trim().replace(/\s+/g, '');
+        
+        // Handle +961 prefix (e.g., "+96171935446")
+        if (cleaned.startsWith('+961')) {
+            cleaned = cleaned.substring(4); // Remove "+961"
+        }
+        // Handle 961 prefix (e.g., "96171935446")
+        else if (cleaned.startsWith('961') && cleaned.length >= 11) {
+            cleaned = cleaned.substring(3); // Remove "961"
+        }
+        
+        // Remove any remaining non-digit characters (shouldn't be any, but just in case)
+        cleaned = cleaned.replace(/\D/g, '');
+        
+        return cleaned;
+    }
+    
     loadSubscribers() {
         try {
             // Check if db is available
@@ -4158,6 +4187,9 @@ class InsightsManager {
         // Bind events
         this.bindEditSubscribersEvents();
         
+        // Attach blur handlers to all subscriber phone inputs
+        this.attachPhoneNormalizationHandlers();
+        
         // Update add button state
         this.updateEditAddSubscriberButtonState();
     }
@@ -4213,6 +4245,9 @@ class InsightsManager {
         // Bind events after loading
         this.bindEditSubscribersEvents();
         
+        // Attach blur handlers to all subscriber phone inputs
+        this.attachPhoneNormalizationHandlers();
+        
         // Update add button state after loading subscribers
         this.updateEditAddSubscriberButtonState();
     }
@@ -4244,6 +4279,38 @@ class InsightsManager {
             </div>
             <hr class="edit-subscriber-divider">
         `;
+    }
+    
+    /**
+     * Attach blur event handlers to all subscriber phone inputs for real-time normalization
+     */
+    attachPhoneNormalizationHandlers() {
+        const itemsContainer = document.getElementById('editSubscribersItems');
+        if (!itemsContainer) return;
+        
+        // Find all subscriber phone inputs
+        const subscriberInputs = itemsContainer.querySelectorAll('input[name*="subscriber"]');
+        
+        subscriberInputs.forEach(input => {
+            // Skip if already has handler (check for a data attribute)
+            if (input.dataset.normalizeHandler) return;
+            
+            // Skip readonly/disabled inputs (existing subscribers that can't be edited)
+            if (input.readOnly || input.disabled) return;
+            
+            // Attach blur handler
+            const handler = (e) => {
+                const normalized = this.normalizePhoneNumber(e.target.value);
+                if (normalized && normalized !== e.target.value) {
+                    e.target.value = normalized;
+                }
+            };
+            
+            input.addEventListener('blur', handler);
+            
+            // Mark as having handler
+            input.dataset.normalizeHandler = 'true';
+        });
     }
     
     bindEditSubscribersEvents() {
@@ -4294,6 +4361,31 @@ class InsightsManager {
                     this.closeEditSubscribersModal();
                 }
             });
+        }
+        
+        // Normalize phone numbers on blur using focusout event (which bubbles) for dynamically added inputs
+        const itemsContainer = document.getElementById('editSubscribersItems');
+        if (itemsContainer) {
+            // Remove existing listener if any (prevent duplicates)
+            if (itemsContainer._phoneNormalizeHandler) {
+                itemsContainer.removeEventListener('focusout', itemsContainer._phoneNormalizeHandler);
+            }
+            
+            // Create handler function
+            const phoneNormalizeHandler = (e) => {
+                // Check if the blurred element is a subscriber phone input
+                const input = e.target;
+                if (input && input.tagName === 'INPUT' && input.name && input.name.includes('subscriber') && input.type !== 'number') {
+                    const normalized = this.normalizePhoneNumber(input.value);
+                    if (normalized && normalized !== input.value) {
+                        input.value = normalized;
+                    }
+                }
+            };
+            
+            // Store reference and attach listener
+            itemsContainer._phoneNormalizeHandler = phoneNormalizeHandler;
+            itemsContainer.addEventListener('focusout', phoneNormalizeHandler, true); // Use capture phase
         }
     }
     
@@ -4385,10 +4477,10 @@ class InsightsManager {
                     this.removeEditSubscriberItem(newIndex);
                 });
             }
-            
-            // Subscriber input is now editable - no admin selector needed
-            // User can directly type the phone number
         }
+        
+        // Attach blur handlers to all subscriber phone inputs (including the new one)
+        this.attachPhoneNormalizationHandlers();
         
         // Update add button state after adding an item
         this.updateEditAddSubscriberButtonState();
@@ -4549,10 +4641,13 @@ class InsightsManager {
             const isNew = item.dataset.isNew === 'true';
             
             if (subscriberInput && quotaInput) {
-                const phone = subscriberInput.value.trim();
+                let phone = subscriberInput.value.trim();
                 const quota = parseFloat(quotaInput.value) || 0;
                 
                 if (!phone) return; // Skip empty rows
+                
+                // Normalize phone number: remove +961/961 prefix and spaces
+                phone = this.normalizePhoneNumber(phone);
                 
                 if (isNew) {
                     // New subscriber to add
@@ -4578,7 +4673,9 @@ class InsightsManager {
             const currentPhones = items
                 .map(item => {
                     const input = item.querySelector('input[name*="subscriber"]');
-                    return input ? input.value.trim() : '';
+                    if (!input) return '';
+                    const phone = input.value.trim();
+                    return phone ? this.normalizePhoneNumber(phone) : '';
                 })
                 .filter(phone => phone);
             
@@ -4805,6 +4902,38 @@ class InsightsManager {
                 }
             };
         }
+        
+        // Attach blur handlers to all subscriber phone inputs for normalization
+        this.attachAddSubscriberPhoneNormalizationHandlers();
+    }
+    
+    /**
+     * Attach blur event handlers to all subscriber phone inputs in the add subscribers modal
+     */
+    attachAddSubscriberPhoneNormalizationHandlers() {
+        const container = document.getElementById('subscribersItemsContainer');
+        if (!container) return;
+        
+        // Find all subscriber phone inputs
+        const subscriberInputs = container.querySelectorAll('input[name*="subscriber"]');
+        
+        subscriberInputs.forEach(input => {
+            // Skip if already has handler
+            if (input.dataset.normalizeHandler) return;
+            
+            // Attach blur handler
+            const handler = (e) => {
+                const normalized = this.normalizePhoneNumber(e.target.value);
+                if (normalized && normalized !== e.target.value) {
+                    e.target.value = normalized;
+                }
+            };
+            
+            input.addEventListener('blur', handler);
+            
+            // Mark as having handler
+            input.dataset.normalizeHandler = 'true';
+        });
     }
     
     addSubscriberRow() {
@@ -4874,6 +5003,9 @@ class InsightsManager {
                 this.openAdminSelector(itemIndex);
             });
         }
+        
+        // Attach blur handlers to all subscriber phone inputs (including the new one)
+        this.attachAddSubscriberPhoneNormalizationHandlers();
         
         // Update add button state after adding a row
         this.updateAddSubscriberButtonState();
@@ -5566,7 +5698,16 @@ class InsightsManager {
             if (container) {
                 const itemDivs = container.querySelectorAll('.add-subscribers-item');
                 itemDivs.forEach((itemDiv, index) => {
-                    const subscriber = itemDiv.querySelector(`input[name="items[${index}].subscriber"]`)?.value.trim();
+                    const subscriberInput = itemDiv.querySelector(`input[name="items[${index}].subscriber"]`);
+                    let subscriber = subscriberInput?.value.trim() || '';
+                    // Normalize phone number on submit (fallback in case blur didn't fire)
+                    if (subscriber) {
+                        subscriber = this.normalizePhoneNumber(subscriber);
+                        // Update the input field with normalized value
+                        if (subscriberInput) {
+                            subscriberInput.value = subscriber;
+                        }
+                    }
                     const quota = itemDiv.querySelector(`input[name="items[${index}].quota"]`)?.value.trim();
                     const serviceInput = itemDiv.querySelector(`input[name="items[${index}].service"]`);
                     const adminId = serviceInput?.dataset.adminId || serviceInput?.value.trim();

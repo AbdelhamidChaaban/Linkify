@@ -389,7 +389,21 @@ app.post('/api/subscribers/add', async (req, res) => {
         }
 
         // Clean subscriber number (8 digits)
-        let cleanSubscriberNumber = subscriberPhone.replace(/\D/g, '');
+        // Normalize: Remove spaces and Lebanon country code (+961 or 961)
+        let cleanSubscriberNumber = subscriberPhone.trim().replace(/\s+/g, ''); // Remove spaces first
+        
+        // Handle +961 prefix (e.g., "+96171935446")
+        if (cleanSubscriberNumber.startsWith('+961')) {
+            cleanSubscriberNumber = cleanSubscriberNumber.substring(4); // Remove "+961"
+        }
+        // Handle 961 prefix (e.g., "96171935446")
+        else if (cleanSubscriberNumber.startsWith('961') && cleanSubscriberNumber.length >= 11) {
+            cleanSubscriberNumber = cleanSubscriberNumber.substring(3); // Remove "961"
+        }
+        
+        // Remove all non-digit characters
+        cleanSubscriberNumber = cleanSubscriberNumber.replace(/\D/g, '');
+        
         if (cleanSubscriberNumber.length === 11 && cleanSubscriberNumber.startsWith('961')) {
             cleanSubscriberNumber = cleanSubscriberNumber.substring(3);
         }

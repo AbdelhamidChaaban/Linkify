@@ -28,6 +28,35 @@ class AdminsManager {
         return null;
     }
     
+    /**
+     * Normalize phone number by removing Lebanon country code (+961 or 961) and spaces
+     * Examples:
+     *   "+96171935446" -> "71935446"
+     *   "96171935446" -> "71935446"
+     *   "71 935 446" -> "71935446"
+     *   "71935446" -> "71935446" (no change)
+     */
+    normalizePhoneNumber(phone) {
+        if (!phone) return phone;
+        
+        // Remove all spaces first
+        let cleaned = phone.trim().replace(/\s+/g, '');
+        
+        // Handle +961 prefix (e.g., "+96171935446")
+        if (cleaned.startsWith('+961')) {
+            cleaned = cleaned.substring(4); // Remove "+961"
+        }
+        // Handle 961 prefix (e.g., "96171935446")
+        else if (cleaned.startsWith('961') && cleaned.length >= 11) {
+            cleaned = cleaned.substring(3); // Remove "961"
+        }
+        
+        // Remove any remaining non-digit characters (shouldn't be any, but just in case)
+        cleaned = cleaned.replace(/\D/g, '');
+        
+        return cleaned;
+    }
+    
     // Get Firebase auth token for API calls
     async getAuthToken() {
         if (typeof auth !== 'undefined' && auth && auth.currentUser) {
@@ -480,6 +509,17 @@ class AdminsManager {
             adminTypeSelect.addEventListener('change', () => this.handleAdminTypeChange());
         }
         
+        // Normalize phone number on blur (when user leaves the field)
+        const adminPhoneInput = document.getElementById('adminPhone');
+        if (adminPhoneInput) {
+            adminPhoneInput.addEventListener('blur', (e) => {
+                const normalized = this.normalizePhoneNumber(e.target.value);
+                if (normalized && normalized !== e.target.value) {
+                    e.target.value = normalized;
+                }
+            });
+        }
+        
         this.form.addEventListener('submit', (e) => this.handleSubmit(e));
     }
     
@@ -588,10 +628,13 @@ class AdminsManager {
         let isValid = true;
         
         const name = document.getElementById('adminName').value.trim();
-        const phone = document.getElementById('adminPhone').value.trim();
+        let phone = document.getElementById('adminPhone').value.trim();
         const type = document.getElementById('adminType').value;
         const password = document.getElementById('adminPassword').value;
         const quota = document.getElementById('adminQuota').value.trim();
+        
+        // Normalize phone number: remove +961/961 prefix and spaces
+        phone = this.normalizePhoneNumber(phone);
         
         // Validate name
         if (!name) {
@@ -684,11 +727,14 @@ class AdminsManager {
         
         try {
             const name = document.getElementById('adminName').value.trim();
-            const phone = document.getElementById('adminPhone').value.trim();
+            let phone = document.getElementById('adminPhone').value.trim();
             const type = document.getElementById('adminType').value;
             const password = document.getElementById('adminPassword').value;
             const quota = parseInt(document.getElementById('adminQuota').value.trim());
             const notUShare = document.getElementById('adminNotUShare').checked;
+            
+            // Normalize phone number: remove +961/961 prefix and spaces
+            phone = this.normalizePhoneNumber(phone);
             
             // Get current user ID - CRITICAL for data isolation
             const currentUserId = this.getCurrentUserId();
