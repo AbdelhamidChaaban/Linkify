@@ -726,6 +726,45 @@ app.get('/api/admin/:adminId/balance-history', async (req, res) => {
 const frontendPath = path.join(__dirname, '..', 'frontend');
 console.log('📁 Frontend path:', frontendPath);
 
+// Explicitly serve service worker with proper headers
+app.get('/service-worker.js', (req, res) => {
+    const serviceWorkerPath = path.join(frontendPath, 'service-worker.js');
+    
+    // Check if file exists
+    if (!fs.existsSync(serviceWorkerPath)) {
+        console.error('❌ Service worker file not found at:', serviceWorkerPath);
+        console.error('📁 Frontend path:', frontendPath);
+        return res.status(404).json({ error: 'Service worker not found', path: serviceWorkerPath });
+    }
+    
+    console.log('✅ Serving service worker from:', serviceWorkerPath);
+    
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Service-Worker-Allowed', '/'); // Allow service worker to control entire site
+    
+    res.sendFile(serviceWorkerPath, (err) => {
+        if (err) {
+            console.error('❌ Error serving service worker:', err);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Error loading service worker', message: err.message });
+            }
+        } else {
+            console.log('✅ Service worker served successfully');
+        }
+    });
+});
+
+// Explicitly serve manifest.json with proper headers
+app.get('/manifest.json', (req, res) => {
+    const manifestPath = path.join(frontendPath, 'manifest.json');
+    res.setHeader('Content-Type', 'application/manifest+json');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(manifestPath);
+});
+
 // Custom static file middleware with cache control for development
 app.use(express.static(frontendPath, {
     setHeaders: (res, filePath) => {

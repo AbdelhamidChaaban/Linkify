@@ -210,17 +210,26 @@ router.get('/refreshAdmins', authenticateJWT, async (req, res) => {
         
         const { phone, cookies } = await getAdminCredentialsAndCookies(adminId, req.userId);
         
-        // OPTIMIZATION: Fetch previous admin data in parallel with API calls to reduce total time
+        // OPTIMIZATION: Fetch previous admin data and Ushare HTML in parallel with API calls to reduce total time
         // This data is needed for subscriber removal detection, but we can fetch it while APIs are running
         const { getFullAdminData } = require('../services/firebaseDbService');
+        const { fetchUshareHtml } = require('../services/ushareHtmlParser');
+        
         const previousAdminDataPromise = getFullAdminData(adminId).catch(error => {
             console.warn(`   ⚠️ [DETECTION] Error fetching previous admin data in parallel: ${error.message}`);
             return null;
         });
         
-        // Fetch all APIs in parallel
+        // OPTIMIZATION: Fetch Ushare HTML in parallel with APIs (not sequentially after APIs complete)
+        // IMPORTANT: Use useCache=false for refresh to ensure we get the latest data
+        // (cache is invalidated after add/edit/remove operations, but we want fresh data on refresh)
+        const usharePromise = fetchUshareHtml(phone, cookies, false)
+            .then(result => ({ success: result.success, data: result.data, error: result.error ? result.error : null }))
+            .catch(error => ({ success: false, data: null, error: error.message || 'Unknown error' }));
+        
+        // Fetch all APIs, previous admin data, and Ushare HTML in parallel
         // Increased timeouts to match Alfa's actual response times (they're very slow)
-        const [consumptionResult, expiryResult, servicesResult, previousAdminData] = await Promise.allSettled([
+        const [consumptionResult, expiryResult, servicesResult, previousAdminData, ushareResultSettled] = await Promise.allSettled([
             apiRequest('/en/account/getconsumption', cookies, { timeout: 15000, maxRetries: 1 })
                 .then(data => ({ success: true, data, error: null }))
                 .catch(error => ({ success: false, data: null, error })),
@@ -233,21 +242,20 @@ router.get('/refreshAdmins', authenticateJWT, async (req, res) => {
                 .then(data => ({ success: true, data, error: null }))
                 .catch(error => ({ success: false, data: null, error })),
             
-            previousAdminDataPromise
+            previousAdminDataPromise,
+            
+            usharePromise
         ]);
         
         // Extract previous admin data from Promise.allSettled result
         const previousAdminDataResolved = previousAdminData.status === 'fulfilled' ? previousAdminData.value : null;
         
-        // Fetch Ushare HTML (HTTP-only, no Puppeteer)
-        // IMPORTANT: Use useCache=false for refresh to ensure we get the latest data
-        // (cache is invalidated after add/edit/remove operations, but we want fresh data on refresh)
-        const { fetchUshareHtml } = require('../services/ushareHtmlParser');
-        const ushareResult = await fetchUshareHtml(phone, cookies, false).catch(error => ({
+        // Extract Ushare result from Promise.allSettled result
+        const ushareResult = ushareResultSettled.status === 'fulfilled' ? ushareResultSettled.value : {
             success: false,
             data: null,
-            error: error.message
-        }));
+            error: ushareResultSettled.reason?.message || 'Unknown error'
+        };
         
         if (ushareResult.success && ushareResult.data) {
             console.log(`✅ [Refresh] Ushare data fetched: ${ushareResult.data.totalCount || 0} total, ${ushareResult.data.activeCount || 0} active, ${ushareResult.data.requestedCount || 0} requested`);

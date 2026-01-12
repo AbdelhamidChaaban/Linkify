@@ -9,7 +9,9 @@
     // Register Service Worker
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/service-worker.js')
+            navigator.serviceWorker.register('/service-worker.js', {
+                scope: '/' // Explicitly set scope to root
+            })
                 .then((registration) => {
                     console.log('[PWA] Service Worker registered successfully:', registration.scope);
 
@@ -21,9 +23,7 @@
                                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                                     console.log('[PWA] New service worker available. Reload to update.');
                                     // Optionally show update notification to user
-                                    if (confirm('A new version is available. Reload to update?')) {
-                                        window.location.reload();
-                                    }
+                                    // Removed confirm() to prevent blocking - use a toast notification instead
                                 }
                             });
                         }
@@ -31,12 +31,17 @@
                 })
                 .catch((error) => {
                     console.error('[PWA] Service Worker registration failed:', error);
+                    // Don't show alert - just log the error
                 });
 
-            // Listen for service worker messages
-            navigator.serviceWorker.addEventListener('message', (event) => {
-                console.log('[PWA] Message from service worker:', event.data);
-            });
+            // Listen for service worker messages (non-blocking)
+            if (navigator.serviceWorker) {
+                navigator.serviceWorker.addEventListener('message', (event) => {
+                    if (event && event.data) {
+                        console.log('[PWA] Message from service worker:', event.data);
+                    }
+                });
+            }
         });
     }
 
