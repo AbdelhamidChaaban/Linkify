@@ -1,75 +1,48 @@
-// Import the functions you need from the SDKs you need
-const { initializeApp } = require("firebase/app");
-const { getFirestore, doc, getDoc, setDoc, collection, addDoc, query, orderBy, limit, getDocs, where, deleteDoc } = require("firebase/firestore");
+// Firebase Admin SDK - Server-side only (no client SDK)
+const admin = require('firebase-admin');
 
-// Firebase Admin SDK for actionLogs (bypasses security rules)
+// Firebase Admin SDK instance
 let adminDb = null;
+
+/**
+ * Initialize Firebase Admin SDK
+ * Uses service account credentials from environment variable
+ */
 function initializeAdminDb() {
     if (adminDb) return adminDb; // Already initialized
     
     try {
-        const admin = require('firebase-admin');
-        if (!admin.apps || admin.apps.length === 0) {
-            // Try to initialize Admin SDK if service account is available
-            const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
-                ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
-                : null;
-            
-            if (serviceAccount) {
-                admin.initializeApp({
-                    credential: admin.credential.cert(serviceAccount)
-                });
-                console.log('✅ Firebase Admin initialized for actionLogs');
-            } else {
-                return null;
-            }
+        // Check if Admin SDK is already initialized
+        if (admin.apps && admin.apps.length > 0) {
+            adminDb = admin.firestore();
+            console.log('✅ Firebase Admin SDK already initialized');
+            return adminDb;
         }
         
-        adminDb = admin.firestore();
-        return adminDb;
+        // Try to initialize Admin SDK if service account is available
+        const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
+            ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
+            : null;
+        
+        if (serviceAccount) {
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount),
+                projectId: 'linkify-1f8e7' // Explicitly set project ID
+            });
+            adminDb = admin.firestore();
+            console.log('✅ Firebase Admin SDK initialized successfully');
+            return adminDb;
+        } else {
+            console.warn('⚠️ FIREBASE_SERVICE_ACCOUNT_KEY not found. Firebase operations will be disabled.');
+            console.warn('   Please set FIREBASE_SERVICE_ACCOUNT_KEY environment variable in Render.');
+            return null;
+        }
     } catch (error) {
-        console.warn('⚠️ Firebase Admin not available for actionLogs:', error.message);
-        console.warn('   Will use client SDK (may require security rules)');
+        console.error('❌ Error initializing Firebase Admin SDK:', error.message);
+        console.error('   Stack:', error.stack);
+        console.warn('⚠️ Firebase operations will be disabled until service account is configured.');
         return null;
     }
-}
-
-// Your web app's Firebase configuration (from environment variables)
-const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID,
-  measurementId: process.env.FIREBASE_MEASUREMENT_ID
-};
-
-// Validate Firebase configuration
-const requiredEnvVars = ['FIREBASE_API_KEY', 'FIREBASE_AUTH_DOMAIN', 'FIREBASE_PROJECT_ID'];
-const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
-
-if (missingVars.length > 0) {
-  console.warn('⚠️ Missing required Firebase environment variables:', missingVars.join(', '));
-  console.warn('   Please check your .env file in the backend folder.');
-  console.warn('   Firebase operations will be disabled until variables are set.');
-  // Don't throw - allow server to start without Firebase
-}
-
-// Initialize Firebase
-let app;
-let db;
-
-try {
-  app = initializeApp(firebaseConfig);
-  db = getFirestore(app);
-  console.log('✅ Firebase initialized successfully');
-} catch (error) {
-  console.error('❌ Error initializing Firebase:', error.message);
-  console.error('Stack:', error.stack);
-  // Don't throw - allow server to start even if Firebase fails
-  // Firebase will be retried when actually needed
-  console.warn('⚠️ Firebase initialization failed, but server will continue. Firebase operations may fail.');
 }
 
 // Collection name for storing admins
@@ -569,17 +542,18 @@ async function addPendingSubscriber(adminId, subscriberPhone, quota) {
     return false;
   }
   
-  // Check if Firebase is initialized
-  if (!db || !app) {
-    console.warn('⚠️ Firebase not initialized, cannot add pending subscriber');
+  // Use Admin SDK to bypass security rules
+  const adminDbInstance = initializeAdminDb();
+  if (!adminDbInstance) {
+    console.warn('⚠️ Firebase Admin SDK not available, cannot add pending subscriber');
     return false;
   }
   
   try {
-    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
-    const adminDoc = await getDoc(adminDocRef);
+    const adminDocRef = adminDbInstance.collection(COLLECTION_NAME).doc(adminId);
+    const adminDoc = await adminDocRef.get();
     
-    if (!adminDoc.exists()) {
+    if (!adminDoc.exists) {
       console.warn(`⚠️ Admin document ${adminId} does not exist`);
       return false;
     }
@@ -602,7 +576,7 @@ async function addPendingSubscriber(adminId, subscriberPhone, quota) {
     });
     
     // Update document
-    await setDoc(adminDocRef, {
+    await adminDocRef.set({
       ...data,
       pendingSubscribers: pendingSubscribers
     }, { merge: true });
@@ -661,16 +635,18 @@ async function removePendingSubscriber(adminId, subscriberPhone) {
     return false;
   }
   
-  // Check if Firebase is initialized
-  if (!db || !app) {
+  // Use Admin SDK to bypass security rules
+  const adminDbInstance = initializeAdminDb();
+  if (!adminDbInstance) {
+    console.warn('⚠️ Firebase Admin SDK not available, cannot remove pending subscriber');
     return false;
   }
   
   try {
-    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
-    const adminDoc = await getDoc(adminDocRef);
+    const adminDocRef = adminDbInstance.collection(COLLECTION_NAME).doc(adminId);
+    const adminDoc = await adminDocRef.get();
     
-    if (!adminDoc.exists()) {
+    if (!adminDoc.exists) {
       return false;
     }
     
@@ -680,7 +656,7 @@ async function removePendingSubscriber(adminId, subscriberPhone) {
     );
     
     // Update document
-    await setDoc(adminDocRef, {
+    await adminDocRef.set({
       ...data,
       pendingSubscribers: pendingSubscribers
     }, { merge: true });
@@ -705,16 +681,18 @@ async function addRemovedSubscriber(adminId, subscriberPhone) {
     return false;
   }
   
-  // Check if Firebase is initialized
-  if (!db || !app) {
+  // Use Admin SDK to bypass security rules
+  const adminDbInstance = initializeAdminDb();
+  if (!adminDbInstance) {
+    console.warn('⚠️ Firebase Admin SDK not available, cannot add removed subscriber');
     return false;
   }
   
   try {
-    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
-    const adminDoc = await getDoc(adminDocRef);
+    const adminDocRef = adminDbInstance.collection(COLLECTION_NAME).doc(adminId);
+    const adminDoc = await adminDocRef.get();
     
-    if (!adminDoc.exists()) {
+    if (!adminDoc.exists) {
       return false;
     }
     
@@ -730,7 +708,7 @@ async function addRemovedSubscriber(adminId, subscriberPhone) {
     removedSubscribers.push(subscriberPhone);
     
     // Update document
-    await setDoc(adminDocRef, {
+    await adminDocRef.set({
       ...data,
       removedSubscribers: removedSubscribers
     }, { merge: true });
@@ -755,16 +733,18 @@ async function addRemovedActiveSubscriber(adminId, subscriberData) {
     return false;
   }
   
-  // Check if Firebase is initialized
-  if (!db || !app) {
+  // Use Admin SDK to bypass security rules
+  const adminDbInstance = initializeAdminDb();
+  if (!adminDbInstance) {
+    console.warn('⚠️ Firebase Admin SDK not available, cannot add removed active subscriber');
     return false;
   }
   
   try {
-    const adminDocRef = doc(db, COLLECTION_NAME, adminId);
-    const adminDoc = await getDoc(adminDocRef);
+    const adminDocRef = adminDbInstance.collection(COLLECTION_NAME).doc(adminId);
+    const adminDoc = await adminDocRef.get();
     
-    if (!adminDoc.exists()) {
+    if (!adminDoc.exists) {
       return false;
     }
     
@@ -793,7 +773,7 @@ async function addRemovedActiveSubscriber(adminId, subscriberData) {
     }
     
     // Update document
-    await setDoc(adminDocRef, {
+    await adminDocRef.set({
       ...data,
       removedActiveSubscribers: removedActiveSubscribers,
       removedSubscribers: removedSubscribers
@@ -819,17 +799,18 @@ async function getBalanceHistory(adminId) {
     return [];
   }
   
-  // Check if Firebase is initialized
-  if (!db || !app) {
-    console.warn('⚠️ Firebase not initialized, cannot get balance history');
+  // Use Admin SDK to bypass security rules
+  const adminDbInstance = initializeAdminDb();
+  if (!adminDbInstance) {
+    console.warn('⚠️ Firebase Admin SDK not available, cannot get balance history');
     return [];
   }
   
   try {
-    const userDocRef = doc(db, COLLECTION_NAME, adminId);
-    const currentDoc = await getDoc(userDocRef);
+    const userDocRef = adminDbInstance.collection(COLLECTION_NAME).doc(adminId);
+    const currentDoc = await userDocRef.get();
     
-    if (!currentDoc.exists()) {
+    if (!currentDoc.exists) {
       return [];
     }
     
@@ -864,77 +845,13 @@ async function logAction(userId, adminId, adminName, adminPhone, action, subscri
   }
   
   try {
-    // Prefer Admin SDK (bypasses security rules) - initialize if needed
+    // Use Admin SDK (bypasses security rules)
     const adminDbInstance = initializeAdminDb();
-    if (adminDbInstance) {
-      const actionLog = {
-        userId,
-        adminId,
-        adminName: adminName || 'Unknown',
-        adminPhone: adminPhone || '',
-        action, // 'add', 'edit', 'remove'
-        subscriberPhone,
-        success,
-        timestamp: new Date().toISOString(),
-        createdAt: require('firebase-admin').firestore.FieldValue.serverTimestamp()
-      };
-      
-      if (quota !== null && quota !== undefined) {
-        actionLog.quota = quota;
-      }
-      if (errorMessage) {
-        actionLog.errorMessage = errorMessage;
-      }
-      
-      await adminDbInstance.collection('actionLogs').add(actionLog);
-      console.log(`✅ Logged action: ${action} subscriber ${subscriberPhone} for admin ${adminId} (${success ? 'success' : 'failed'})`);
-      
-      // Update user revenue if action is 'add' and successful
-      if (action === 'add' && success && quota !== null && quota !== undefined && userId) {
-        try {
-          const userRef = adminDbInstance.collection('users').doc(userId);
-          const userDoc = await userRef.get();
-          
-          if (userDoc.exists) {
-            const userData = userDoc.data();
-            const defaultPrices = userData.defaultPrices || {};
-            const quotaNum = typeof quota === 'string' ? parseFloat(quota) : quota;
-            
-            // Calculate price for this quota
-            let price = 0;
-            if (defaultPrices[quotaNum] !== undefined) {
-              price = defaultPrices[quotaNum];
-            } else if (defaultPrices[String(quotaNum)] !== undefined) {
-              price = defaultPrices[String(quotaNum)];
-            }
-            
-            // Update revenue if price is found
-            if (price > 0) {
-              const admin = require('firebase-admin');
-              const currentRevenue = userData.revenue || 0;
-              await userRef.update({
-                revenue: currentRevenue + price,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-              });
-              console.log(`💰 Updated revenue for user ${userId}: +${price} (total: ${currentRevenue + price})`);
-            }
-          }
-        } catch (revenueError) {
-          // Non-critical error - log but don't fail the action logging
-          console.warn(`⚠️ Failed to update revenue for user ${userId}:`, revenueError.message);
-        }
-      }
-      
-      return true;
-    }
-    
-    // Fallback to client SDK (requires security rules)
-    if (!db || !app) {
-      console.warn('⚠️ Firebase not initialized, cannot log action');
+    if (!adminDbInstance) {
+      console.warn('⚠️ Firebase Admin SDK not available, cannot log action');
       return false;
     }
     
-    const actionsCollection = collection(db, 'actionLogs');
     const actionLog = {
       userId,
       adminId,
@@ -942,59 +859,50 @@ async function logAction(userId, adminId, adminName, adminPhone, action, subscri
       adminPhone: adminPhone || '',
       action, // 'add', 'edit', 'remove'
       subscriberPhone,
-      quota: quota !== null ? quota : undefined,
       success,
-      errorMessage: errorMessage || undefined,
       timestamp: new Date().toISOString(),
-      createdAt: new Date()
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
     };
     
-    // Remove undefined values
-    Object.keys(actionLog).forEach(key => {
-      if (actionLog[key] === undefined) {
-        delete actionLog[key];
-      }
-    });
+    if (quota !== null && quota !== undefined) {
+      actionLog.quota = quota;
+    }
+    if (errorMessage) {
+      actionLog.errorMessage = errorMessage;
+    }
     
-    await addDoc(actionsCollection, actionLog);
+    await adminDbInstance.collection('actionLogs').add(actionLog);
     console.log(`✅ Logged action: ${action} subscriber ${subscriberPhone} for admin ${adminId} (${success ? 'success' : 'failed'})`);
     
-    // Update user revenue if action is 'add' and successful (client SDK fallback)
-    // Note: This requires security rules to allow user document updates
+    // Update user revenue if action is 'add' and successful
     if (action === 'add' && success && quota !== null && quota !== undefined && userId) {
       try {
-        // Try to use Admin SDK for revenue update (more reliable)
-        const adminDbInstance = initializeAdminDb();
-        if (adminDbInstance) {
-          const userRef = adminDbInstance.collection('users').doc(userId);
-          const userDoc = await userRef.get();
+        const userRef = adminDbInstance.collection('users').doc(userId);
+        const userDoc = await userRef.get();
+        
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          const defaultPrices = userData.defaultPrices || {};
+          const quotaNum = typeof quota === 'string' ? parseFloat(quota) : quota;
           
-          if (userDoc.exists) {
-            const userData = userDoc.data();
-            const defaultPrices = userData.defaultPrices || {};
-            const quotaNum = typeof quota === 'string' ? parseFloat(quota) : quota;
-            
-            // Calculate price for this quota
-            let price = 0;
-            if (defaultPrices[quotaNum] !== undefined) {
-              price = defaultPrices[quotaNum];
-            } else if (defaultPrices[String(quotaNum)] !== undefined) {
-              price = defaultPrices[String(quotaNum)];
-            }
-            
-            // Update revenue if price is found
-            if (price > 0) {
-              const admin = require('firebase-admin');
-              const currentRevenue = userData.revenue || 0;
-              await userRef.update({
-                revenue: currentRevenue + price,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-              });
-              console.log(`💰 Updated revenue for user ${userId}: +${price} (total: ${currentRevenue + price})`);
-            }
+          // Calculate price for this quota
+          let price = 0;
+          if (defaultPrices[quotaNum] !== undefined) {
+            price = defaultPrices[quotaNum];
+          } else if (defaultPrices[String(quotaNum)] !== undefined) {
+            price = defaultPrices[String(quotaNum)];
+          }
+          
+          // Update revenue if price is found
+          if (price > 0) {
+            const currentRevenue = userData.revenue || 0;
+            await userRef.update({
+              revenue: currentRevenue + price,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`💰 Updated revenue for user ${userId}: +${price} (total: ${currentRevenue + price})`);
           }
         }
-        // If Admin SDK not available, skip revenue update (requires security rules for client SDK)
       } catch (revenueError) {
         // Non-critical error - log but don't fail the action logging
         console.warn(`⚠️ Failed to update revenue for user ${userId}:`, revenueError.message);
@@ -1186,53 +1094,9 @@ async function getActionLogs(userId, options = {}) {
       }
     }
     
-    // Fallback to client SDK (requires security rules)
-    if (!db || !app) {
-      return [];
-    }
-    
-    const actionsCollection = collection(db, 'actionLogs');
-    
-    // Build query conditions array
-    const conditions = [
-      where('userId', '==', userId)
-    ];
-    
-    // Add date filter if specified
-    if (minTimestamp) {
-      const { Timestamp } = require('firebase/firestore');
-      conditions.push(where('timestamp', '>=', Timestamp.fromDate(minTimestamp)));
-    }
-    
-    conditions.push(orderBy('timestamp', 'desc'));
-    
-    // Add action filter if not 'all'
-    // Note: This may require a composite index when combined with date filter
-    if (actionFilter !== 'all') {
-      conditions.push(where('action', '==', actionFilter));
-    }
-    
-    // Add limit
-    conditions.push(limit(limitCount));
-    
-    // Build the query with all conditions at once
-    const q = query(actionsCollection, ...conditions);
-    
-    const querySnapshot = await getDocs(q);
-    const logs = [];
-    
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      logs.push({
-        id: doc.id,
-        ...data,
-        // Ensure timestamp is a string if it's a Firestore Timestamp
-        timestamp: data.timestamp ? (typeof data.timestamp === 'string' ? data.timestamp : (data.timestamp.toDate ? data.timestamp.toDate().toISOString() : new Date(data.timestamp).toISOString())) : (data.createdAt ? (typeof data.createdAt === 'string' ? data.createdAt : (data.createdAt.toDate ? data.createdAt.toDate().toISOString() : new Date(data.createdAt).toISOString())) : new Date().toISOString())
-      });
-    });
-    
-    console.log(`✅ Retrieved ${logs.length} action log(s) for user ${userId} (filter: ${actionFilter}) using client SDK`);
-    return logs;
+    // Admin SDK not available
+    console.warn('⚠️ Firebase Admin SDK not available, cannot get action logs');
+    return [];
   } catch (error) {
     console.error('❌ Error getting action logs:', error.message);
     console.error('   Stack:', error.stack);
@@ -1240,7 +1104,7 @@ async function getActionLogs(userId, options = {}) {
     if (error.message && (error.message.includes('index') || error.message.includes('permission'))) {
       console.warn('⚠️ Query error detected. Trying simpler query...');
       try {
-        // Try with Admin SDK fallback if available
+        // Try with Admin SDK fallback
         const adminDbInstance = initializeAdminDb();
         if (adminDbInstance) {
           let simpleQuery = adminDbInstance.collection('actionLogs')
@@ -1270,33 +1134,6 @@ async function getActionLogs(userId, options = {}) {
           console.log(`✅ Retrieved ${logs.length} action log(s) using Admin SDK fallback`);
           return logs;
         }
-        
-        // Client SDK fallback
-        const actionsCollection = collection(db, 'actionLogs');
-        const simpleConditions = [where('userId', '==', userId)];
-        if (actionFilter !== 'all') {
-          simpleConditions.push(where('action', '==', actionFilter));
-        }
-        simpleConditions.push(limit(limitCount));
-        const simpleQuery = query(actionsCollection, ...simpleConditions);
-        const snapshot = await getDocs(simpleQuery);
-        const logs = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          logs.push({
-            id: doc.id,
-            ...data,
-            timestamp: data.timestamp ? (typeof data.timestamp === 'string' ? data.timestamp : (data.timestamp.toDate ? data.timestamp.toDate().toISOString() : new Date(data.timestamp).toISOString())) : (data.createdAt ? (typeof data.createdAt === 'string' ? data.createdAt : (data.createdAt.toDate ? data.createdAt.toDate().toISOString() : new Date(data.createdAt).toISOString())) : new Date().toISOString())
-          });
-        });
-        // Sort in memory
-        logs.sort((a, b) => {
-          const dateA = new Date(a.timestamp).getTime();
-          const dateB = new Date(b.timestamp).getTime();
-          return dateB - dateA; // Descending
-        });
-        console.log(`✅ Retrieved ${logs.length} action log(s) using client SDK fallback`);
-        return logs;
       } catch (fallbackError) {
         console.error('❌ Fallback query also failed:', fallbackError.message);
       }
@@ -1318,39 +1155,16 @@ async function deleteActionLog(logId, userId) {
   }
   
   try {
-    // Prefer Admin SDK (bypasses security rules)
+    // Use Admin SDK (bypasses security rules)
     const adminDbInstance = initializeAdminDb();
-    if (adminDbInstance) {
-      // Verify the log belongs to the user before deleting (security check)
-      const logDoc = await adminDbInstance.collection('actionLogs').doc(logId).get();
-      if (!logDoc.exists) {
-        console.warn(`⚠️ Action log ${logId} does not exist`);
-        return false;
-      }
-      
-      const logData = logDoc.data();
-      if (logData.userId !== userId) {
-        console.warn(`⚠️ Security: Action log ${logId} does not belong to user ${userId}`);
-        return false;
-      }
-      
-      // Delete the document
-      await adminDbInstance.collection('actionLogs').doc(logId).delete();
-      console.log(`✅ Deleted action log ${logId} for user ${userId}`);
-      return true;
-    }
-    
-    // Fallback to client SDK (requires security rules)
-    if (!db || !app) {
-      console.warn('⚠️ Firebase not initialized, cannot delete action log');
+    if (!adminDbInstance) {
+      console.warn('⚠️ Firebase Admin SDK not available, cannot delete action log');
       return false;
     }
     
-    // Verify ownership and delete
-    const logDocRef = doc(db, 'actionLogs', logId);
-    const logDoc = await getDoc(logDocRef);
-    
-    if (!logDoc.exists()) {
+    // Verify the log belongs to the user before deleting (security check)
+    const logDoc = await adminDbInstance.collection('actionLogs').doc(logId).get();
+    if (!logDoc.exists) {
       console.warn(`⚠️ Action log ${logId} does not exist`);
       return false;
     }
@@ -1361,8 +1175,8 @@ async function deleteActionLog(logId, userId) {
       return false;
     }
     
-    // Delete using client SDK
-    await deleteDoc(logDocRef);
+    // Delete the document
+    await adminDbInstance.collection('actionLogs').doc(logId).delete();
     console.log(`✅ Deleted action log ${logId} for user ${userId}`);
     return true;
   } catch (error) {

@@ -9,9 +9,18 @@
     // Register Service Worker
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/service-worker.js', {
-                scope: '/' // Explicitly set scope to root
-            })
+            // Check if service worker file exists before registering
+            fetch('/service-worker.js', { method: 'HEAD' })
+                .then((response) => {
+                    if (response.ok) {
+                        // Service worker file exists, register it
+                        return navigator.serviceWorker.register('/service-worker.js', {
+                            scope: '/' // Explicitly set scope to root
+                        });
+                    } else {
+                        throw new Error('Service worker file not found (404)');
+                    }
+                })
                 .then((registration) => {
                     console.log('[PWA] Service Worker registered successfully:', registration.scope);
 
@@ -30,7 +39,12 @@
                     });
                 })
                 .catch((error) => {
-                    console.error('[PWA] Service Worker registration failed:', error);
+                    // Only log error if it's not a 404 (file not found is expected if service worker is disabled)
+                    if (error.message && !error.message.includes('404') && !error.message.includes('not found')) {
+                        console.warn('[PWA] Service Worker registration failed:', error.message);
+                    } else {
+                        console.log('[PWA] Service Worker not available (file not found or disabled)');
+                    }
                     // Don't show alert - just log the error
                 });
 

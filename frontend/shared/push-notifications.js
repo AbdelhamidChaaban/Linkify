@@ -298,6 +298,13 @@ class PushNotificationManager {
     
     async registerServiceWorker() {
         try {
+            // First, check if service worker file exists
+            const swCheck = await fetch('/service-worker.js', { method: 'HEAD' });
+            if (!swCheck.ok) {
+                console.log('[SW] Service Worker file not found, skipping registration');
+                return null;
+            }
+            
             // First, check if there are any existing service workers and unregister them if needed
             const registrations = await navigator.serviceWorker.getRegistrations();
             for (let registration of registrations) {

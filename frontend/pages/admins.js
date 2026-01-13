@@ -300,7 +300,8 @@ class AdminsManager {
             // Verify user is still authenticated
             const currentUserId = this.getCurrentUserId();
             if (!currentUserId) {
-                console.error('❌ [Admins] User not authenticated after wait - cannot initialize');
+                console.error('❌ [Admins] User not authenticated after wait - redirecting to login');
+                window.location.href = '/auth/login.html';
                 return;
             }
             
@@ -321,6 +322,14 @@ class AdminsManager {
             }, 1000);
         }).catch(error => {
             console.error('Firebase initialization error:', error);
+            
+            // If user is not authenticated, redirect to login page
+            if (error.message && error.message.includes('not authenticated')) {
+                console.warn('⚠️ [Admins] User not authenticated - redirecting to login');
+                window.location.href = '/auth/login.html';
+                return;
+            }
+            
             const tbody = document.getElementById('adminsTableBody');
             if (tbody) {
                 tbody.innerHTML = `
@@ -342,73 +351,114 @@ class AdminsManager {
         
         while (attempts < maxAttempts) {
             try {
-                if (typeof auth !== 'undefined' && auth && auth.currentUser && auth.currentUser.uid) {
+                // First check if firebase is available
+                if (typeof firebase === 'undefined' || !firebase || !firebase.auth) {
+                    // Firebase not loaded yet, wait and retry
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    attempts++;
+                    continue;
+                }
+                
+                // Try to access auth - it might throw if not initialized yet
+                let authInstance;
+                try {
+                    // Check if auth is defined in global scope (from firebase-config.js)
+                    if (typeof auth !== 'undefined' && auth) {
+                        authInstance = auth;
+                    } else {
+                        // Fallback: get auth directly from firebase
+                        authInstance = firebase.auth();
+                    }
+                } catch (initError) {
+                    // Auth not initialized yet, wait and retry
+                    if (initError.message && initError.message.includes('initialization')) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        attempts++;
+                        continue;
+                    }
+                    throw initError;
+                }
+                
+                // Now check if user is authenticated
+                if (authInstance && authInstance.currentUser && authInstance.currentUser.uid) {
                     // User is already logged in - fast path
-                    this.currentUserId = auth.currentUser.uid;
-                    console.log('✅ [Admins] User already authenticated (fast path):', auth.currentUser.uid);
+                    this.currentUserId = authInstance.currentUser.uid;
+                    console.log('✅ [Admins] User already authenticated (fast path):', authInstance.currentUser.uid);
                     return Promise.resolve();
                 }
                 
-                if (typeof auth !== 'undefined' && auth) {
-                    // Wait for auth state to be confirmed via onAuthStateChanged
-                    return new Promise((resolve, reject) => {
-                        let resolved = false;
-                        const timeout = setTimeout(() => {
-                            if (!resolved) {
-                                resolved = true;
-                                if (auth.currentUser && auth.currentUser.uid) {
-                                    this.currentUserId = auth.currentUser.uid;
-                                    console.log('✅ [Admins] User authenticated (timeout fallback):', auth.currentUser.uid);
-                                    unsubscribe();
-                                    resolve();
-                                } else {
-                                    unsubscribe();
-                                    reject(new Error('Auth state timeout - user authentication state not confirmed'));
-                                }
-                            }
-                        }, 5000); // 5s timeout for auth state
-                        
-                        try {
-                            const unsubscribe = auth.onAuthStateChanged((user) => {
-                                if (resolved) return;
-                                clearTimeout(timeout);
-                                resolved = true;
-                                unsubscribe(); // Stop listening after first state change
-                                if (user && user.uid) {
-                                    this.currentUserId = user.uid;
-                                    console.log('✅ [Admins] Auth state confirmed - User authenticated:', user.uid);
-                                    resolve();
-                                } else {
-                                    console.error('❌ [Admins] Auth state confirmed - No user signed in');
-                                    reject(new Error('User not authenticated. Please log in.'));
-                                }
-                            });
-                            
-                            // Double-check if user logged in while setting up listener (race condition fix)
-                            if (auth.currentUser && auth.currentUser.uid && !resolved) {
-                                clearTimeout(timeout);
-                                resolved = true;
-                                this.currentUserId = auth.currentUser.uid;
-                                console.log('✅ [Admins] User authenticated (race condition fix):', auth.currentUser.uid);
-                                unsubscribe();
+                // Wait for auth state to be confirmed via onAuthStateChanged
+                return new Promise((resolve, reject) => {
+                    let resolved = false;
+                    let unsubscribeFn = null;
+                    
+                    const timeout = setTimeout(() => {
+                        if (!resolved) {
+                            resolved = true;
+                            if (unsubscribeFn) unsubscribeFn();
+                            if (authInstance.currentUser && authInstance.currentUser.uid) {
+                                this.currentUserId = authInstance.currentUser.uid;
+                                console.log('✅ [Admins] User authenticated (timeout fallback):', authInstance.currentUser.uid);
                                 resolve();
-                            }
-                        } catch (err) {
-                            clearTimeout(timeout);
-                            if (!resolved) {
-                                resolved = true;
-                                reject(err);
+                            } else {
+                                // Redirect to login page if not authenticated
+                                window.location.href = '/auth/login.html';
+                                reject(new Error('Auth state timeout - user authentication state not confirmed'));
                             }
                         }
-                    });
-                }
+                    }, 5000); // 5s timeout for auth state
+                    
+                    try {
+                        unsubscribeFn = authInstance.onAuthStateChanged((user) => {
+                            if (resolved) return;
+                            clearTimeout(timeout);
+                            resolved = true;
+                            if (unsubscribeFn) unsubscribeFn(); // Stop listening after first state change
+                            
+                            if (user && user.uid) {
+                                this.currentUserId = user.uid;
+                                console.log('✅ [Admins] Auth state confirmed - User authenticated:', user.uid);
+                                resolve();
+                            } else {
+                                console.error('❌ [Admins] Auth state confirmed - No user signed in');
+                                // Redirect to login page immediately
+                                window.location.href = '/auth/login.html';
+                                reject(new Error('User not authenticated. Please log in.'));
+                            }
+                        });
+                        
+                        // Double-check if user logged in while setting up listener (race condition fix)
+                        if (authInstance.currentUser && authInstance.currentUser.uid && !resolved) {
+                            clearTimeout(timeout);
+                            resolved = true;
+                            if (unsubscribeFn) unsubscribeFn();
+                            this.currentUserId = authInstance.currentUser.uid;
+                            console.log('✅ [Admins] User authenticated (race condition fix):', authInstance.currentUser.uid);
+                            resolve();
+                        }
+                    } catch (err) {
+                        clearTimeout(timeout);
+                        if (unsubscribeFn) unsubscribeFn();
+                        if (!resolved) {
+                            resolved = true;
+                            reject(err);
+                        }
+                    }
+                });
             } catch (error) {
-                console.warn('⚠️ [Admins] Auth check error (attempt ' + attempts + '):', error.message);
+                // Only log if it's not an initialization error (those are expected)
+                if (!error.message || !error.message.includes('initialization')) {
+                    console.warn('⚠️ [Admins] Auth check error (attempt ' + attempts + '):', error.message);
+                }
             }
             
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
+        
+        // If we get here, Firebase auth never became available
+        console.error('❌ [Admins] Firebase auth not available after ' + maxAttempts + ' attempts - redirecting to login');
+        window.location.href = '/auth/login.html';
         throw new Error('Firebase auth timeout - auth object not available after ' + maxAttempts + ' attempts');
     }
     

@@ -12,13 +12,40 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase (using compat version for easier integration)
-firebase.initializeApp(firebaseConfig);
+const app = firebase.initializeApp(firebaseConfig);
+
+// Verify project ID is correctly set
+if (app.options.projectId !== 'linkify-1f8e7') {
+    console.warn('⚠️ Firebase project ID mismatch. Expected: linkify-1f8e7, Got:', app.options.projectId);
+}
 
 // Initialize Firebase services
 const auth = firebase.auth();
-const db = firebase.firestore();
 
-// Configure Firestore settings for better performance and resilience
+// Initialize Firestore with long polling to bypass stream blocking
+// This prevents 404 errors on 'Listen' channels and ERR_INTERNET_DISCONNECTED errors
+let db;
+try {
+    // For compat SDK, we need to initialize Firestore first, then configure settings
+    db = firebase.firestore();
+    
+    // CRITICAL: Configure Firestore to use long polling instead of WebSocket streams
+    // This bypasses issues with firestore.googleapis.com/.../Listen/channel 404 errors
+    // and ERR_INTERNET_DISCONNECTED errors caused by network/proxy blocking
+    if (db.settings) {
+        db.settings({
+            experimentalForceLongPolling: true, // Use HTTP long polling instead of WebSocket streams
+            cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED // Enable unlimited cache for offline support
+        });
+        console.log('✅ Firestore configured with long polling (bypasses stream blocking)');
+    }
+} catch (settingsError) {
+    console.warn('⚠️ Could not configure Firestore settings:', settingsError.message);
+    // Fallback: try to get db without settings
+    db = firebase.firestore();
+}
+
+// Configure Firestore persistence for offline support
 // Note: Using compat version syntax
 try {
     // Enable offline persistence for proper offline support and data caching
@@ -26,7 +53,7 @@ try {
     // but it's harmless and necessary for offline functionality. The warning indicates
     // that Firebase will migrate to FirestoreSettings.cache in future versions, but
     // the compat SDK doesn't support the new API yet. The functionality works correctly.
-    if (db.enablePersistence) {
+    if (db && db.enablePersistence) {
         db.enablePersistence({
             synchronizeTabs: false  // Set to false to avoid multi-tab persistence warning
         }).catch((err) => {
@@ -41,17 +68,8 @@ try {
             }
         });
     }
-    
-    // Note: Removed db.settings() call to avoid "overriding original host" warning.
-    // Firebase uses default cache settings which are sufficient for most use cases.
-    // If you need unlimited cache, uncomment below (will show host override warning):
-    // if (db.settings) {
-    //     db.settings({
-    //         cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED
-    //     });
-    // }
 } catch (error) {
-    console.warn('⚠️ Could not configure Firestore settings:', error.message);
+    console.warn('⚠️ Could not configure Firestore persistence:', error.message);
 }
 
 // Add global error handler for Firestore connection issues
