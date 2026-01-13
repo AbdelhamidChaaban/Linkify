@@ -127,10 +127,52 @@ router.post('/', authenticateJWT, async (req, res) => {
             }
         }
 
+        // Check for duplicate phone number (across all admins)
+        // Normalize phone for comparison: remove all non-digits
+        const normalizedPhone = phone.trim().replace(/\D/g, '');
+        console.log(`🔍 [Create Admin] Checking for duplicate phone: ${normalizedPhone}`);
+        
+        const phoneCheckSnapshot = await adminDbInstance.collection('admins')
+            .where('phone', '==', normalizedPhone)
+            .limit(1)
+            .get();
+        
+        if (!phoneCheckSnapshot.empty) {
+            console.log(`❌ [Create Admin] Duplicate phone found: ${normalizedPhone}`);
+            return res.status(400).json({
+                success: false,
+                error: 'An admin with this phone number already exists. Please use a different phone number.'
+            });
+        }
+
+        // Check for duplicate name (across all admins)
+        // Normalize name for comparison: trim and lowercase
+        const normalizedName = name.trim();
+        console.log(`🔍 [Create Admin] Checking for duplicate name: "${normalizedName}"`);
+        
+        // Firestore doesn't support case-insensitive queries directly, so we'll check with exact match
+        // For case-insensitive, we'd need to store a lowercase version, but for now exact match is fine
+        const nameCheckSnapshot = await adminDbInstance.collection('admins')
+            .where('name', '==', normalizedName)
+            .limit(1)
+            .get();
+        
+        if (!nameCheckSnapshot.empty) {
+            console.log(`❌ [Create Admin] Duplicate name found: "${normalizedName}"`);
+            return res.status(400).json({
+                success: false,
+                error: 'An admin with this name already exists. Please use a different name.'
+            });
+        }
+        
+        console.log(`✅ [Create Admin] No duplicates found for phone: ${normalizedPhone}, name: "${normalizedName}"`);
+
         // Create admin document
+        // Ensure phone is normalized (remove all non-digits) for consistency
+        const finalPhone = phone.trim().replace(/\D/g, '');
         const adminData = {
             name: name.trim(),
-            phone: phone.trim(),
+            phone: finalPhone,
             type: type,
             status: type === 'Open' ? 'Open (Admin)' : 'Closed (Admin)',
             quota: quotaNum,
@@ -229,10 +271,54 @@ router.put('/:adminId', authenticateJWT, async (req, res) => {
             });
         }
 
+        // Check for duplicate phone number (exclude current admin)
+        // Normalize phone for comparison: remove all non-digits
+        const normalizedPhone = phone.trim().replace(/\D/g, '');
+        console.log(`🔍 [Update Admin] Checking for duplicate phone: ${normalizedPhone} (excluding ${adminId})`);
+        
+        const phoneCheckSnapshot = await adminDbInstance.collection('admins')
+            .where('phone', '==', normalizedPhone)
+            .limit(10) // Get more to check multiple matches
+            .get();
+        
+        // Check if phone is taken by another admin (not the one being updated)
+        const phoneTakenByOtherAdmin = phoneCheckSnapshot.docs.some(doc => doc.id !== adminId);
+        if (phoneTakenByOtherAdmin) {
+            console.log(`❌ [Update Admin] Duplicate phone found: ${normalizedPhone}`);
+            return res.status(400).json({
+                success: false,
+                error: 'An admin with this phone number already exists. Please use a different phone number.'
+            });
+        }
+
+        // Check for duplicate name (exclude current admin)
+        // Normalize name for comparison: trim
+        const normalizedName = name.trim();
+        console.log(`🔍 [Update Admin] Checking for duplicate name: "${normalizedName}" (excluding ${adminId})`);
+        
+        const nameCheckSnapshot = await adminDbInstance.collection('admins')
+            .where('name', '==', normalizedName)
+            .limit(10) // Get more to check multiple matches
+            .get();
+        
+        // Check if name is taken by another admin (not the one being updated)
+        const nameTakenByOtherAdmin = nameCheckSnapshot.docs.some(doc => doc.id !== adminId);
+        if (nameTakenByOtherAdmin) {
+            console.log(`❌ [Update Admin] Duplicate name found: "${normalizedName}"`);
+            return res.status(400).json({
+                success: false,
+                error: 'An admin with this name already exists. Please use a different name.'
+            });
+        }
+        
+        console.log(`✅ [Update Admin] No duplicates found for phone: ${normalizedPhone}, name: "${normalizedName}"`);
+
         // Update admin data
+        // Ensure phone is normalized (remove all non-digits) for consistency
+        const finalPhone = phone.trim().replace(/\D/g, '');
         const updateData = {
             name: name.trim(),
-            phone: phone.trim(),
+            phone: finalPhone,
             type: type,
             status: type === 'Open' ? 'Open (Admin)' : 'Closed (Admin)',
             quota: parseInt(quota) || 0,

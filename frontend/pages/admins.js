@@ -842,10 +842,52 @@ class AdminsManager {
                     })
                 });
                 
-                const result = await response.json();
+                // Handle both successful and error responses
+                let result;
+                try {
+                    result = await response.json();
+                } catch (jsonError) {
+                    // If response is not JSON, get text
+                    const errorText = await response.text();
+                    console.error('❌ Non-JSON response:', errorText);
+                    this.setLoading(false);
+                    alert(`❌ Error: ${errorText || 'Failed to update admin'}`);
+                    return;
+                }
                 
                 if (!result.success) {
-                    throw new Error(result.error || 'Failed to update admin');
+                    const errorMessage = result.error || 'Failed to update admin';
+                    
+                    // Check if it's a duplicate phone number error
+                    if (response.status === 400 && (errorMessage.includes('phone number') || errorMessage.includes('phone'))) {
+                        this.showError('phone', errorMessage);
+                        // Also highlight the field
+                        const phoneInput = document.getElementById('adminPhone');
+                        if (phoneInput) {
+                            phoneInput.focus();
+                            phoneInput.style.borderColor = '#ef4444';
+                        }
+                        this.setLoading(false);
+                        return;
+                    }
+                    // Check if it's a duplicate name error
+                    else if (response.status === 400 && (errorMessage.includes('name already exists') || errorMessage.includes('name'))) {
+                        this.showError('name', errorMessage);
+                        // Also highlight the field
+                        const nameInput = document.getElementById('adminName');
+                        if (nameInput) {
+                            nameInput.focus();
+                            nameInput.style.borderColor = '#ef4444';
+                        }
+                        this.setLoading(false);
+                        return;
+                    } else {
+                        // Generic error
+                        console.error('❌ Update admin error:', errorMessage);
+                        alert(`❌ ${errorMessage}`);
+                        this.setLoading(false);
+                        return;
+                    }
                 }
                 
                 // Close modal and refresh list
@@ -871,17 +913,58 @@ class AdminsManager {
                     })
                 });
                 
-                const result = await response.json();
+                // Handle both successful and error responses
+                let result;
+                try {
+                    result = await response.json();
+                } catch (jsonError) {
+                    // If response is not JSON, get text
+                    const errorText = await response.text();
+                    console.error('❌ Non-JSON response:', errorText);
+                    this.setLoading(false);
+                    alert(`❌ Error: ${errorText || 'Failed to create admin'}`);
+                    return;
+                }
                 
                 if (!result.success) {
+                    const errorMessage = result.error || 'Failed to create admin';
+                    
                     // Check if it's an admin limit error
-                    if (response.status === 403 && result.error && result.error.includes('admin limit')) {
-                        alert(`❌ ${result.error}`);
-                    } else {
-                        throw new Error(result.error || 'Failed to create admin');
+                    if (response.status === 403 && errorMessage.includes('admin limit')) {
+                        alert(`❌ ${errorMessage}`);
+                        this.setLoading(false);
+                        return;
+                    } 
+                    // Check if it's a duplicate phone number error
+                    else if (response.status === 400 && (errorMessage.includes('phone number') || errorMessage.includes('phone'))) {
+                        this.showError('phone', errorMessage);
+                        // Also highlight the field
+                        const phoneInput = document.getElementById('adminPhone');
+                        if (phoneInput) {
+                            phoneInput.focus();
+                            phoneInput.style.borderColor = '#ef4444';
+                        }
+                        this.setLoading(false);
+                        return;
                     }
-                    this.setLoading(false);
-                    return;
+                    // Check if it's a duplicate name error
+                    else if (response.status === 400 && (errorMessage.includes('name already exists') || errorMessage.includes('name'))) {
+                        this.showError('name', errorMessage);
+                        // Also highlight the field
+                        const nameInput = document.getElementById('adminName');
+                        if (nameInput) {
+                            nameInput.focus();
+                            nameInput.style.borderColor = '#ef4444';
+                        }
+                        this.setLoading(false);
+                        return;
+                    } else {
+                        // Generic error
+                        console.error('❌ Create admin error:', errorMessage);
+                        alert(`❌ ${errorMessage}`);
+                        this.setLoading(false);
+                        return;
+                    }
                 }
                 
                 const newAdminId = result.adminId;
