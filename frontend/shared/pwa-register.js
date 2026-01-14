@@ -24,7 +24,7 @@
                 .then((registration) => {
                     console.log('[PWA] Service Worker registered successfully:', registration.scope);
 
-                    // Check for updates
+                    // Check for updates (with error handling)
                     registration.addEventListener('updatefound', () => {
                         const newWorker = registration.installing;
                         if (newWorker) {
@@ -35,6 +35,14 @@
                                     // Removed confirm() to prevent blocking - use a toast notification instead
                                 }
                             });
+                        }
+                    });
+                    
+                    // Handle update check errors gracefully
+                    registration.update().catch((updateError) => {
+                        // Silently handle update errors (file might not exist)
+                        if (updateError.message && !updateError.message.includes('404') && !updateError.message.includes('not found')) {
+                            console.warn('[PWA] Service Worker update check failed:', updateError.message);
                         }
                     });
                 })

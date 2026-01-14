@@ -16,6 +16,17 @@ window.addEventListener('unhandledrejection', (event) => {
         return;
     }
     
+    // Suppress service worker errors when file doesn't exist (expected behavior)
+    if (errorMessage.includes('service-worker.js') && 
+        (errorMessage.includes('Not found') || 
+         errorMessage.includes('404') || 
+         errorMessage.includes('Failed to update') ||
+         errorMessage.includes('service worker'))) {
+        // Suppress this harmless service worker error (file is optional)
+        event.preventDefault();
+        return;
+    }
+    
     // Let other errors pass through normally
 });
 
@@ -27,6 +38,17 @@ window.addEventListener('error', (event) => {
         errorMessage.includes('asynchronous response') ||
         errorMessage.includes('message channel closed before a response')) {
         // Suppress this harmless browser extension error
+        event.preventDefault();
+        return false;
+    }
+    
+    // Suppress service worker errors when file doesn't exist (expected behavior)
+    if (errorMessage.includes('service-worker.js') && 
+        (errorMessage.includes('Not found') || 
+         errorMessage.includes('404') || 
+         errorMessage.includes('Failed to update') ||
+         errorMessage.includes('service worker'))) {
+        // Suppress this harmless service worker error (file is optional)
         event.preventDefault();
         return false;
     }

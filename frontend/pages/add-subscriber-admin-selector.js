@@ -184,9 +184,17 @@ AddSubscriberPageManager.prototype.closeAdminSelector = function() {
 AddSubscriberPageManager.prototype.calculateAdminSelectorData = function(admin) {
     const alfaData = admin.alfaData || {};
     
-    // Use values directly from insights table (already calculated)
-    const packageSize = admin.totalLimit || 0;
-    const adminQuota = admin.adminLimit || 0;
+    // Get package size (total bundle size) - this is what should be displayed as "Admin: X GB"
+    let packageSize = 0;
+    if (admin.totalLimit !== undefined && admin.totalLimit !== null) {
+        packageSize = parseFloat(admin.totalLimit) || 0;
+    }
+    
+    // Get admin's own consumption/quota
+    let adminQuota = 0;
+    if (admin.adminLimit !== undefined && admin.adminLimit !== null) {
+        adminQuota = parseFloat(admin.adminLimit) || 0;
+    }
     
     // Use subscriber counts from insights table
     const activeCount = admin.subscribersActiveCount || 0;
@@ -255,8 +263,17 @@ AddSubscriberPageManager.prototype.calculateAdminSelectorData = function(admin) 
     }
     
     // Calculate free space: package size - (admin quota + sum of all subscriber quotas)
-    const totalSubscriberQuota = subscriberQuotas.reduce((sum, q) => sum + q, 0);
-    const freeSpace = Math.max(0, packageSize - (adminQuota + totalSubscriberQuota));
+    const totalSubscriberQuota = subscriberQuotas.reduce((sum, q) => {
+        const quota = parseFloat(q) || 0;
+        return sum + quota;
+    }, 0);
+    
+    // Ensure all values are valid numbers before calculation
+    const packageSizeNum = parseFloat(packageSize) || 0;
+    const adminQuotaNum = parseFloat(adminQuota) || 0;
+    const totalSubscriberQuotaNum = parseFloat(totalSubscriberQuota) || 0;
+    
+    const freeSpace = Math.max(0, packageSizeNum - (adminQuotaNum + totalSubscriberQuotaNum));
     
     // Get validity date and calculate days remaining
     const validityDate = alfaData.validityDate || admin.validityDate || '';
@@ -362,7 +379,7 @@ AddSubscriberPageManager.prototype.populateAdminSelector = function(admins) {
                     ${data.packageSize > 0 ? `<span class="admin-selector-package-badge">${data.packageSize} GB</span>` : ''}
                 </div>
                 <div class="admin-selector-item-details">
-                    Admin: ${data.adminQuota} GB | ${subscribersInfo} | Free: ${data.freeSpace.toFixed(1)} GB
+                    Admin: ${!isNaN(data.adminQuota) && data.adminQuota >= 0 ? data.adminQuota.toFixed(1) : '0'} GB | ${subscribersInfo} | Free: ${!isNaN(data.freeSpace) && data.freeSpace >= 0 ? data.freeSpace.toFixed(1) : '0'} GB
                 </div>
                 <div class="admin-selector-item-phone">${this.escapeHtml(admin.phone || '')}</div>
                 ${validityInfo ? `<div class="admin-selector-item-validity">${this.escapeHtml(validityInfo)}</div>` : ''}
@@ -427,7 +444,7 @@ AddSubscriberPageManager.prototype.filterAdminSelector = function(searchTerm, al
                     ${data.packageSize > 0 ? `<span class="admin-selector-package-badge">${data.packageSize} GB</span>` : ''}
                 </div>
                 <div class="admin-selector-item-details">
-                    Admin: ${data.adminQuota} GB | ${subscribersInfo} | Free: ${data.freeSpace.toFixed(1)} GB
+                    Admin: ${!isNaN(data.adminQuota) && data.adminQuota >= 0 ? data.adminQuota.toFixed(1) : '0'} GB | ${subscribersInfo} | Free: ${!isNaN(data.freeSpace) && data.freeSpace >= 0 ? data.freeSpace.toFixed(1) : '0'} GB
                 </div>
                 <div class="admin-selector-item-phone">${this.escapeHtml(admin.phone || '')}</div>
                 ${validityInfo ? `<div class="admin-selector-item-validity">${this.escapeHtml(validityInfo)}</div>` : ''}

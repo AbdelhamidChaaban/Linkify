@@ -341,9 +341,14 @@ class PushNotificationManager {
                 this.handleServiceWorkerMessage(event);
             });
             
-            // Check for updates every 60 seconds
+            // Check for updates every 60 seconds (with error handling)
             setInterval(() => {
-                registration.update();
+                registration.update().catch((updateError) => {
+                    // Silently handle update errors (file might not exist)
+                    if (updateError.message && !updateError.message.includes('404') && !updateError.message.includes('not found')) {
+                        console.warn('[SW] Service Worker update check failed:', updateError.message);
+                    }
+                });
             }, 60000);
             
             return registration;

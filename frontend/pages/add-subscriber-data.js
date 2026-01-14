@@ -104,9 +104,119 @@ AddSubscriberPageManager.prototype.processAdminsSnapshot = function(snapshot) {
             // Get removed active subscribers (stored at root level, not in alfaData)
             const removedActiveSubscribers = data.removedActiveSubscribers || [];
             
-            // Get limits and validity date
-            const totalLimit = alfaData.totalLimit || alfaData.totalConsumption || 0;
-            const adminLimit = alfaData.adminLimit || alfaData.adminConsumption || 0;
+            // Extract totalLimit (package size) - same logic as insights.js
+            let totalLimit = 0;
+            
+            // First, try to parse from totalConsumption string (format: "X / Y GB")
+            if (alfaData.totalConsumption && typeof alfaData.totalConsumption === 'string') {
+                const consumptionMatch = String(alfaData.totalConsumption).match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                if (consumptionMatch) {
+                    totalLimit = parseFloat(consumptionMatch[2]) || 0; // Second number is the total/limit
+                }
+            }
+            
+            // If still 0, try to extract from PackageValue (total bundle size) in primaryData
+            if (totalLimit === 0 && alfaData.primaryData) {
+                const primaryData = alfaData.primaryData;
+                const packageValues = [];
+                
+                if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue)) {
+                    for (const service of primaryData.ServiceInformationValue) {
+                        if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                            for (const details of service.ServiceDetailsInformationValue) {
+                                if (details.PackageValue) {
+                                    const packageStr = String(details.PackageValue).trim();
+                                    const packageMatch = packageStr.match(/^([\d.]+)/);
+                                    if (packageMatch) {
+                                        const packageValue = parseFloat(packageMatch[1]);
+                                        if (!isNaN(packageValue) && packageValue > 0) {
+                                            packageValues.push(packageValue);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (packageValues.length > 0) {
+                    // Use the largest PackageValue as totalLimit
+                    totalLimit = Math.max(...packageValues);
+                }
+            }
+            
+            // Fallback to totalLimit field if available
+            if (totalLimit === 0 && alfaData.totalLimit) {
+                totalLimit = parseFloat(alfaData.totalLimit) || 0;
+            }
+            
+            // Extract adminLimit (admin's quota/limit) - same logic as insights.js
+            let adminLimit = 0;
+            
+            // First, try to get from quota field in data (admin's own quota/limit)
+            if (data.quota) {
+                // Handle if quota is a string with units (e.g., "15 GB" or "15")
+                const quotaStr = String(data.quota).trim();
+                const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+            }
+            
+            // Try to parse from adminConsumption string (format: "X / Y GB" - Y is the limit/quota)
+            if (adminLimit === 0 && alfaData.adminConsumption && typeof alfaData.adminConsumption === 'string') {
+                const consumptionMatch = String(alfaData.adminConsumption).match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                if (consumptionMatch) {
+                    adminLimit = parseFloat(consumptionMatch[2]) || 0; // Second number is the limit/quota
+                }
+            }
+            
+            // Try to extract from primaryData (U-Share Main circle quota)
+            if (adminLimit === 0 && alfaData.primaryData) {
+                try {
+                    const primaryData = alfaData.primaryData;
+                    if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue)) {
+                        for (const service of primaryData.ServiceInformationValue) {
+                            const serviceName = (service.ServiceNameValue || '').toLowerCase();
+                            // Look for U-Share Main service
+                            if (serviceName.includes('u-share main') || serviceName === 'u-share main') {
+                                if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                    for (const details of service.ServiceDetailsInformationValue) {
+                                        // Try PackageValue first (total bundle)
+                                        if (details.PackageValue) {
+                                            const packageStr = String(details.PackageValue).trim();
+                                            const packageMatch = packageStr.match(/^([\d.]+)/);
+                                            if (packageMatch) {
+                                                const packageValue = parseFloat(packageMatch[1]);
+                                                if (!isNaN(packageValue) && packageValue > 0) {
+                                                    adminLimit = packageValue;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        // Fallback: Try QuotaValue
+                                        if (adminLimit === 0 && details.QuotaValue) {
+                                            const quotaStr = String(details.QuotaValue).trim();
+                                            const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                                            if (quotaMatch) {
+                                                adminLimit = parseFloat(quotaMatch[1]) || 0;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (adminLimit > 0) break;
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Error extracting adminLimit from primaryData:', error);
+                }
+            }
+            
+            // Fallback to adminLimit field
+            if (adminLimit === 0 && alfaData.adminLimit) {
+                adminLimit = parseFloat(alfaData.adminLimit) || 0;
+            }
+            
             const validityDate = alfaData.validityDate || '';
             
             // Extract basic admin info
