@@ -481,7 +481,29 @@ class PushNotificationManager {
                 const userAgent = navigator.userAgent.toLowerCase();
                 let errorMessage = 'Failed to enable push notifications. ';
                 
-                if (userAgent.includes('opera') || userAgent.includes('opr/')) {
+                // Check for storage errors (often happens in private/incognito mode)
+                // Check both error name and message for storage-related errors
+                const isStorageError = (subscribeError.name === 'AbortError' || subscribeError.name === 'DOMException') &&
+                                      subscribeError.message && 
+                                      (subscribeError.message.toLowerCase().includes('storage') || 
+                                       subscribeError.message.toLowerCase().includes('quota') ||
+                                       subscribeError.message.toLowerCase().includes('indexeddb'));
+                
+                if (isStorageError) {
+                    errorMessage += '\n\n⚠️ STORAGE ERROR DETECTED:\n';
+                    errorMessage += 'This error usually occurs when:\n';
+                    errorMessage += '1. You are in Private/Incognito browsing mode\n';
+                    errorMessage += '2. Browser storage (IndexedDB) is disabled\n';
+                    errorMessage += '3. Browser storage quota is exceeded\n';
+                    errorMessage += '4. Browser extensions are blocking storage\n\n';
+                    errorMessage += 'SOLUTIONS:\n';
+                    errorMessage += '✅ Exit Private/Incognito mode and use a regular window\n';
+                    errorMessage += '✅ Enable browser storage in settings\n';
+                    errorMessage += '✅ Clear browser cache and storage, then try again\n';
+                    errorMessage += '✅ Disable browser extensions that block storage\n';
+                    errorMessage += '✅ Try a different browser (Chrome, Firefox, Edge)\n\n';
+                    errorMessage += 'NOTE: Push notifications require browser storage to work.';
+                } else if (userAgent.includes('opera') || userAgent.includes('opr/')) {
                     errorMessage += '\n\n⚠️ OPERA BROWSER LIMITATION:\n';
                     errorMessage += 'Unfortunately, Opera browser does not fully support Web Push notifications.\n';
                     errorMessage += 'Even with proper settings, Opera\'s push service backend may reject registrations.\n\n';

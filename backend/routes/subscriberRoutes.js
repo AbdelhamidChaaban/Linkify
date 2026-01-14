@@ -11,7 +11,7 @@ const cheerio = require('cheerio');
 const { authenticateJWT } = require('../middleware/auth');
 const { getCookiesOrLogin } = require('../services/cookieManager');
 const { formatCookiesForHeader } = require('../services/apiClient');
-const { getAdminData, logAction, addRemovedActiveSubscriber } = require('../services/firebaseDbService');
+const { getAdminData, getFullAdminData, logAction, addRemovedActiveSubscriber } = require('../services/firebaseDbService');
 // Response normalizer utilities (inline for consistency)
 function normalizeSubscriberResponse(subscriberData) {
     return {
@@ -521,13 +521,60 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
         // Get fresh cookies (in case they expired)
         let freshCookies = await getCookiesOrLogin(adminPhone, adminPassword, adminId);
         
+        // CRITICAL: Get subscriber data from Firebase BEFORE deletion (same as detection logic)
+        // This ensures we preserve the consumption/limit values correctly
+        let subscriberDataToSave = null;
+        try {
+            const adminData = await getFullAdminData(adminId);
+            if (adminData && adminData.alfaData && adminData.alfaData.secondarySubscribers) {
+                const secondarySubscribers = adminData.alfaData.secondarySubscribers || [];
+                // Find subscriber in secondarySubscribers (normalize phone for comparison)
+                const normalizedCleanNumber = cleanSubscriberNumber.replace(/^0+/, '');
+                const matchingSubscriber = secondarySubscribers.find(sub => {
+                    const subPhone = (sub.phoneNumber || '').replace(/^0+/, '');
+                    const subFullPhone = (sub.fullPhoneNumber || '').replace(/^961/, '').replace(/^0+/, '');
+                    return subPhone === normalizedCleanNumber || 
+                           subFullPhone === normalizedCleanNumber ||
+                           sub.phoneNumber === cleanSubscriberNumber ||
+                           (sub.fullPhoneNumber && sub.fullPhoneNumber.replace(/^961/, '') === cleanSubscriberNumber);
+                });
+                
+                if (matchingSubscriber) {
+                    // Extract consumption and limit (handle different field names)
+                    const consumption = matchingSubscriber.consumption !== undefined ? matchingSubscriber.consumption :
+                                       (matchingSubscriber.usedConsumption !== undefined ? matchingSubscriber.usedConsumption : 0);
+                    const limit = matchingSubscriber.quota !== undefined ? matchingSubscriber.quota :
+                                 (matchingSubscriber.limit !== undefined ? matchingSubscriber.limit :
+                                 (matchingSubscriber.totalQuota !== undefined ? matchingSubscriber.totalQuota : 0));
+                    
+                    // Only save if it's an Active subscriber (same as detection logic)
+                    const status = matchingSubscriber.status || 'Active';
+                    if (status === 'Active' || !status) {
+                        subscriberDataToSave = {
+                            phoneNumber: cleanSubscriberNumber,
+                            fullPhoneNumber: matchingSubscriber.fullPhoneNumber || `961${cleanSubscriberNumber}`,
+                            consumption: consumption,
+                            limit: limit,
+                            status: 'Active'
+                        };
+                        console.log(`✅ [Delete] Found subscriber in Firebase data: ${JSON.stringify(subscriberDataToSave)}`);
+                    } else {
+                        console.log(`ℹ️ [Delete] Subscriber ${cleanSubscriberNumber} is ${status}, will not save as "Out" (Requested subscribers are automatically removed)`);
+                    }
+                } else {
+                    console.warn(`⚠️ [Delete] Subscriber ${cleanSubscriberNumber} not found in Firebase secondarySubscribers, will try to extract from HTML`);
+                }
+            }
+        } catch (firebaseError) {
+            console.warn(`⚠️ [Delete] Error getting subscriber data from Firebase: ${firebaseError.message}, will try to extract from HTML`);
+        }
+        
         // Step 0: Fetch Ushare page to extract the actual delete link from subscriber card
         // Step 1: GET the confirmation page using the extracted link
         // Step 2: POST the confirmation form with CSRF token
         let deleteSuccess = false;
         let attempts = 0;
         const maxAttempts = 2;
-        let subscriberDataToSave = null; // Store subscriber data before deletion to save as "Out"
         
         while (attempts < maxAttempts && !deleteSuccess) {
             const cookieHeader = formatCookiesForHeader(freshCookies);
@@ -738,59 +785,82 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                             const actualPendingStatus = pendingMatch ? pendingMatch[1] : null;
                             console.log(`✅ [Delete] Found matching subscriber card: ${cardPhone} (clean: ${cleanCardPhone}) -> ${deleteLinkHref} (pending=${actualPendingStatus || 'not specified'})`);
                             
-                            // Extract subscriber data BEFORE deletion (consumption, limit, status)
-                            // Only save Active subscribers as "Out" (Requested subscribers are automatically removed)
-                            const statusElement = $card.find('h4').first();
-                            const statusText = statusElement.text().trim();
-                            const isActive = statusText.toLowerCase().includes('active');
-                            const isRequested = statusText.toLowerCase().includes('requested');
-                            
-                            if (isActive) {
-                                // Extract consumption and limit from the card
-                                // Consumption is usually in a progress bar or capacity element
-                                let consumption = 0;
-                                let limit = 0;
+                            // Only extract from HTML if we didn't get data from Firebase (fallback)
+                            if (!subscriberDataToSave) {
+                                // Extract subscriber data BEFORE deletion (consumption, limit, status)
+                                // Only save Active subscribers as "Out" (Requested subscribers are automatically removed)
+                                const statusElement = $card.find('h4').first();
+                                const statusText = statusElement.text().trim();
+                                const isActive = statusText.toLowerCase().includes('active');
+                                const isRequested = statusText.toLowerCase().includes('requested');
                                 
-                                // Try to find consumption in the capacity element (format: "X / Y GB")
-                                const capacityElement = $card.find('h4.italic.capacity');
-                                if (capacityElement.length > 0) {
-                                    const capacityText = capacityElement.text().trim();
-                                    const capacityMatch = capacityText.match(/([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
-                                    if (capacityMatch) {
-                                        consumption = parseFloat(capacityMatch[1]) || 0;
-                                        limit = parseFloat(capacityMatch[2]) || 0;
-                                        // Convert MB to GB if needed
-                                        if (capacityMatch[3].toUpperCase() === 'MB') {
-                                            consumption = consumption / 1024;
-                                            limit = limit / 1024;
+                                if (isActive) {
+                                    // Extract consumption and limit from the card
+                                    // Try multiple methods to ensure we get the values
+                                    let consumption = 0;
+                                    let limit = 0;
+                                    
+                                    const capacityElement = $card.find('h4.italic.capacity');
+                                    
+                                    // Method 1: Try data attributes first (most reliable - same as ushareHtmlParser.js)
+                                    if (capacityElement.length > 0) {
+                                        const dataVal = capacityElement.attr('data-val');
+                                        const dataQuota = capacityElement.attr('data-quota');
+                                        if (dataVal && dataQuota) {
+                                            consumption = parseFloat(dataVal) || 0;
+                                            limit = parseFloat(dataQuota) || 0;
+                                            console.log(`✅ [Delete] Extracted from HTML data attributes: consumption=${consumption}, limit=${limit}`);
                                         }
                                     }
-                                }
-                                
-                                // Try alternative method: look for progress bar or data attributes
-                                if (limit === 0) {
-                                    const progressBar = $card.find('.progress-bar, [class*="progress"]');
-                                    if (progressBar.length > 0) {
-                                        const progressText = progressBar.text().trim();
-                                        const progressMatch = progressText.match(/([\d.]+)\s*\/\s*([\d.]+)/);
-                                        if (progressMatch) {
-                                            consumption = parseFloat(progressMatch[1]) || 0;
-                                            limit = parseFloat(progressMatch[2]) || 0;
+                                    
+                                    // Method 2: Try parsing from capacity element text (format: "X / Y GB" or "X / Y MB")
+                                    if (limit === 0 && capacityElement.length > 0) {
+                                        const capacityText = capacityElement.text().trim();
+                                        const capacityMatch = capacityText.match(/([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
+                                        if (capacityMatch) {
+                                            consumption = parseFloat(capacityMatch[1]) || 0;
+                                            limit = parseFloat(capacityMatch[2]) || 0;
+                                            // Convert MB to GB if needed
+                                            if (capacityMatch[3].toUpperCase() === 'MB') {
+                                                consumption = consumption / 1024;
+                                                limit = limit / 1024;
+                                            }
+                                            console.log(`✅ [Delete] Extracted from HTML capacity text: consumption=${consumption}, limit=${limit}`);
                                         }
                                     }
+                                    
+                                    // Method 3: Try progress bar text as last resort
+                                    if (limit === 0) {
+                                        const progressBar = $card.find('.progress-bar, [class*="progress"]');
+                                        if (progressBar.length > 0) {
+                                            const progressText = progressBar.text().trim();
+                                            const progressMatch = progressText.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                                            if (progressMatch) {
+                                                consumption = parseFloat(progressMatch[1]) || 0;
+                                                limit = parseFloat(progressMatch[2]) || 0;
+                                                console.log(`✅ [Delete] Extracted from HTML progress bar: consumption=${consumption}, limit=${limit}`);
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Store subscriber data to save after successful deletion (only if we got values)
+                                    if (limit > 0 || consumption > 0) {
+                                        subscriberDataToSave = {
+                                            phoneNumber: cleanSubscriberNumber,
+                                            fullPhoneNumber: subscriberPhoneWithPrefix,
+                                            consumption: consumption,
+                                            limit: limit,
+                                            status: 'Active'
+                                        };
+                                        console.log(`📋 [Delete] Extracted subscriber data from HTML: ${JSON.stringify(subscriberDataToSave)}`);
+                                    } else {
+                                        console.warn(`⚠️ [Delete] Could not extract consumption/limit from HTML (got ${consumption}/${limit}), subscriber data may be incomplete`);
+                                    }
+                                } else if (isRequested) {
+                                    console.log(`ℹ️ [Delete] Subscriber ${cleanSubscriberNumber} is Requested, will not save as "Out" (Requested subscribers are automatically removed)`);
                                 }
-                                
-                                // Store subscriber data to save after successful deletion
-                                subscriberDataToSave = {
-                                    phoneNumber: cleanSubscriberNumber,
-                                    fullPhoneNumber: subscriberPhoneWithPrefix,
-                                    consumption: consumption,
-                                    limit: limit,
-                                    status: 'Active'
-                                };
-                                console.log(`📋 [Delete] Extracted subscriber data before deletion: ${JSON.stringify(subscriberDataToSave)}`);
-                            } else if (isRequested) {
-                                console.log(`ℹ️ [Delete] Subscriber ${cleanSubscriberNumber} is Requested, will not save as "Out" (Requested subscribers are automatically removed)`);
+                            } else {
+                                console.log(`✅ [Delete] Using subscriber data from Firebase (already extracted)`);
                             }
                             
                             // Store the actual pending status to use it instead of overriding

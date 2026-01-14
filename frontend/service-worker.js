@@ -220,95 +220,80 @@ self.addEventListener('notificationclick', (event) => {
             type: 'window',
             includeUncontrolled: true
         }).then((clientList) => {
-            // Step 1: Copy to clipboard and open WhatsApp
-            handleNotificationClick(message, adminPhone, clientList);
-            
-            // Step 2: Open or focus the app
-            // If app is already open, focus it
-            for (let i = 0; i < clientList.length; i++) {
-                const client = clientList[i];
-                if ((client.url === '/' || client.url.includes('/pages/')) && 'focus' in client) {
-                    return client.focus();
+            // CRITICAL: Open WhatsApp FIRST (before focusing app window)
+            if (adminPhone && adminPhone.trim()) {
+                const cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
+                let whatsappPhone = cleanPhone.startsWith('0') ? '+961' + cleanPhone.substring(1) : 
+                                   (!cleanPhone.startsWith('+') ? '+961' + cleanPhone : cleanPhone);
+                const whatsappUrl = `https://wa.me/${whatsappPhone}`;
+                
+                console.log('📱 Opening WhatsApp:', whatsappUrl);
+                
+                // Open WhatsApp directly - use clients.openWindow which works in notification click context
+                if (clientList.length > 0) {
+                    // Send message to existing clients to open WhatsApp (as backup)
+                    clientList.forEach((client) => {
+                        client.postMessage({
+                            type: 'OPEN_WHATSAPP',
+                            url: whatsappUrl
+                        });
+                    });
+                }
+                
+                // Always try to open WhatsApp directly (works in notification click context)
+                if (self.clients && self.clients.openWindow) {
+                    return self.clients.openWindow(whatsappUrl).catch((err) => {
+                        console.error('Failed to open WhatsApp directly:', err);
+                        // Still try to focus app
+                        return focusOrOpenApp(clientList);
+                    });
                 }
             }
-            // Otherwise, open a new window
-            if (clients.openWindow) {
-                return clients.openWindow('/pages/home.html');
+            
+            // Step 2: Copy to clipboard via client message
+            if (message && clientList.length > 0) {
+                clientList.forEach((client) => {
+                    client.postMessage({
+                        type: 'COPY_TO_CLIPBOARD',
+                        text: message
+                    });
+                });
             }
-            return Promise.resolve();
+            
+            // Step 3: Focus or open the app (only if WhatsApp wasn't opened)
+            return focusOrOpenApp(clientList);
         }).catch((error) => {
             console.error('Error handling notification click:', error);
-            // Still try to open WhatsApp even if window focus fails
-            if (adminPhone) {
-                openWhatsApp(adminPhone);
+            // Still try to open WhatsApp even if everything fails
+            if (adminPhone && adminPhone.trim()) {
+                const cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
+                let whatsappPhone = cleanPhone.startsWith('0') ? '+961' + cleanPhone.substring(1) : 
+                                   (!cleanPhone.startsWith('+') ? '+961' + cleanPhone : cleanPhone);
+                const whatsappUrl = `https://wa.me/${whatsappPhone}`;
+                if (self.clients && self.clients.openWindow) {
+                    self.clients.openWindow(whatsappUrl).catch((err) => {
+                        console.error('Failed to open WhatsApp in error handler:', err);
+                    });
+                }
             }
         })
     );
 });
 
-// Helper function to handle notification click actions
-function handleNotificationClick(message, adminPhone, existingClients) {
-    // Step 1: Copy notification message to clipboard via client message
-    // (Service workers can't access clipboard directly, so we send a message to the client)
-    if (message) {
-        if (existingClients && existingClients.length > 0) {
-            existingClients.forEach((client) => {
-                // Send message to client to copy to clipboard
-                client.postMessage({
-                    type: 'COPY_TO_CLIPBOARD',
-                    text: message
-                });
-            });
-        } else {
-            // If no clients are available yet, we'll send the message when clients are ready
-            // This will be handled when the page opens
-            console.log('ℹ️ No clients available, clipboard copy will happen when page opens');
+// Helper function to focus existing app window or open new one
+function focusOrOpenApp(clientList) {
+    // If app is already open, focus it
+    for (let i = 0; i < clientList.length; i++) {
+        const client = clientList[i];
+        if ((client.url === '/' || client.url.includes('/pages/')) && 'focus' in client) {
+            return client.focus();
         }
     }
-    
-    // Step 2: Open WhatsApp with admin phone number
-    if (adminPhone && adminPhone.trim()) {
-        openWhatsApp(adminPhone, existingClients);
-    } else {
-        console.warn('⚠️ No admin phone number in notification data');
+    // Otherwise, open a new window
+    if (self.clients && self.clients.openWindow) {
+        return self.clients.openWindow('/pages/home.html');
     }
-}
-
-// Helper function to open WhatsApp
-function openWhatsApp(adminPhone, existingClients) {
-    // Clean phone number (remove any non-digit characters except +)
-    let cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
-    
-    // If phone doesn't start with +, add country code prefix if needed
-    // For Lebanon, add +961 if it starts with 0
-    if (cleanPhone.startsWith('0')) {
-        cleanPhone = '+961' + cleanPhone.substring(1);
-    } else if (!cleanPhone.startsWith('+')) {
-        // If no + and doesn't start with 0, assume it's Lebanese number
-        cleanPhone = '+961' + cleanPhone;
-    }
-    
-    // Open WhatsApp with the phone number
-    const whatsappUrl = `https://wa.me/${cleanPhone}`;
-    console.log('📱 Opening WhatsApp for:', cleanPhone, 'URL:', whatsappUrl);
-    
-    if (existingClients && existingClients.length > 0) {
-        // If we have clients, send them a message to open WhatsApp
-        existingClients.forEach((client) => {
-            client.postMessage({
-                type: 'OPEN_WHATSAPP',
-                url: whatsappUrl
-            });
-        });
-    } else {
-        // If no clients, open directly from service worker
-        // This works because it's called from notification click (user gesture)
-        if (self.clients && self.clients.openWindow) {
-            self.clients.openWindow(whatsappUrl).catch((err) => {
-                console.error('Failed to open WhatsApp:', err);
-            });
-        }
-    }
+    return Promise.resolve();
 }
 
 // Notification close event
