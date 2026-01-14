@@ -207,35 +207,55 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
     console.log('Notification clicked:', event);
     console.log('Notification data:', event.notification.data);
+    console.log('Notification body:', event.notification.body);
     
     event.notification.close();
     
-    // Get notification data
+    // Get notification data - CRITICAL: Extract from data object (sent by backend)
     const notificationData = event.notification.data || {};
     const adminPhone = notificationData.adminPhone || '';
-    const message = event.notification.body || notificationData.message || '';
+    const message = notificationData.message || event.notification.body || '';
+    
+    console.log('📋 Extracted notification data:', { adminPhone, message });
     
     event.waitUntil(
         clients.matchAll({
             type: 'window',
             includeUncontrolled: true
         }).then((clientList) => {
-            // CRITICAL: Open WhatsApp FIRST (before focusing app window)
+            // CRITICAL: Open WhatsApp FIRST with admin phone and pre-filled message
             if (adminPhone && adminPhone.trim()) {
-                const cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
-                let whatsappPhone = cleanPhone.startsWith('0') ? '+961' + cleanPhone.substring(1) : 
-                                   (!cleanPhone.startsWith('+') ? '+961' + cleanPhone : cleanPhone);
-                const whatsappUrl = `https://wa.me/${whatsappPhone}`;
+                // Clean and format phone number
+                let cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
+                
+                // Format for Lebanon: if starts with 0, replace with +961
+                if (cleanPhone.startsWith('0')) {
+                    cleanPhone = '+961' + cleanPhone.substring(1);
+                } else if (!cleanPhone.startsWith('+')) {
+                    // If no + and doesn't start with 0, assume it's Lebanese number
+                    cleanPhone = '+961' + cleanPhone;
+                }
+                
+                // Build WhatsApp URL with pre-filled message
+                let whatsappUrl = `https://wa.me/${cleanPhone}`;
+                if (message && message.trim()) {
+                    // Encode message for URL (WhatsApp uses text parameter)
+                    const encodedMessage = encodeURIComponent(message.trim());
+                    whatsappUrl += `?text=${encodedMessage}`;
+                }
                 
                 console.log('📱 Opening WhatsApp:', whatsappUrl);
+                console.log('   Phone:', cleanPhone);
+                console.log('   Message:', message);
                 
-                // Open WhatsApp directly - use clients.openWindow which works in notification click context
+                // Send message to existing clients to open WhatsApp (as backup)
                 if (clientList.length > 0) {
-                    // Send message to existing clients to open WhatsApp (as backup)
                     clientList.forEach((client) => {
                         client.postMessage({
                             type: 'OPEN_WHATSAPP',
-                            url: whatsappUrl
+                            url: whatsappUrl,
+                            phone: cleanPhone,
+                            message: message
                         });
                     });
                 }
@@ -248,9 +268,11 @@ self.addEventListener('notificationclick', (event) => {
                         return focusOrOpenApp(clientList);
                     });
                 }
+            } else {
+                console.warn('⚠️ No admin phone found in notification data:', notificationData);
             }
             
-            // Step 2: Copy to clipboard via client message
+            // Step 2: Copy to clipboard via client message (if message exists and no phone)
             if (message && clientList.length > 0) {
                 clientList.forEach((client) => {
                     client.postMessage({
@@ -266,10 +288,17 @@ self.addEventListener('notificationclick', (event) => {
             console.error('Error handling notification click:', error);
             // Still try to open WhatsApp even if everything fails
             if (adminPhone && adminPhone.trim()) {
-                const cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
-                let whatsappPhone = cleanPhone.startsWith('0') ? '+961' + cleanPhone.substring(1) : 
-                                   (!cleanPhone.startsWith('+') ? '+961' + cleanPhone : cleanPhone);
-                const whatsappUrl = `https://wa.me/${whatsappPhone}`;
+                let cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
+                if (cleanPhone.startsWith('0')) {
+                    cleanPhone = '+961' + cleanPhone.substring(1);
+                } else if (!cleanPhone.startsWith('+')) {
+                    cleanPhone = '+961' + cleanPhone;
+                }
+                let whatsappUrl = `https://wa.me/${cleanPhone}`;
+                if (message && message.trim()) {
+                    const encodedMessage = encodeURIComponent(message.trim());
+                    whatsappUrl += `?text=${encodedMessage}`;
+                }
                 if (self.clients && self.clients.openWindow) {
                     self.clients.openWindow(whatsappUrl).catch((err) => {
                         console.error('Failed to open WhatsApp in error handler:', err);
