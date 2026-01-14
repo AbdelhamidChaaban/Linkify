@@ -2,11 +2,7 @@
 // Extracted and adapted from insights.js modal functions
 
 AddSubscriberPageManager.prototype.isAdminAvailableService = function(admin) {
-    // Must be active
-    if (admin.status !== 'active') {
-        return false;
-    }
-    
+    // EXACT SAME LOGIC AS insights.js applyFilters() "Available Services" filter
     // Count subscribers by status (Active, Requested, Out)
     const activeCount = admin.subscribersActiveCount || 0;
     const requestedCount = admin.subscribersRequestedCount || 0;
@@ -51,12 +47,13 @@ AddSubscriberPageManager.prototype.isAdminAvailableService = function(admin) {
         return false; // Exclude this admin
     }
     
-    // TERM 1 & 2: Admin must have less than 3 total subscribers (active + requested + removed "Out" subscribers)
+    // TERM 1 & 2: Admin must have less than 3 total subscribers (active + removed "Out" subscribers)
+    // Total subscribers count (active + requested + removed) must be < 3
     const totalSubscribersCount = activeCount + requestedCount + outCount;
     if (totalSubscribersCount >= 3) {
         return false; // Exclude this admin
     }
-    
+
     // TERM 3: Admin must have minimum 20 days before validity date
     const validityDateStr = admin.validityDate || '';
     
@@ -71,19 +68,19 @@ AddSubscriberPageManager.prototype.isAdminAvailableService = function(admin) {
         if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
         return new Date(year, month, day);
     };
-    
+
     // Helper function to calculate days until validity date
     const daysUntilValidity = (dateStr) => {
         const validityDate = parseDDMMYYYY(dateStr);
         if (!validityDate) return null;
         const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        today.setHours(0, 0, 0, 0); // Set to start of day
         validityDate.setHours(0, 0, 0, 0);
         const diffTime = validityDate.getTime() - today.getTime();
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         return diffDays;
     };
-    
+
     const daysUntil = daysUntilValidity(validityDateStr);
     if (daysUntil === null || daysUntil < 20) {
         return false; // Exclude if validity date is invalid or less than 20 days away
@@ -103,12 +100,115 @@ AddSubscriberPageManager.prototype.openAdminSelector = function(itemIndex) {
         // Store the current item index for when admin is selected
         modal.dataset.itemIndex = itemIndex;
         
-        // Get active admins that match "Available Services" criteria
+        // Bind close button and overlay click handler FIRST (before any early returns)
+        const closeBtn = modal.querySelector('.admin-selector-close');
+        if (closeBtn) {
+            closeBtn.removeAttribute('onclick');
+            closeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.closeAdminSelector();
+            }, { capture: true });
+        }
+        
+        // Close on overlay click
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                this.closeAdminSelector();
+            }
+        };
+        
+        // Check if subscribers data has been loaded
+        // CRITICAL: If subscribers array is empty, it might be because data hasn't loaded yet
+        // Check if this is a real empty state or just data not loaded yet
+        if (!this.subscribers || this.subscribers.length === 0) {
+            console.warn('⚠️ [Admin Selector] Subscribers array is empty - data may not have loaded yet');
+            console.log('   - Checking if data is still loading...');
+            
+            // Show loading state in the modal
+            const list = document.getElementById('adminSelectorList');
+            if (list) {
+                list.innerHTML = '<div class="admin-selector-empty">Loading admins...</div>';
+            }
+            
+            // Show modal with loading state
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+            
+            // Wait a bit for data to load (Firestore listener should fire soon)
+            // Check again after a short delay
+            setTimeout(() => {
+                console.log(`🔄 [Admin Selector] Re-checking after delay - subscribers count: ${this.subscribers ? this.subscribers.length : 0}`);
+                
+                // Get active admins that match "Available Services" criteria and have free space > 0
+                let activeAdmins = [];
+                try {
+                    activeAdmins = (this.subscribers || []).filter(sub => {
+                        try {
+                            // First check if admin matches "Available Services" criteria
+                            if (!this.isAdminAvailableService(sub)) {
+                                return false;
+                            }
+                            
+                            // Then check if admin has free space > 0
+                            const data = this.calculateAdminSelectorData(sub);
+                            const hasFreeSpace = data.freeSpace > 0;
+                            
+                            if (!hasFreeSpace) {
+                                console.log(`  ❌ Filtered out ${sub.name || sub.phone}: freeSpace = 0 GB`);
+                                return false;
+                            }
+                            
+                            return true;
+                        } catch (error) {
+                            console.error('Error checking admin availability:', error, sub);
+                            return false; // Skip admins that cause errors
+                        }
+                    });
+                } catch (error) {
+                    console.error('Error filtering admins:', error);
+                    // Fallback to all active admins if filtering fails
+                    activeAdmins = (this.subscribers || []).filter(sub => sub.status === 'active');
+                }
+                
+                // Populate the modal
+                this.populateAdminSelector(activeAdmins);
+                
+                // Re-bind search functionality if we have admins
+                if (activeAdmins.length > 0) {
+                    const searchInput = document.getElementById('adminSelectorSearch');
+                    if (searchInput) {
+                        searchInput.oninput = (e) => {
+                            const searchTerm = e.target.value.toLowerCase().trim();
+                            this.filterAdminSelector(searchTerm, activeAdmins);
+                        };
+                    }
+                }
+            }, 500); // Wait 500ms for data to load
+            
+            return; // Exit early, will populate after delay
+        }
+        
+        // Get active admins that match "Available Services" criteria and have free space > 0
         let activeAdmins = [];
         try {
             activeAdmins = this.subscribers.filter(sub => {
                 try {
-                    return this.isAdminAvailableService(sub);
+                    // First check if admin matches "Available Services" criteria
+                    if (!this.isAdminAvailableService(sub)) {
+                        return false;
+                    }
+                    
+                    // Then check if admin has free space > 0
+                    const data = this.calculateAdminSelectorData(sub);
+                    const hasFreeSpace = data.freeSpace > 0;
+                    
+                    if (!hasFreeSpace) {
+                        console.log(`  ❌ Filtered out ${sub.name || sub.phone}: freeSpace = 0 GB`);
+                        return false;
+                    }
+                    
+                    return true;
                 } catch (error) {
                     console.error('Error checking admin availability:', error, sub);
                     return false; // Skip admins that cause errors
@@ -143,24 +243,6 @@ AddSubscriberPageManager.prototype.openAdminSelector = function(itemIndex) {
                 this.filterAdminSelector(searchTerm, activeAdmins);
             };
         }
-        
-        // Bind close button
-        const closeBtn = modal.querySelector('.admin-selector-close');
-        if (closeBtn) {
-            closeBtn.removeAttribute('onclick');
-            closeBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                this.closeAdminSelector();
-            }, { capture: true });
-        }
-        
-        // Close on overlay click
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                this.closeAdminSelector();
-            }
-        };
     } catch (error) {
         console.error('Error opening admin selector:', error);
         alert('Error opening admin selector. Please check the console for details.');

@@ -3745,23 +3745,25 @@ class InsightsManager {
                     const adminDoc = await waitForOnline();
                     
                     if (adminDoc.exists) {
-                    const adminData = adminDoc.data();
-                    password = adminData.password;
-                    
-                    // Cache password in subscriber object and localStorage for next time
-                    if (password) {
-                        subscriber.password = password;
-                        // Also cache in localStorage as backup
-                        try {
-                            localStorage.setItem(`admin_${id}`, JSON.stringify({
-                                password: password,
-                                phone: phone,
-                                cachedAt: Date.now()
-                            }));
-                        } catch (e) {
-                            console.warn('Could not cache to localStorage:', e);
+                        const adminData = adminDoc.data();
+                        password = adminData?.password || null;
+                        
+                        // Cache password in subscriber object and localStorage for next time
+                        if (password) {
+                            subscriber.password = password;
+                            // Also cache in localStorage as backup
+                            try {
+                                localStorage.setItem(`admin_${id}`, JSON.stringify({
+                                    password: password,
+                                    phone: phone,
+                                    cachedAt: Date.now()
+                                }));
+                            } catch (e) {
+                                console.warn('Could not cache to localStorage:', e);
+                            }
+                        } else {
+                            console.warn(`⚠️ Admin document exists (${id}) but password field is missing or empty`);
                         }
-                    }
                     } else {
                         console.warn('Admin document not found in Firestore:', id);
                     }
@@ -3811,19 +3813,36 @@ class InsightsManager {
             
             if (!password) {
                 console.error('Password not found for admin:', id);
-                alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
                 
-                // Remove any loading indicators
-                const checkbox2 = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
-                const row2 = checkbox2 ? checkbox2.closest('tr') : null;
-                if (row2) {
-                    row2.classList.remove('refreshing', 'refresh-success');
-                    const loadingIndicator = row2.querySelector('.refresh-loading');
-                    const successIndicator = row2.querySelector('.refresh-success');
-                    if (loadingIndicator) loadingIndicator.remove();
-                    if (successIndicator) successIndicator.remove();
+                // Try one more time to get password from localStorage cache
+                try {
+                    const cachedAdmin = localStorage.getItem(`admin_${id}`);
+                    if (cachedAdmin) {
+                        const adminData = JSON.parse(cachedAdmin);
+                        if (adminData.password) {
+                            password = adminData.password;
+                            console.log('✅ Using cached password from localStorage (final attempt)');
+                        }
+                    }
+                } catch (cacheError) {
+                    console.warn('Could not read from cache (final attempt):', cacheError);
                 }
-                return;
+                
+                if (!password) {
+                    alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
+                    
+                    // Remove any loading indicators
+                    const checkbox2 = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
+                    const row2 = checkbox2 ? checkbox2.closest('tr') : null;
+                    if (row2) {
+                        row2.classList.remove('refreshing', 'refresh-success');
+                        const loadingIndicator = row2.querySelector('.refresh-loading');
+                        const successIndicator = row2.querySelector('.refresh-success');
+                        if (loadingIndicator) loadingIndicator.remove();
+                        if (successIndicator) successIndicator.remove();
+                    }
+                    return;
+                }
             }
             
             // Check if AlfaAPIService is available
@@ -4931,22 +4950,28 @@ class InsightsManager {
                     
                     alert(successMessage);
                     
-                    // Close the modal
-                    this.closeEditSubscribersModal();
-                    
                     // Automatically refresh the admin if there were successful removals, additions, or updates
-                    const hasSuccessfulRemovals = results.removals.some(r => r.success);
-                    const hasSuccessfulAdditions = results.additions.some(r => r.success);
-                    const hasSuccessfulUpdates = results.updates.some(r => r.success);
+                    // CRITICAL: Refresh BEFORE closing modal to ensure it triggers
+                    const hasSuccessfulRemovals = results.removals.length > 0 && results.removals.some(r => r.success);
+                    const hasSuccessfulAdditions = results.additions.length > 0 && results.additions.some(r => r.success);
+                    const hasSuccessfulUpdates = results.updates.length > 0 && results.updates.some(r => r.success);
                     
                     if (hasSuccessfulRemovals || hasSuccessfulAdditions || hasSuccessfulUpdates) {
                         console.log(`🔄 Auto-refreshing admin ${adminId} after subscriber changes...`);
-                        // Refresh the admin to get updated data
+                        console.log(`   - Successful removals: ${results.removals.filter(r => r.success).length}/${results.removals.length}`);
+                        console.log(`   - Successful additions: ${results.additions.filter(r => r.success).length}/${results.additions.length}`);
+                        console.log(`   - Successful updates: ${results.updates.filter(r => r.success).length}/${results.updates.length}`);
+                        // Refresh the admin to get updated data - don't await to avoid blocking modal close
                         this.refreshSubscriber(adminId).catch(error => {
                             console.error('❌ Error auto-refreshing admin:', error);
                             // Don't show alert - refresh failure is not critical
                         });
+                    } else {
+                        console.warn(`⚠️ No successful operations to trigger refresh (removals: ${results.removals.length}, additions: ${results.additions.length}, updates: ${results.updates.length})`);
                     }
+                    
+                    // Close the modal
+                    this.closeEditSubscribersModal();
                 } else {
                     // Some operations failed - copy cancel message
                     const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
@@ -4972,17 +4997,23 @@ class InsightsManager {
                     alert(`⚠️ Some operations failed (${successCount} succeeded). Errors:\n${failed.join('\n')}`);
                     
                     // Automatically refresh the admin if there were any successful removals, additions, or updates
-                    const hasSuccessfulRemovals = results.removals.some(r => r.success);
-                    const hasSuccessfulAdditions = results.additions.some(r => r.success);
-                    const hasSuccessfulUpdates = results.updates.some(r => r.success);
+                    // CRITICAL: Refresh BEFORE closing modal to ensure it triggers
+                    const hasSuccessfulRemovals = results.removals.length > 0 && results.removals.some(r => r.success);
+                    const hasSuccessfulAdditions = results.additions.length > 0 && results.additions.some(r => r.success);
+                    const hasSuccessfulUpdates = results.updates.length > 0 && results.updates.some(r => r.success);
                     
                     if (hasSuccessfulRemovals || hasSuccessfulAdditions || hasSuccessfulUpdates) {
                         console.log(`🔄 Auto-refreshing admin ${adminId} after partial subscriber changes...`);
-                        // Refresh the admin to get updated data
+                        console.log(`   - Successful removals: ${results.removals.filter(r => r.success).length}/${results.removals.length}`);
+                        console.log(`   - Successful additions: ${results.additions.filter(r => r.success).length}/${results.additions.length}`);
+                        console.log(`   - Successful updates: ${results.updates.filter(r => r.success).length}/${results.updates.length}`);
+                        // Refresh the admin to get updated data - don't await to avoid blocking modal close
                         this.refreshSubscriber(adminId).catch(error => {
                             console.error('❌ Error auto-refreshing admin:', error);
                             // Don't show alert - refresh failure is not critical
                         });
+                    } else {
+                        console.warn(`⚠️ No successful operations to trigger refresh (removals: ${results.removals.length}, additions: ${results.additions.length}, updates: ${results.updates.length})`);
                     }
                 }
             } catch (error) {

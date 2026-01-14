@@ -1483,7 +1483,8 @@ class HomeManager {
             name: fullAdmin.name || service.name,
             phone: fullAdmin.phone || service.phone,
             alfaData: fullAdmin.alfaData || service.alfaData,
-            quota: fullAdmin.quota || null // Admin's quota (e.g., 15 GB) - NOT usageLimit (total bundle)
+            quota: fullAdmin.quota || null, // Admin's quota (e.g., 15 GB) - NOT usageLimit (total bundle)
+            removedActiveSubscribers: fullAdmin.removedActiveSubscribers || [] // Include removed Active subscribers (out subscribers)
         };
 
         // Import and use insights manager's view details method
@@ -1567,6 +1568,7 @@ class HomeManager {
             adminConsumption: 0,
             adminLimit: 0,
             subscribers: [],
+            removedActiveSubscribers: subscriber.removedActiveSubscribers || [], // Include removed Active subscribers (out subscribers)
             totalConsumption: 0,
             totalLimit: 0
         };
@@ -1832,6 +1834,51 @@ class HomeManager {
                 </tr>
             `;
         });
+
+        // Removed Active subscribers (no longer in ushare HTML but should still be displayed as "Out")
+        // These are Active subscribers that were removed - they should appear with red color and "Out" label
+        const removedActiveSubscribers = viewData.removedActiveSubscribers || [];
+        if (removedActiveSubscribers.length > 0) {
+            removedActiveSubscribers.forEach(removedSub => {
+                // Check if this removed subscriber is already in viewData.subscribers (shouldn't happen, but check anyway)
+                const isAlreadyShown = viewData.subscribers.some(sub => {
+                    const subPhone = String(sub.phoneNumber || '').trim();
+                    const removedPhone = String(removedSub.phoneNumber || '').trim();
+                    return subPhone === removedPhone;
+                });
+                
+                // Only show if not already displayed in subscribers list
+                if (!isAlreadyShown) {
+                    // Calculate progress for removed subscriber using last stored consumption from Firebase
+                    // Handle both field name formats: consumption/limit or usedConsumption/totalQuota (for backward compatibility)
+                    const removedConsumption = removedSub.consumption !== undefined ? removedSub.consumption : 
+                                              (removedSub.usedConsumption !== undefined ? removedSub.usedConsumption : 0);
+                    const removedLimit = removedSub.limit !== undefined ? removedSub.limit :
+                                        (removedSub.quota !== undefined ? removedSub.quota :
+                                        (removedSub.totalQuota !== undefined ? removedSub.totalQuota : 0));
+                    const removedPercent = removedLimit > 0 ? (removedConsumption / removedLimit) * 100 : 0;
+                    const removedProgressClass = removedPercent >= 100 ? 'progress-fill error' : 'progress-fill';
+                    
+                    // Show removed Active subscriber as "Out" in red with hashed styling and progress bar
+                    rows += `
+                        <tr style="opacity: 0.5; text-decoration: line-through;">
+                            <td>
+                                <span style="color: #ef4444;">${this.escapeHtml(removedSub.phoneNumber)}</span>
+                                <span style="color: #ef4444; font-weight: bold;">Out</span>
+                            </td>
+                            <td>
+                                <div class="progress-container" style="opacity: 0.5;">
+                                    <div class="progress-bar">
+                                        <div class="${removedProgressClass}" style="width: ${Math.min(100, removedPercent)}%"></div>
+                                    </div>
+                                    <div class="progress-text" style="color: #64748b;">${removedConsumption.toFixed(2)} / ${removedLimit} GB</div>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }
+            });
+        }
 
         // Total row
         const totalPercent = viewData.totalLimit > 0 ? (viewData.totalConsumption / viewData.totalLimit) * 100 : 0;

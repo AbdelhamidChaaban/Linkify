@@ -11,7 +11,7 @@ const cheerio = require('cheerio');
 const { authenticateJWT } = require('../middleware/auth');
 const { getCookiesOrLogin } = require('../services/cookieManager');
 const { formatCookiesForHeader } = require('../services/apiClient');
-const { getAdminData, logAction } = require('../services/firebaseDbService');
+const { getAdminData, logAction, addRemovedActiveSubscriber } = require('../services/firebaseDbService');
 // Response normalizer utilities (inline for consistency)
 function normalizeSubscriberResponse(subscriberData) {
     return {
@@ -527,6 +527,7 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
         let deleteSuccess = false;
         let attempts = 0;
         const maxAttempts = 2;
+        let subscriberDataToSave = null; // Store subscriber data before deletion to save as "Out"
         
         while (attempts < maxAttempts && !deleteSuccess) {
             const cookieHeader = formatCookiesForHeader(freshCookies);
@@ -737,6 +738,61 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                             const actualPendingStatus = pendingMatch ? pendingMatch[1] : null;
                             console.log(`✅ [Delete] Found matching subscriber card: ${cardPhone} (clean: ${cleanCardPhone}) -> ${deleteLinkHref} (pending=${actualPendingStatus || 'not specified'})`);
                             
+                            // Extract subscriber data BEFORE deletion (consumption, limit, status)
+                            // Only save Active subscribers as "Out" (Requested subscribers are automatically removed)
+                            const statusElement = $card.find('h4').first();
+                            const statusText = statusElement.text().trim();
+                            const isActive = statusText.toLowerCase().includes('active');
+                            const isRequested = statusText.toLowerCase().includes('requested');
+                            
+                            if (isActive) {
+                                // Extract consumption and limit from the card
+                                // Consumption is usually in a progress bar or capacity element
+                                let consumption = 0;
+                                let limit = 0;
+                                
+                                // Try to find consumption in the capacity element (format: "X / Y GB")
+                                const capacityElement = $card.find('h4.italic.capacity');
+                                if (capacityElement.length > 0) {
+                                    const capacityText = capacityElement.text().trim();
+                                    const capacityMatch = capacityText.match(/([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
+                                    if (capacityMatch) {
+                                        consumption = parseFloat(capacityMatch[1]) || 0;
+                                        limit = parseFloat(capacityMatch[2]) || 0;
+                                        // Convert MB to GB if needed
+                                        if (capacityMatch[3].toUpperCase() === 'MB') {
+                                            consumption = consumption / 1024;
+                                            limit = limit / 1024;
+                                        }
+                                    }
+                                }
+                                
+                                // Try alternative method: look for progress bar or data attributes
+                                if (limit === 0) {
+                                    const progressBar = $card.find('.progress-bar, [class*="progress"]');
+                                    if (progressBar.length > 0) {
+                                        const progressText = progressBar.text().trim();
+                                        const progressMatch = progressText.match(/([\d.]+)\s*\/\s*([\d.]+)/);
+                                        if (progressMatch) {
+                                            consumption = parseFloat(progressMatch[1]) || 0;
+                                            limit = parseFloat(progressMatch[2]) || 0;
+                                        }
+                                    }
+                                }
+                                
+                                // Store subscriber data to save after successful deletion
+                                subscriberDataToSave = {
+                                    phoneNumber: cleanSubscriberNumber,
+                                    fullPhoneNumber: subscriberPhoneWithPrefix,
+                                    consumption: consumption,
+                                    limit: limit,
+                                    status: 'Active'
+                                };
+                                console.log(`📋 [Delete] Extracted subscriber data before deletion: ${JSON.stringify(subscriberDataToSave)}`);
+                            } else if (isRequested) {
+                                console.log(`ℹ️ [Delete] Subscriber ${cleanSubscriberNumber} is Requested, will not save as "Out" (Requested subscribers are automatically removed)`);
+                            }
+                            
                             // Store the actual pending status to use it instead of overriding
                             if (actualPendingStatus) {
                                 deleteLinkHref = deleteLinkHref.replace(/pending=[^&]*/i, `pending=${actualPendingStatus}`);
@@ -802,6 +858,68 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
                         // For now, just log what we're trying
                         deleteLinkHref = deleteUrlWith961; // Try with 961 first
                     }
+                }
+                
+                // If we found delete link via URL matching but didn't extract subscriber data yet, extract it now
+                if (deleteLinkHref && !subscriberDataToSave) {
+                    // Try to find the subscriber card again to extract data
+                    subscriberCards.each((i, card) => {
+                        const $card = $ushare(card);
+                        
+                        // Extract phone number from card (same logic as before)
+                        let cardPhone = '';
+                        const h2 = $card.find('h2');
+                        if (h2.length > 0) {
+                            cardPhone = h2.text().trim();
+                        }
+                        let cleanCardPhone = cardPhone ? cardPhone.replace(/^961/, '').replace(/\D/g, '') : '';
+                        if (cleanCardPhone.length === 7) {
+                            cleanCardPhone = '0' + cleanCardPhone;
+                        }
+                        cleanCardPhone = cleanCardPhone.substring(0, 8);
+                        
+                        const normalizedSubscriberNumber = cleanSubscriberNumber.replace(/\D/g, '');
+                        const subscriberWithoutZero = normalizedSubscriberNumber.replace(/^0+/, '');
+                        const cardPhoneWithoutZero = cleanCardPhone.replace(/^0+/, '');
+                        
+                        if (cleanCardPhone === normalizedSubscriberNumber || 
+                            cardPhoneWithoutZero === subscriberWithoutZero) {
+                            
+                            // Extract subscriber data
+                            const statusElement = $card.find('h4').first();
+                            const statusText = statusElement.text().trim();
+                            const isActive = statusText.toLowerCase().includes('active');
+                            
+                            if (isActive) {
+                                let consumption = 0;
+                                let limit = 0;
+                                
+                                const capacityElement = $card.find('h4.italic.capacity');
+                                if (capacityElement.length > 0) {
+                                    const capacityText = capacityElement.text().trim();
+                                    const capacityMatch = capacityText.match(/([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
+                                    if (capacityMatch) {
+                                        consumption = parseFloat(capacityMatch[1]) || 0;
+                                        limit = parseFloat(capacityMatch[2]) || 0;
+                                        if (capacityMatch[3].toUpperCase() === 'MB') {
+                                            consumption = consumption / 1024;
+                                            limit = limit / 1024;
+                                        }
+                                    }
+                                }
+                                
+                                subscriberDataToSave = {
+                                    phoneNumber: cleanSubscriberNumber,
+                                    fullPhoneNumber: subscriberPhoneWithPrefix,
+                                    consumption: consumption,
+                                    limit: limit,
+                                    status: 'Active'
+                                };
+                                console.log(`📋 [Delete] Extracted subscriber data (fallback): ${JSON.stringify(subscriberDataToSave)}`);
+                                return false; // Break
+                            }
+                        }
+                    });
                 }
                 
                 // Before throwing error, try to save the HTML for debugging
@@ -1006,6 +1124,15 @@ router.delete('/removeSubscriber', authenticateJWT, async (req, res) => {
         // The delete response already indicates success (200 OK or redirect to ushare page)
         // Verification is non-critical and can be done on next refresh
         console.log(`✅ [Delete] Deletion successful, skipping verification (saves ~15s)`);
+        
+        // Save removed Active subscriber data to Firebase (to display as "Out" in view details)
+        if (subscriberDataToSave) {
+            console.log(`💾 [Delete] Saving removed Active subscriber data to Firebase: ${subscriberDataToSave.phoneNumber}`);
+            addRemovedActiveSubscriber(adminId, subscriberDataToSave).catch(err => {
+                console.error('❌ Failed to save removed Active subscriber data:', err.message);
+                // Don't fail the request if saving fails - it's not critical
+            });
+        }
         
         // Invalidate Ushare cache so fresh data is fetched next time (don't wait)
         const { invalidateUshareCache } = require('../services/ushareHtmlParser');

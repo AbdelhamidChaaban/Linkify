@@ -298,12 +298,16 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     }
     
     // CRITICAL: Clear removedActiveSubscribers when consumption renews (data package reset)
-    // Cleanup happens when both totalConsumption and adminConsumption are 0 (data package renewed)
-    // Track last cleanup date to prevent duplicate cleanups on the same day
+    // Bundle renewal detection: When current consumption < previous consumption (and previous > 0),
+    // this indicates the bundle was renewed (reset to 0) and then started being used again.
+    // Example: Last refresh 40/77 GB, current refresh 15/77 GB = bundle renewed (reset to 0, then used 15 GB)
+    // Cleanup happens ONLY when getconsumption API was successfully fetched.
+    // Track last cleanup date to prevent duplicate cleanups on the same day.
+    
     // Helper function to parse consumption value from string (format: "X / Y GB" or "X / Y MB")
     const parseConsumptionValue = (consumptionStr) => {
       if (!consumptionStr || typeof consumptionStr !== 'string') return null;
-      // Extract first number (consumed amount) from strings like "0 / 70 GB" or "0.0 / 70 GB"
+      // Extract first number (consumed amount) from strings like "40 / 77 GB" or "0.0 / 70 GB"
       const match = consumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
       if (match) {
         return parseFloat(match[1]) || 0;
@@ -313,28 +317,34 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       return isNaN(numValue) ? null : numValue;
     };
     
+    // Detect whether getconsumption API was successfully fetched for this refresh
+    // CRITICAL: Only perform cleanup if getconsumption API was successfully fetched
+    const hasGetConsumptionFetch = Array.isArray(cleanDashboardData.apiResponses) &&
+      cleanDashboardData.apiResponses.some(resp => {
+        const url = resp?.url || '';
+        const hasData = resp && resp.data;
+        return url.includes('getconsumption') && !!hasData;
+      });
+    
     // Get consumption values from cleanDashboardData (current scan) and currentData (previous scan)
     const currentTotalConsumption = cleanDashboardData.totalConsumption || currentData.alfaData?.totalConsumption || null;
-    const currentAdminConsumption = cleanDashboardData.adminConsumption || currentData.alfaData?.adminConsumption || null;
+    const previousTotalConsumption = currentData.alfaData?.totalConsumption || null;
     
-    // Check if both consumptions are 0 (data package renewed)
+    // Parse consumption values (extract the "used" amount from "X / Y GB" format)
     const currentTotalValue = parseConsumptionValue(currentTotalConsumption);
-    const currentAdminValue = parseConsumptionValue(currentAdminConsumption);
+    const previousTotalValue = parseConsumptionValue(previousTotalConsumption);
     
-    const isConsumptionRenewed = currentTotalValue === 0 && currentAdminValue === 0;
+    // Bundle renewal detection: current < previous AND previous > 0
+    // This handles cases where:
+    // 1. Bundle renewed to 0, then user refreshed immediately (current = 0, previous > 0)
+    // 2. Bundle renewed to 0, then user refreshed days later after using new bundle (current < previous, both > 0)
+    const isConsumptionRenewed = hasGetConsumptionFetch && 
+                                  previousTotalValue !== null && 
+                                  previousTotalValue > 0 && 
+                                  currentTotalValue !== null &&
+                                  currentTotalValue < previousTotalValue;
     
     if (isConsumptionRenewed) {
-      // Check if we already had non-zero consumption before (to avoid clearing on first scan)
-      const previousTotalConsumption = currentData.alfaData?.totalConsumption || null;
-      const previousAdminConsumption = currentData.alfaData?.adminConsumption || null;
-      const previousTotalValue = parseConsumptionValue(previousTotalConsumption);
-      const previousAdminValue = parseConsumptionValue(previousAdminConsumption);
-      
-      // Only clear if there were removed subscribers AND consumption was previously non-zero
-      // This ensures we don't clear on first scan or if consumption was already 0
-      const hadPreviousConsumption = (previousTotalValue !== null && previousTotalValue > 0) || 
-                                      (previousAdminValue !== null && previousAdminValue > 0);
-      
       // Check if cleanup already happened today (prevent duplicate cleanups on same day)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -342,8 +352,9 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       const lastCleanupDateStr = currentData._lastRemovedCleanupDate || null;
       const shouldCleanup = lastCleanupDateStr !== todayStr;
       
-      if (hadPreviousConsumption && shouldCleanup && (removedActiveSubscribersToSave.length > 0 || removedSubscribersToSave.length > 0)) {
-        console.log(`🔄 [${adminId}] [Cleanup] Consumption renewed (total: ${currentTotalConsumption}, admin: ${currentAdminConsumption}) - clearing removed subscribers (data package reset)`);
+      if (shouldCleanup && (removedActiveSubscribersToSave.length > 0 || removedSubscribersToSave.length > 0)) {
+        console.log(`🔄 [${adminId}] [Cleanup] Bundle renewal detected: consumption decreased from ${previousTotalValue} to ${currentTotalValue} (previous: "${previousTotalConsumption}", current: "${currentTotalConsumption}")`);
+        console.log(`   [Cleanup] getconsumption API was successfully fetched - clearing removed subscribers (data package reset)`);
         console.log(`   [Cleanup] Removed subscribers cleared for admin ${adminId}`);
         console.log(`   [Cleanup] Clearing ${removedActiveSubscribersToSave.length} removed active subscriber(s) and ${removedSubscribersToSave.length} removed subscriber phone(s)`);
         removedActiveSubscribersToSave = []; // Clear the list for new data package
@@ -352,13 +363,18 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
         // Track that cleanup happened today (will be saved to Firebase below)
         currentData._lastRemovedCleanupDate = todayStr;
         console.log(`   [Cleanup] Marked cleanup date as ${todayStr} to prevent duplicate cleanups on same day`);
-      } else if (!hadPreviousConsumption) {
-        console.log(`ℹ️ [${adminId}] [Cleanup] Consumption is 0 but no previous consumption found - skipping cleanup (first scan or already cleared)`);
       } else if (!shouldCleanup) {
-        console.log(`ℹ️ [${adminId}] [Cleanup] Consumption is 0 but cleanup already performed today (${todayStr}) - skipping to prevent duplicate cleanups`);
+        console.log(`ℹ️ [${adminId}] [Cleanup] Bundle renewal detected but cleanup already performed today (${todayStr}) - skipping to prevent duplicate cleanups`);
       } else {
-        console.log(`ℹ️ [${adminId}] [Cleanup] Consumption renewed but no removed subscribers to clean`);
+        console.log(`ℹ️ [${adminId}] [Cleanup] Bundle renewal detected but no removed subscribers to clean`);
       }
+    } else if (hasGetConsumptionFetch && previousTotalValue !== null && previousTotalValue > 0 && currentTotalValue !== null) {
+      // Log when renewal is NOT detected (for debugging)
+      if (currentTotalValue >= previousTotalValue) {
+        console.log(`ℹ️ [${adminId}] [Cleanup] No bundle renewal: consumption ${currentTotalValue} >= previous ${previousTotalValue} (normal usage, no reset)`);
+      }
+    } else if (!hasGetConsumptionFetch) {
+      console.log(`ℹ️ [${adminId}] [Cleanup] getconsumption API not fetched - skipping bundle renewal detection`);
     }
     
     // Preserve critical fields that should not be overwritten
