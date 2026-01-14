@@ -225,28 +225,42 @@ self.addEventListener('notificationclick', (event) => {
         }).then((clientList) => {
             // CRITICAL: Open WhatsApp FIRST with admin phone and pre-filled message
             if (adminPhone && adminPhone.trim()) {
-                // Clean and format phone number
+                // Clean and format phone number (remove all non-digits except +)
                 let cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
                 
-                // Format for Lebanon: if starts with 0, replace with +961
+                // Format for Lebanon: if starts with 0, replace with 961 (no + in WhatsApp URL)
                 if (cleanPhone.startsWith('0')) {
-                    cleanPhone = '+961' + cleanPhone.substring(1);
-                } else if (!cleanPhone.startsWith('+')) {
-                    // If no + and doesn't start with 0, assume it's Lebanese number
-                    cleanPhone = '+961' + cleanPhone;
+                    cleanPhone = '961' + cleanPhone.substring(1);
+                } else if (cleanPhone.startsWith('+961')) {
+                    // Remove the + sign (WhatsApp URLs don't use +)
+                    cleanPhone = cleanPhone.substring(1); // Remove the +, keep 961
+                } else if (cleanPhone.startsWith('+')) {
+                    // Remove the + sign
+                    cleanPhone = cleanPhone.substring(1);
+                } else if (!cleanPhone.startsWith('961')) {
+                    // If no prefix and doesn't start with 961, assume it's Lebanese number
+                    cleanPhone = '961' + cleanPhone;
+                }
+                
+                // Extract message - CRITICAL: Use notification body if message is not in data
+                let notificationMessage = notificationData.message || event.notification.body || '';
+                if (!notificationMessage || !notificationMessage.trim()) {
+                    // Fallback: Try to get from notification body
+                    notificationMessage = event.notification.body || '';
                 }
                 
                 // Build WhatsApp URL with pre-filled message
                 let whatsappUrl = `https://wa.me/${cleanPhone}`;
-                if (message && message.trim()) {
+                if (notificationMessage && notificationMessage.trim()) {
                     // Encode message for URL (WhatsApp uses text parameter)
-                    const encodedMessage = encodeURIComponent(message.trim());
+                    const encodedMessage = encodeURIComponent(notificationMessage.trim());
                     whatsappUrl += `?text=${encodedMessage}`;
                 }
                 
                 console.log('📱 Opening WhatsApp:', whatsappUrl);
-                console.log('   Phone:', cleanPhone);
-                console.log('   Message:', message);
+                console.log('   Phone (cleaned):', cleanPhone);
+                console.log('   Message (raw):', notificationMessage);
+                console.log('   Message (encoded):', notificationMessage ? encodeURIComponent(notificationMessage.trim()) : '');
                 
                 // Send message to existing clients to open WhatsApp (as backup)
                 if (clientList.length > 0) {
@@ -255,7 +269,7 @@ self.addEventListener('notificationclick', (event) => {
                             type: 'OPEN_WHATSAPP',
                             url: whatsappUrl,
                             phone: cleanPhone,
-                            message: message
+                            message: notificationMessage
                         });
                     });
                 }
@@ -290,13 +304,18 @@ self.addEventListener('notificationclick', (event) => {
             if (adminPhone && adminPhone.trim()) {
                 let cleanPhone = adminPhone.trim().replace(/[^\d+]/g, '');
                 if (cleanPhone.startsWith('0')) {
-                    cleanPhone = '+961' + cleanPhone.substring(1);
-                } else if (!cleanPhone.startsWith('+')) {
-                    cleanPhone = '+961' + cleanPhone;
+                    cleanPhone = '961' + cleanPhone.substring(1);
+                } else if (cleanPhone.startsWith('+961')) {
+                    cleanPhone = cleanPhone.substring(1);
+                } else if (cleanPhone.startsWith('+')) {
+                    cleanPhone = cleanPhone.substring(1);
+                } else if (!cleanPhone.startsWith('961')) {
+                    cleanPhone = '961' + cleanPhone;
                 }
+                const errorMessage = event.notification.body || notificationData.message || '';
                 let whatsappUrl = `https://wa.me/${cleanPhone}`;
-                if (message && message.trim()) {
-                    const encodedMessage = encodeURIComponent(message.trim());
+                if (errorMessage && errorMessage.trim()) {
+                    const encodedMessage = encodeURIComponent(errorMessage.trim());
                     whatsappUrl += `?text=${encodedMessage}`;
                 }
                 if (self.clients && self.clients.openWindow) {
