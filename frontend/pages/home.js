@@ -28,6 +28,9 @@ class HomeManager {
             
             console.log(`✅ [Home] User authenticated: ${currentUserId} - Initializing listeners`);
             
+            // Update welcome banner with user name/email
+            await this.updateWelcomeBanner();
+            
             // Initialize card listeners first (doesn't depend on Firestore)
             console.log('🔍 [Home] Initializing card listeners...');
             this.initCardListeners();
@@ -134,6 +137,59 @@ class HomeManager {
             return auth.currentUser.uid;
         }
         return null;
+    }
+    
+    // Update welcome banner with user's name from Firestore
+    async updateWelcomeBanner() {
+        const welcomeNameEl = document.getElementById('homeWelcomeName');
+        if (!welcomeNameEl) return;
+        
+        try {
+            const currentUserId = this.getCurrentUserId();
+            if (!currentUserId) {
+                welcomeNameEl.textContent = 'User';
+                return;
+            }
+            
+            // Fetch user document from Firestore to get the username
+            if (typeof db !== 'undefined' && db) {
+                const userDoc = await db.collection('users').doc(currentUserId).get();
+                if (userDoc.exists) {
+                    const userData = userDoc.data();
+                    const userName = userData.name || userData.email || 'User';
+                    welcomeNameEl.textContent = userName;
+                } else {
+                    // Fallback to email if user document doesn't exist
+                    if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+                        const user = auth.currentUser;
+                        welcomeNameEl.textContent = user.email || 'User';
+                    } else {
+                        welcomeNameEl.textContent = 'User';
+                    }
+                }
+            } else {
+                // Fallback if Firestore is not available
+                if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+                    const user = auth.currentUser;
+                    welcomeNameEl.textContent = user.email || 'User';
+                } else {
+                    welcomeNameEl.textContent = 'User';
+                }
+            }
+        } catch (error) {
+            console.error('Error updating welcome banner:', error);
+            // Fallback to email on error
+            try {
+                if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+                    const user = auth.currentUser;
+                    welcomeNameEl.textContent = user.email || 'User';
+                } else {
+                    welcomeNameEl.textContent = 'User';
+                }
+            } catch (fallbackError) {
+                welcomeNameEl.textContent = 'User';
+            }
+        }
     }
 
     async forceRefresh() {
@@ -494,6 +550,9 @@ class HomeManager {
             inactiveNumbers: inactiveNumbers.length,
             totalAdmins: this.admins.length
         });
+        
+        // Update stat cards
+        this.updateStatCards();
     }
 
     setCardCount(cardId, count) {
@@ -508,6 +567,97 @@ class HomeManager {
                 card.appendChild(countElement);
             }
             countElement.textContent = count;
+        }
+    }
+    
+    // Update stat cards (Total Active Subscribers, Available Places, Total Balance)
+    updateStatCards() {
+        if (!this.admins || this.admins.length === 0) {
+            this.updateStatCardValue('homeStatTotalActiveSubscribers', '0');
+            this.updateStatCardValue('homeStatAvailablePlaces', '0');
+            this.updateStatCardValue('homeStatTotalBalance', '$ 0.00');
+            return;
+        }
+        
+        // Create snapshot-like object
+        const snapshot = {
+            docs: this.admins.map(admin => ({
+                id: admin.id,
+                data: () => admin
+            }))
+        };
+        
+        // Calculate Total Active Subscribers
+        let totalActiveSubscribers = 0;
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const alfaData = data.alfaData || {};
+            const activeSubscribers = alfaData.secondarySubscribers || [];
+            if (Array.isArray(activeSubscribers)) {
+                totalActiveSubscribers += activeSubscribers.length;
+            }
+        });
+        
+        // Calculate Available Places (using filterAvailableServices logic)
+        const availableServices = this.filterAvailableServices(snapshot);
+        let availablePlaces = 0;
+        availableServices.forEach(service => {
+            // Get full admin data by ID
+            const admin = this.admins.find(a => a.id === service.id);
+            if (!admin) return;
+            
+            const alfaData = admin.alfaData || {};
+            const activeSubscribers = alfaData.secondarySubscribers || [];
+            const removedActiveSubscribers = admin.removedActiveSubscribers || [];
+            
+            // Count total subscribers (active + requested + out)
+            let activeCount = 0;
+            let requestedCount = 0;
+            let outCount = Array.isArray(removedActiveSubscribers) ? removedActiveSubscribers.length : 0;
+            
+            if (Array.isArray(activeSubscribers)) {
+                activeSubscribers.forEach(sub => {
+                    const status = sub.status || 'Active';
+                    if (status === 'Requested') {
+                        requestedCount++;
+                    } else {
+                        activeCount++;
+                    }
+                });
+            }
+            
+            const totalSubscribers = activeCount + requestedCount + outCount;
+            const freeSlots = Math.max(0, 3 - totalSubscribers);
+            availablePlaces += freeSlots;
+        });
+        
+        // Calculate Total Balance (only for CLOSED admins)
+        let totalBalance = 0;
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            // Only include admins with type "Closed" (case-insensitive check)
+            const adminType = data.type ? String(data.type).toUpperCase() : '';
+            if (adminType === 'CLOSED') {
+                const alfaData = data.alfaData || {};
+                if (alfaData.balance) {
+                    const balanceStr = String(alfaData.balance).trim();
+                    const match = balanceStr.replace(/\$/g, '').trim().match(/-?[\d.]+/);
+                    const balance = match ? parseFloat(match[0]) : 0;
+                    totalBalance += balance;
+                }
+            }
+        });
+        
+        // Update DOM elements
+        this.updateStatCardValue('homeStatTotalActiveSubscribers', totalActiveSubscribers.toString());
+        this.updateStatCardValue('homeStatAvailablePlaces', availablePlaces.toString());
+        this.updateStatCardValue('homeStatTotalBalance', `$ ${totalBalance.toFixed(2)}`);
+    }
+    
+    updateStatCardValue(elementId, value) {
+        const element = document.getElementById(elementId);
+        if (element) {
+            element.textContent = value;
         }
     }
 

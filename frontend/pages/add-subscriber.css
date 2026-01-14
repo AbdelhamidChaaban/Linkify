@@ -1,0 +1,132 @@
+/* Add Subscriber Page Styles */
+
+.add-subscriber-page .main-content {
+    padding: 2rem;
+    animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.add-subscriber-page-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    background: linear-gradient(135deg, rgba(13, 17, 32, 0.98) 0%, rgba(90, 33, 182, 0.35) 43%, rgba(13, 17, 32, 0.98) 100%);
+    border: 1px solid rgba(58, 10, 78, 0.5);
+    border-radius: 1.2rem;
+    padding: 2rem;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+    animation: slideUp 0.4s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+body.light-mode .add-subscriber-page-container {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(240, 245, 255, 0.6) 43%, rgba(255, 255, 255, 0.98) 100%);
+    border-color: rgba(90, 33, 182, 0.2);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.add-subscriber-page-header {
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid rgba(58, 10, 78, 0.3);
+}
+
+body.light-mode .add-subscriber-page-header {
+    border-bottom-color: rgba(90, 33, 182, 0.15);
+}
+
+.add-subscriber-page-title {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #f8fafc;
+    line-height: 1.2;
+}
+
+body.light-mode .add-subscriber-page-title {
+    color: #1e293b;
+}
+
+/* Page header section styling */
+.add-subscriber-page .page-header-section {
+    margin-bottom: 2rem;
+}
+
+.add-subscriber-page .back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #f8fafc;
+    background: rgba(58, 10, 78, 0.3);
+    border: 1px solid rgba(58, 10, 78, 0.4);
+    border-radius: 8px;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.add-subscriber-page .back-btn:hover {
+    background: rgba(58, 10, 78, 0.5);
+    border-color: rgba(139, 92, 246, 0.5);
+    transform: translateX(-2px);
+}
+
+body.light-mode .add-subscriber-page .back-btn {
+    color: #1e293b;
+    background: rgba(240, 245, 255, 0.8);
+    border-color: rgba(90, 33, 182, 0.2);
+}
+
+body.light-mode .add-subscriber-page .back-btn:hover {
+    background: rgba(240, 245, 255, 1);
+    border-color: rgba(90, 33, 182, 0.3);
+}
+
+.add-subscriber-page .back-btn svg {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+    .add-subscriber-page .main-content {
+        padding: 1rem;
+    }
+    
+    .add-subscriber-page-container {
+        padding: 1.5rem;
+        border-radius: 1rem;
+    }
+    
+    .add-subscriber-page-header {
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+    }
+    
+    .add-subscriber-page-title {
+        font-size: 1.25rem;
+    }
+}
+

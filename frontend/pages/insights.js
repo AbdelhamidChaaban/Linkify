@@ -1555,7 +1555,8 @@ class InsightsManager {
         if (addSubscribersBtn) {
             addSubscribersBtn.addEventListener('click', (e) => {
                 e.preventDefault();
-                this.openAddSubscribersModal();
+                // Navigate to the add subscriber page instead of opening modal
+                window.location.href = '/pages/add-subscriber.html';
             });
         }
         
@@ -2484,7 +2485,6 @@ class InsightsManager {
                     </label>
                 </div>
                 ${markedIcon}
-                <button class="waiting-balance-dollar-btn" data-subscriber-id="${subscriber.id}" style="display: none;" title="Add to Waiting Balance">$</button>
             </div>
         `;
     }
@@ -2532,6 +2532,145 @@ class InsightsManager {
         return true; // Successfully added
     }
     
+    // Get all selected admin IDs from checkboxes
+    getSelectedAdminIds() {
+        const selectedIds = [];
+        document.querySelectorAll('.flam-trigger:checked').forEach(checkbox => {
+            const adminId = checkbox.dataset.subscriberId;
+            if (adminId) {
+                selectedIds.push(adminId);
+            }
+        });
+        return selectedIds;
+    }
+    
+    // Add multiple selected admins to waiting balance
+    addSelectedAdminsToWaitingBalance() {
+        const selectedIds = this.getSelectedAdminIds();
+        if (selectedIds.length === 0) {
+            return;
+        }
+        
+        let addedCount = 0;
+        let skippedCount = 0;
+        
+        selectedIds.forEach(adminId => {
+            const subscriber = this.subscribers.find(s => s.id === adminId);
+            if (subscriber) {
+                const balance = (subscriber.balance != null && !isNaN(subscriber.balance)) ? subscriber.balance : 0;
+                const added = this.addToWaitingBalance(adminId, balance);
+                if (added) {
+                    addedCount++;
+                } else {
+                    skippedCount++;
+                }
+            }
+        });
+        
+        // Uncheck all checkboxes
+        document.querySelectorAll('.flam-trigger').forEach(checkbox => {
+            checkbox.checked = false;
+        });
+        
+        // Hide header buttons
+        this.updateWaitingBalanceHeaderButton();
+        
+        // Refresh table to show $ icons
+        this.renderTable();
+        this.bindActionButtons();
+        
+        // Show toast notification
+        if (typeof notification !== 'undefined') {
+            notification.set({ delay: 3000 });
+            if (addedCount > 0 && skippedCount === 0) {
+                notification.success(`${addedCount} admin(s) marked for waiting balance`);
+            } else if (addedCount > 0 && skippedCount > 0) {
+                notification.success(`${addedCount} admin(s) added, ${skippedCount} already in waiting balance`);
+            } else {
+                notification.warning('All selected admins are already in waiting balance');
+            }
+        }
+    }
+    
+    // Update header $ button and copy button visibility based on selected checkboxes
+    updateWaitingBalanceHeaderButton() {
+        const headerBtn = document.getElementById('waitingBalanceHeaderBtn');
+        const copyBtn = document.getElementById('copySelectedHeaderBtn');
+        const selectedIds = this.getSelectedAdminIds();
+        
+        if (selectedIds.length > 0) {
+            if (headerBtn) headerBtn.style.display = 'inline-block';
+            if (copyBtn) copyBtn.style.display = 'flex';
+        } else {
+            if (headerBtn) headerBtn.style.display = 'none';
+            if (copyBtn) copyBtn.style.display = 'none';
+        }
+    }
+    
+    // Copy phone numbers of all selected admins
+    copySelectedAdminPhones() {
+        console.log('📋 [Copy] Copy button clicked');
+        const selectedIds = this.getSelectedAdminIds();
+        console.log('📋 [Copy] Selected IDs:', selectedIds);
+        
+        if (selectedIds.length === 0) {
+            console.log('📋 [Copy] No admins selected');
+            return;
+        }
+        
+        const phoneNumbers = [];
+        selectedIds.forEach(adminId => {
+            const subscriber = this.subscribers.find(s => s.id === adminId);
+            console.log(`📋 [Copy] Admin ${adminId}:`, subscriber ? { name: subscriber.name, phone: subscriber.phone } : 'not found');
+            if (subscriber && subscriber.phone) {
+                phoneNumbers.push(subscriber.phone);
+            }
+        });
+        
+        console.log('📋 [Copy] Phone numbers to copy:', phoneNumbers);
+        
+        if (phoneNumbers.length === 0) {
+            console.warn('📋 [Copy] No phone numbers found for selected admins');
+            if (typeof notification !== 'undefined') {
+                notification.set({ delay: 3000 });
+                notification.warning('No phone numbers found for selected admins');
+            } else {
+                alert('No phone numbers found for selected admins');
+            }
+            return;
+        }
+        
+        const phoneNumbersText = phoneNumbers.join('\n');
+        console.log('📋 [Copy] Text to copy:', phoneNumbersText);
+        
+        navigator.clipboard.writeText(phoneNumbersText).then(() => {
+            console.log('✅ [Copy] Successfully copied to clipboard');
+            
+            // Uncheck all checkboxes
+            document.querySelectorAll('.flam-trigger').forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            
+            // Hide header buttons
+            this.updateWaitingBalanceHeaderButton();
+            
+            if (typeof notification !== 'undefined') {
+                notification.set({ delay: 3000 });
+                notification.success(`Copied ${phoneNumbers.length} phone number(s) to clipboard`);
+            } else {
+                alert(`Copied ${phoneNumbers.length} phone number(s) to clipboard`);
+            }
+        }).catch(err => {
+            console.error('❌ [Copy] Failed to copy phone numbers:', err);
+            if (typeof notification !== 'undefined') {
+                notification.set({ delay: 3000 });
+                notification.error('Failed to copy phone numbers: ' + err.message);
+            } else {
+                alert('Failed to copy phone numbers: ' + err.message);
+            }
+        });
+    }
+    
     removeFromWaitingBalance(adminId) {
         const waitingBalance = this.getWaitingBalanceData();
         const filtered = waitingBalance.filter(item => item.adminId !== adminId);
@@ -2558,40 +2697,43 @@ class InsightsManager {
             });
         });
         
-        // Checkbox change handlers - show/hide $ button
+        // Checkbox change handlers - update header $ button visibility
         document.querySelectorAll('.flam-trigger').forEach(checkbox => {
             checkbox.addEventListener('change', (e) => {
-                const adminId = e.target.dataset.subscriberId;
-                const dollarBtn = document.querySelector(`.waiting-balance-dollar-btn[data-subscriber-id="${adminId}"]`);
-                if (dollarBtn) {
-                    dollarBtn.style.display = e.target.checked ? 'inline-block' : 'none';
-                }
+                this.updateWaitingBalanceHeaderButton();
             });
         });
         
-        // $ button click handlers - add to waiting balance
-        document.querySelectorAll('.waiting-balance-dollar-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
+        // Header $ button click handler - add all selected admins to waiting balance
+        const headerBtn = document.getElementById('waitingBalanceHeaderBtn');
+        if (headerBtn) {
+            // Remove existing listeners to avoid duplicates
+            const newHeaderBtn = headerBtn.cloneNode(true);
+            headerBtn.parentNode.replaceChild(newHeaderBtn, headerBtn);
+            
+            newHeaderBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 e.preventDefault();
-                const adminId = e.currentTarget.dataset.subscriberId;
-                const subscriber = this.subscribers.find(s => s.id === adminId);
-                if (subscriber) {
-                    const balance = (subscriber.balance != null && !isNaN(subscriber.balance)) ? subscriber.balance : 0;
-                    const added = this.addToWaitingBalance(adminId, balance);
-                    if (added) {
-                        // Refresh table to show $ icon
-                        this.renderTable();
-                        this.bindActionButtons();
-                        // Show toast notification
-                        if (typeof notification !== 'undefined') {
-                            notification.set({ delay: 3000 });
-                            notification.success('An admin marked for waiting balance');
-                        }
-                    }
-                }
+                this.addSelectedAdminsToWaitingBalance();
             });
-        });
+        }
+        
+        // Header copy button click handler - copy selected admin phone numbers
+        const copyBtn = document.getElementById('copySelectedHeaderBtn');
+        if (copyBtn) {
+            // Remove existing listeners to avoid duplicates
+            const newCopyBtn = copyBtn.cloneNode(true);
+            copyBtn.parentNode.replaceChild(newCopyBtn, copyBtn);
+            
+            newCopyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                this.copySelectedAdminPhones();
+            });
+        }
+        
+        // Update header buttons visibility
+        this.updateWaitingBalanceHeaderButton();
     }
     
     // Removed updateSelectAll - using status indicators instead
@@ -3720,10 +3862,7 @@ class InsightsManager {
                 if (existingLoading) existingLoading.remove();
                 if (existingSuccess) existingSuccess.remove();
                 
-                // Ensure row has relative positioning for absolute child positioning
-                row.style.position = 'relative';
-                
-                // Create and add 3D rotating loader
+                // Create and add 3D rotating loader (row already has position: relative from CSS)
                 loadingIndicator = document.createElement('div');
                 loadingIndicator.className = 'refresh-loading';
                 loadingIndicator.innerHTML = `
@@ -6019,3 +6158,4 @@ if (document.readyState === 'loading') {
 } else {
     window.insightsManager = new InsightsManager();
 }
+

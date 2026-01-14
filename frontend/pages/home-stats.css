@@ -1,0 +1,215 @@
+/* Home Stats Cards Styles */
+
+.home-stats-container {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    animation: fadeInUp 0.6s ease-out;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.home-stat-card {
+    background: linear-gradient(135deg, rgba(58, 10, 78, 0.4) 0%, rgba(90, 33, 182, 0.3) 50%, rgba(58, 10, 78, 0.4) 100%);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: 1rem;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(139, 92, 246, 0.15);
+    animation: slideInCard 0.6s ease-out;
+    animation-fill-mode: both;
+}
+
+.home-stat-card:nth-child(1) {
+    animation-delay: 0.1s;
+}
+
+.home-stat-card:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.home-stat-card:nth-child(3) {
+    animation-delay: 0.3s;
+}
+
+@keyframes slideInCard {
+    from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.home-stat-card::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.1) 0%, transparent 70%);
+    animation: pulseGlow 4s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes pulseGlow {
+    0%, 100% {
+        opacity: 0.5;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.8;
+        transform: scale(1.1);
+    }
+}
+
+.home-stat-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(139, 92, 246, 0.25);
+    border-color: rgba(139, 92, 246, 0.5);
+}
+
+.home-stat-card:hover::before {
+    animation: pulseGlow 2s ease-in-out infinite;
+}
+
+.home-stat-card-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.home-stat-card-title {
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: #cbd5e1;
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.9;
+}
+
+.home-stat-card-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #f8fafc;
+    margin: 0;
+    line-height: 1;
+    background: linear-gradient(135deg, #f8fafc 0%, #e0e7ff 50%, #f8fafc 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: gradientShift 3s ease infinite, numberCountUp 0.8s ease-out;
+}
+
+@keyframes gradientShift {
+    0%, 100% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+}
+
+@keyframes numberCountUp {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+body.light-mode .home-stat-card {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(240, 245, 255, 0.8) 50%, rgba(255, 255, 255, 0.9) 100%);
+    border-color: rgba(139, 92, 246, 0.2);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(139, 92, 246, 0.1);
+}
+
+body.light-mode .home-stat-card-title {
+    color: #64748b;
+}
+
+body.light-mode .home-stat-card-value {
+    background: linear-gradient(135deg, #1e293b 0%, #475569 50%, #1e293b 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+    .home-stats-container {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.25rem;
+    }
+    
+    .home-stat-card {
+        padding: 1.25rem;
+    }
+    
+    .home-stat-card-value {
+        font-size: 2.25rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .home-stats-container {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    .home-stat-card {
+        padding: 1.25rem;
+    }
+    
+    .home-stat-card-title {
+        font-size: 0.875rem;
+    }
+    
+    .home-stat-card-value {
+        font-size: 2rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .home-stats-container {
+        gap: 0.875rem;
+        margin-bottom: 1.25rem;
+    }
+    
+    .home-stat-card {
+        padding: 1rem;
+    }
+    
+    .home-stat-card-title {
+        font-size: 0.8125rem;
+    }
+    
+    .home-stat-card-value {
+        font-size: 1.75rem;
+    }
+}
+
