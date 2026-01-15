@@ -1084,6 +1084,22 @@ body.admins-page {
     width: 100%;
 }
 
+/* Allow page-level scrolling and native pull-to-refresh on mobile */
+@media (max-width: 768px) {
+    html.admins-page,
+    body.admins-page {
+        overflow-y: auto !important; /* Allow page scrolling on mobile */
+        overflow-x: hidden !important;
+        position: relative !important; /* Change from fixed to relative for native scrolling */
+        height: auto !important;
+        min-height: 100vh !important;
+        min-height: 100dvh !important;
+        touch-action: pan-y !important; /* Allow vertical touch scrolling */
+        overscroll-behavior-y: auto !important; /* Allow native pull-to-refresh */
+        -webkit-overflow-scrolling: touch !important;
+    }
+}
+
 body.admins-page .main-content {
     height: calc(100vh - 80px);
     height: calc(100dvh - 80px); /* Dynamic viewport height for mobile */

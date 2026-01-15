@@ -1,0 +1,70 @@
+/**
+ * Native Pull-to-Refresh Support
+ * Ensures native browser pull-to-refresh works consistently across all pages
+ * Specifically for Samsung Internet and other mobile browsers
+ */
+
+/* Base: Allow native pull-to-refresh on mobile for all pages */
+@media (max-width: 768px) {
+    /* General page-level fixes */
+    html, body {
+        overscroll-behavior-y: auto !important; /* Allow native pull-to-refresh */
+        overscroll-behavior-x: none !important;
+    }
+    
+    /* Fix for pages that have overflow: hidden - allow scrolling on mobile */
+    html[class*="-page"],
+    body[class*="-page"] {
+        /* Allow page scrolling when needed */
+        touch-action: pan-y !important; /* Allow vertical touch scrolling */
+        -webkit-overflow-scrolling: touch !important;
+    }
+    
+    /* Main content containers - allow contained scrolling for tables */
+    .main-content {
+        touch-action: pan-y !important;
+    }
+    
+    /* Table containers - ensure they can scroll independently */
+    .table-wrapper,
+    .table-container,
+    .card-container,
+    [class*="table"] {
+        touch-action: pan-y pan-x !important; /* Allow both vertical and horizontal scrolling */
+        overscroll-behavior: contain !important; /* Contain overscroll within table, don't propagate to page */
+        -webkit-overflow-scrolling: touch !important;
+    }
+    
+    /* Table elements - ensure scrollable */
+    table,
+    tbody,
+    thead {
+        touch-action: pan-y pan-x !important; /* Allow scrolling within tables */
+    }
+    
+    /* Prevent pull-to-refresh when scrolling inside tables */
+    .table-wrapper *,
+    .table-container *,
+    .card-container * {
+        /* Don't propagate touch events that would trigger page-level pull-to-refresh */
+        /* Native browser will handle this, but we ensure tables can scroll */
+    }
+}
+
+/* Ensure native pull-to-refresh only works at top of page */
+/* This is handled by the browser automatically, but we ensure page is scrollable */
+@media (max-width: 768px) {
+    /* Allow document-level scrolling for native pull-to-refresh */
+    html {
+        /* Remove any fixed positioning that would block native scrolling */
+        position: relative !important;
+    }
+    
+    body {
+        position: relative !important;
+        /* Ensure body can scroll for native pull-to-refresh */
+        min-height: 100vh;
+        min-height: 100dvh;
+    }
+}
+
