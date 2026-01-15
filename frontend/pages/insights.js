@@ -1561,13 +1561,26 @@ class InsightsManager {
         // Rows per page
         const rowsPerPage = document.getElementById('rowsPerPage');
         if (rowsPerPage) {
+            // Set initial value to match current state
+            if (this.rowsPerPage) {
+                rowsPerPage.value = this.rowsPerPage.toString();
+            }
+            
             rowsPerPage.addEventListener('change', (e) => {
-                this.rowsPerPage = parseInt(e.target.value);
-                this.currentPage = 1;
-                this.renderTable();
-                this.updatePagination();
-                this.updatePageInfo();
+                const newValue = parseInt(e.target.value);
+                if (!isNaN(newValue) && newValue > 0) {
+                    console.log('📊 [Insights] Rows per page changed to:', newValue);
+                    this.rowsPerPage = newValue;
+                    this.currentPage = 1;
+                    this.renderTable();
+                    this.updatePagination();
+                    this.updatePageInfo();
+                } else {
+                    console.warn('⚠️ [Insights] Invalid rows per page value:', e.target.value);
+                }
             });
+        } else {
+            console.warn('⚠️ [Insights] Rows per page element not found');
         }
         
         // Pagination buttons

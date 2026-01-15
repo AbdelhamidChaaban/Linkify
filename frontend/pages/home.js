@@ -3360,6 +3360,16 @@ class HomeManager {
             });
         });
 
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
+            });
+        });
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {

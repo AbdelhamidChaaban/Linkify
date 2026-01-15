@@ -3215,22 +3215,36 @@ body:not(.light-mode) .pagination-label {
     padding: 0.375rem 2rem 0.375rem 0.75rem;
     border: 1px solid rgba(0, 0, 0, 0.23);
     border-radius: 4px;
-    background: transparent;
+    background: #ffffff;
     color: #1e293b;
     font-size: 0.875rem;
     cursor: pointer;
     appearance: none;
     outline: none;
+    min-width: 80px;
 }
 
 body:not(.light-mode) .pagination-select {
     border-color: rgba(255, 255, 255, 0.23);
     color: #f8fafc;
+    background: rgba(20, 20, 30, 0.95) !important;
+}
+
+body:not(.light-mode) .pagination-select option {
+    background: rgba(20, 20, 30, 0.95) !important;
+    color: #f8fafc !important;
 }
 
 .pagination-select:focus {
     border-color: #059669;
+    box-shadow: 0 0 0 2px rgba(5, 150, 105, 0.2);
 }
+
+body:not(.light-mode) .pagination-select:focus {
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
 
 .select-icon {
     position: absolute;
@@ -3244,7 +3258,7 @@ body:not(.light-mode) .pagination-select {
 }
 
 body:not(.light-mode) .select-icon {
-    color: rgba(255, 255, 255, 0.54);
+    color: rgba(255, 255, 255, 0.7);
 }
 
 .pagination-info {
