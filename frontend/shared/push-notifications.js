@@ -188,8 +188,12 @@ class PushNotificationManager {
         // Start periodic checks for expiring/high consumption admins
         this.startPeriodicChecks();
         
-        // Load initial notifications count
-        this.updateBadgeCount();
+        // Load initial notifications count - wait for authentication first
+        this.waitForAuth().then(() => {
+            this.updateBadgeCount();
+        }).catch(() => {
+            console.warn('⚠️ User not authenticated yet, skipping initial badge count update');
+        });
     }
     
     async waitForAuth() {
@@ -201,6 +205,9 @@ class PushNotificationManager {
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
+        // If we get here, authentication hasn't completed after 5 seconds
+        // Throw an error so callers can handle it gracefully
+        throw new Error('Authentication timeout');
     }
     
     initUI() {
@@ -675,12 +682,20 @@ class PushNotificationManager {
         // The backend cron job handles most of this, but we can also trigger checks
         this.checkInterval = setInterval(() => {
             if (this.isEnabled) {
-                this.updateBadgeCount();
+                // Only update if user is authenticated
+                if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+                    this.updateBadgeCount();
+                }
             }
         }, 5 * 60 * 1000); // 5 minutes
         
-        // Initial check
-        setTimeout(() => this.updateBadgeCount(), 5000); // Check after 5 seconds
+        // Initial check - wait for authentication first
+        this.waitForAuth().then(() => {
+            setTimeout(() => this.updateBadgeCount(), 5000); // Check after 5 seconds
+        }).catch(() => {
+            // User not authenticated yet, skip initial check
+            // The main init() method will handle the initial badge update
+        });
     }
     
     async updateBadgeCount() {
@@ -713,6 +728,11 @@ class PushNotificationManager {
     
     async getNotificationCount() {
         try {
+            // Check if user is authenticated before trying to get token
+            if (typeof auth === 'undefined' || !auth || !auth.currentUser) {
+                return 0; // Return 0 if not authenticated (don't log error)
+            }
+            
             const token = await this.getIdToken();
             const response = await fetch(`${this.baseURL}/api/push/notifications`, {
                 method: 'GET',
@@ -728,7 +748,10 @@ class PushNotificationManager {
             }
             return 0;
         } catch (error) {
-            console.error('Error getting notification count:', error);
+            // Only log error if it's not an authentication error (which is expected on page load)
+            if (error.message !== 'User not authenticated') {
+                console.error('Error getting notification count:', error);
+            }
             return 0;
         }
     }

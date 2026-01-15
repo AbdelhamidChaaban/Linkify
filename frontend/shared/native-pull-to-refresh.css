@@ -55,16 +55,42 @@
 /* This is handled by the browser automatically, but we ensure page is scrollable */
 @media (max-width: 768px) {
     /* Allow document-level scrolling for native pull-to-refresh */
+    /* Apply to all pages, but pages with specific rules in mobile-fixes.css will override */
     html {
         /* Remove any fixed positioning that would block native scrolling */
         position: relative !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        height: auto !important;
     }
     
     body {
         position: relative !important;
         /* Ensure body can scroll for native pull-to-refresh */
-        min-height: 100vh;
-        min-height: 100dvh;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        min-height: 100dvh !important;
+    }
+    
+    /* Ensure pages with page classes also get proper scrolling */
+    html[class*="-page"] {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        height: auto !important;
+        position: relative !important;
+        min-height: 100vh !important;
+        min-height: 100dvh !important;
+    }
+    
+    body[class*="-page"] {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        height: auto !important;
+        position: relative !important;
+        min-height: 100vh !important;
+        min-height: 100dvh !important;
     }
 }
 
