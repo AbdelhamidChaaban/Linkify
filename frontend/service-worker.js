@@ -3,7 +3,7 @@
  * Handles background push events and displays notifications
  */
 
-const CACHE_NAME = 'linkify-v3'; // Updated to force cache refresh - v3: network-first strategy
+const CACHE_NAME = 'linkify-v4'; // Updated to force cache refresh - v4: cache-first strategy for instant navigation
 const FORCE_UPDATE = true; // Set to true to force immediate update
 
 // Install event - cache assets
@@ -94,27 +94,66 @@ self.addEventListener('fetch', (event) => {
         return;
     }
     
-    // Check if this is an HTML, CSS, or JS file that should use network-first strategy
+    // Check if this is an HTML, CSS, or JS file - use cache-first for instant navigation
     const url = new URL(event.request.url);
-    const isStaticAsset = url.pathname.match(/\.(css|js|html|htm)$/i);
+    const isHTML = url.pathname.match(/\.(html|htm)$/i);
+    const isStaticAsset = url.pathname.match(/\.(css|js)$/i);
     
-    if (isStaticAsset) {
-        // Network-first strategy: Try network first, fallback to cache
+    if (isHTML || isStaticAsset) {
+        // Cache-first strategy: Serve from cache immediately, update in background
+        // This makes navigation instant while still keeping content fresh
         event.respondWith(
-            fetch(event.request)
-                .then((response) => {
-                    // If network request succeeds, cache and return the response
-                    if (response && response.status === 200) {
-                        const responseToCache = response.clone();
-                        caches.open(CACHE_NAME).then((cache) => {
-                            cache.put(event.request, responseToCache);
-                        });
+            caches.match(event.request)
+                .then((cachedResponse) => {
+                    // If we have a cached version, return it immediately
+                    if (cachedResponse) {
+                        // Update cache in background (don't wait for it)
+                        fetch(event.request)
+                            .then((response) => {
+                                if (response && response.status === 200) {
+                                    const responseToCache = response.clone();
+                                    caches.open(CACHE_NAME).then((cache) => {
+                                        cache.put(event.request, responseToCache);
+                                    });
+                                }
+                            })
+                            .catch(() => {
+                                // Network failed, keep using cached version
+                            });
+                        return cachedResponse;
                     }
-                    return response;
-                })
-                .catch(() => {
-                    // Network failed, try cache as fallback
-                    return caches.match(event.request);
+                    
+                    // No cache, fetch from network
+                    return fetch(event.request)
+                        .then((response) => {
+                            // Cache successful responses
+                            if (response && response.status === 200) {
+                                const responseToCache = response.clone();
+                                caches.open(CACHE_NAME).then((cache) => {
+                                    cache.put(event.request, responseToCache);
+                                });
+                            }
+                            return response;
+                        })
+                        .catch(() => {
+                            // Network failed, return a basic offline page for HTML
+                            if (isHTML) {
+                                return new Response(
+                                    '<!DOCTYPE html><html><head><title>Offline</title></head><body><h1>You are offline</h1><p>Please check your internet connection and try again.</p></body></html>',
+                                    {
+                                        status: 503,
+                                        statusText: 'Service Unavailable',
+                                        headers: new Headers({
+                                            'Content-Type': 'text/html'
+                                        })
+                                    }
+                                );
+                            }
+                            return new Response('Offline', {
+                                status: 503,
+                                statusText: 'Service Unavailable'
+                            });
+                        });
                 })
         );
     } else {

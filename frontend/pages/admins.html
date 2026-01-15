@@ -27,6 +27,10 @@
     <link rel="stylesheet" href="/shared/ui-polish.css">
     <link rel="stylesheet" href="/shared/notification-panel.css">
     <link rel="stylesheet" href="/shared/mobile-fixes.css">
+    <!-- Prefetch pages for faster navigation -->
+    <script src="/shared/prefetch-pages.js"></script>
+    <!-- Fast Navigation - Optimize link clicks -->
+    <script src="/shared/fast-navigation.js"></script>
     <!-- Global Error Handler - Must load early to catch errors -->
     <script src="/shared/error-handler.js"></script>
     <!-- Theme Loader - Must run synchronously before page renders -->
@@ -444,16 +448,18 @@
     <!-- Block Status Check - Must run immediately after Firebase loads -->
     <script src="/shared/auth-check.js"></script>
     
-    <!-- Navigation Script -->
-    <script src="/shared/nav.js"></script>
-    <script src="/shared/ui-helpers.js"></script>
-    <script src="/shared/mobile-enhancements.js"></script>
+    <!-- Navigation Script - Deferred (navigation can wait until page is interactive) -->
+    <script src="/shared/nav.js" defer></script>
+    <!-- UI Helpers - Deferred (UI helpers are not critical initially) -->
+    <script src="/shared/ui-helpers.js" defer></script>
+    <!-- Mobile Enhancements - Deferred (mobile enhancements can wait) -->
+    <script src="/shared/mobile-enhancements.js" defer></script>
     
-    <!-- Push Notifications Script -->
-    <script src="/shared/push-notifications.js"></script>
+    <!-- Push Notifications Script - Deferred (push notifications can be initialized later) -->
+    <script src="/shared/push-notifications.js" defer></script>
     
-    <!-- PWA Registration -->
-    <script src="/shared/pwa-register.js"></script>
+    <!-- PWA Registration - Deferred (PWA registration can wait) -->
+    <script src="/shared/pwa-register.js" defer></script>
     
     <script src="/pages/admins.js"></script>
 </body>

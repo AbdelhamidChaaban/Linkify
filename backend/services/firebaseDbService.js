@@ -304,17 +304,38 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     // Cleanup happens ONLY when getconsumption API was successfully fetched.
     // Track last cleanup date to prevent duplicate cleanups on the same day.
     
-    // Helper function to parse consumption value from string (format: "X / Y GB" or "X / Y MB")
+    // Helper function to parse consumption value from string
+    // Supports formats: "40 / 77 GB", "0.0 / 70 GB", "15.00 / 77", "40/77GB", etc.
     const parseConsumptionValue = (consumptionStr) => {
-      if (!consumptionStr || typeof consumptionStr !== 'string') return null;
-      // Extract first number (consumed amount) from strings like "40 / 77 GB" or "0.0 / 70 GB"
-      const match = consumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
-      if (match) {
-        return parseFloat(match[1]) || 0;
+      if (!consumptionStr) return null;
+      
+      // Handle string format
+      if (typeof consumptionStr === 'string') {
+        // Try format with unit: "X / Y GB" or "X / Y MB"
+        let match = consumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+\s*(GB|MB)/i);
+        if (match) {
+          return parseFloat(match[1]) || 0;
+        }
+        
+        // Try format without unit: "X / Y" or "X/Y" (e.g., "15.00 / 77")
+        match = consumptionStr.match(/^([\d.]+)\s*\/\s*[\d.]+/);
+        if (match) {
+          return parseFloat(match[1]) || 0;
+        }
+        
+        // Try to parse as simple number (fallback)
+        const numValue = parseFloat(consumptionStr);
+        if (!isNaN(numValue)) {
+          return numValue;
+        }
       }
-      // Try to parse as simple number
-      const numValue = parseFloat(consumptionStr);
-      return isNaN(numValue) ? null : numValue;
+      
+      // Handle number format (direct value)
+      if (typeof consumptionStr === 'number') {
+        return consumptionStr;
+      }
+      
+      return null;
     };
     
     // Detect whether getconsumption API was successfully fetched for this refresh
@@ -330,9 +351,17 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     const currentTotalConsumption = cleanDashboardData.totalConsumption || currentData.alfaData?.totalConsumption || null;
     const previousTotalConsumption = currentData.alfaData?.totalConsumption || null;
     
-    // Parse consumption values (extract the "used" amount from "X / Y GB" format)
+    // Parse consumption values (extract the "used" amount from "X / Y GB" or "X / Y" format)
     const currentTotalValue = parseConsumptionValue(currentTotalConsumption);
     const previousTotalValue = parseConsumptionValue(previousTotalConsumption);
+    
+    // CRITICAL DEBUG LOGGING for bundle renewal detection
+    console.log(`🔍 [${adminId}] [Cleanup] Bundle renewal detection check:`);
+    console.log(`   - hasGetConsumptionFetch: ${hasGetConsumptionFetch}`);
+    console.log(`   - currentTotalConsumption (raw): "${currentTotalConsumption}"`);
+    console.log(`   - previousTotalConsumption (raw): "${previousTotalConsumption}"`);
+    console.log(`   - currentTotalValue (parsed): ${currentTotalValue}`);
+    console.log(`   - previousTotalValue (parsed): ${previousTotalValue}`);
     
     // Bundle renewal detection: current < previous AND previous > 0
     // This handles cases where:
@@ -343,6 +372,23 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
                                   previousTotalValue > 0 && 
                                   currentTotalValue !== null &&
                                   currentTotalValue < previousTotalValue;
+    
+    console.log(`   - isConsumptionRenewed: ${isConsumptionRenewed}`);
+    if (isConsumptionRenewed) {
+      console.log(`   ✅ BUNDLE RENEWAL DETECTED: ${previousTotalValue} → ${currentTotalValue}`);
+    } else {
+      if (!hasGetConsumptionFetch) {
+        console.log(`   ❌ No renewal: getconsumption API not fetched`);
+      } else if (previousTotalValue === null) {
+        console.log(`   ❌ No renewal: previousTotalValue is null`);
+      } else if (previousTotalValue <= 0) {
+        console.log(`   ❌ No renewal: previousTotalValue (${previousTotalValue}) <= 0`);
+      } else if (currentTotalValue === null) {
+        console.log(`   ❌ No renewal: currentTotalValue is null`);
+      } else if (currentTotalValue >= previousTotalValue) {
+        console.log(`   ❌ No renewal: currentTotalValue (${currentTotalValue}) >= previousTotalValue (${previousTotalValue})`);
+      }
+    }
     
     if (isConsumptionRenewed) {
       // Check if cleanup already happened today (prevent duplicate cleanups on same day)

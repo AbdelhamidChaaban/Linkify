@@ -13,6 +13,67 @@ AddSubscriberPageManager.prototype.getAuthToken = async function() {
     return null;
 };
 
+// Lazy load admins: Wait until page is visible and interactive
+AddSubscriberPageManager.prototype.loadAdminsLazy = function() {
+    // If page is already visible and interactive, initialize immediately
+    if (document.visibilityState === 'visible' && document.readyState === 'complete') {
+        // Use requestIdleCallback to initialize when browser is idle (better performance)
+        if ('requestIdleCallback' in window) {
+            requestIdleCallback(() => {
+                console.log('⚡ [Add Subscriber] Page visible and idle - initializing Firebase listener');
+                this.loadAdmins();
+            }, { timeout: 2000 }); // Max 2 second wait even if browser is busy
+        } else {
+            // Fallback: small delay to allow page to finish rendering
+            setTimeout(() => {
+                console.log('⚡ [Add Subscriber] Page ready - initializing Firebase listener (fallback)');
+                this.loadAdmins();
+            }, 100);
+        }
+    } else {
+        // Wait for page to become visible and interactive
+        const initListener = () => {
+            if (document.visibilityState === 'visible') {
+                // Page is visible, wait for it to be interactive
+                if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                    if ('requestIdleCallback' in window) {
+                        requestIdleCallback(() => {
+                            console.log('⚡ [Add Subscriber] Page visible and idle - initializing Firebase listener');
+                            this.loadAdmins();
+                        }, { timeout: 2000 });
+                    } else {
+                        setTimeout(() => {
+                            console.log('⚡ [Add Subscriber] Page ready - initializing Firebase listener');
+                            this.loadAdmins();
+                        }, 100);
+                    }
+                    document.removeEventListener('visibilitychange', initListener);
+                    if (document.readyState === 'loading') {
+                        document.removeEventListener('DOMContentLoaded', initListener);
+                    }
+                }
+            }
+        };
+        
+        // Listen for page visibility and ready state
+        document.addEventListener('visibilitychange', initListener);
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initListener);
+        } else {
+            // Already loaded, try to initialize after a short delay
+            setTimeout(initListener, 100);
+        }
+        
+        // Fallback: Initialize after max 3 seconds even if page isn't fully ready
+        setTimeout(() => {
+            if (!this.unsubscribe) {
+                console.log('⚡ [Add Subscriber] Timeout reached - initializing Firebase listener (fallback)');
+                this.loadAdmins();
+            }
+        }, 3000);
+    }
+};
+
 AddSubscriberPageManager.prototype.loadAdmins = function() {
     try {
         if (!this.currentUserId) {

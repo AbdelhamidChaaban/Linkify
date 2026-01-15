@@ -76,6 +76,67 @@ class AdminsManager {
         return /SamsungBrowser/i.test(ua) || /SAMSUNG/i.test(ua);
     }
 
+    // Lazy load admins: Wait until page is visible and interactive
+    loadAdminsLazy() {
+        // If page is already visible and interactive, initialize immediately
+        if (document.visibilityState === 'visible' && document.readyState === 'complete') {
+            // Use requestIdleCallback to initialize when browser is idle (better performance)
+            if ('requestIdleCallback' in window) {
+                requestIdleCallback(() => {
+                    console.log('⚡ [Admins] Page visible and idle - initializing Firebase listener');
+                    this.loadAdmins();
+                }, { timeout: 2000 }); // Max 2 second wait even if browser is busy
+            } else {
+                // Fallback: small delay to allow page to finish rendering
+                setTimeout(() => {
+                    console.log('⚡ [Admins] Page ready - initializing Firebase listener (fallback)');
+                    this.loadAdmins();
+                }, 100);
+            }
+        } else {
+            // Wait for page to become visible and interactive
+            const initListener = () => {
+                if (document.visibilityState === 'visible') {
+                    // Page is visible, wait for it to be interactive
+                    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                        if ('requestIdleCallback' in window) {
+                            requestIdleCallback(() => {
+                                console.log('⚡ [Admins] Page visible and idle - initializing Firebase listener');
+                                this.loadAdmins();
+                            }, { timeout: 2000 });
+                        } else {
+                            setTimeout(() => {
+                                console.log('⚡ [Admins] Page ready - initializing Firebase listener');
+                                this.loadAdmins();
+                            }, 100);
+                        }
+                        document.removeEventListener('visibilitychange', initListener);
+                        if (document.readyState === 'loading') {
+                            document.removeEventListener('DOMContentLoaded', initListener);
+                        }
+                    }
+                }
+            };
+            
+            // Listen for page visibility and ready state
+            document.addEventListener('visibilitychange', initListener);
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initListener);
+            } else {
+                // Already loaded, try to initialize after a short delay
+                setTimeout(initListener, 100);
+            }
+            
+            // Fallback: Initialize after max 3 seconds even if page isn't fully ready
+            setTimeout(() => {
+                if (!this.isListenerActive) {
+                    console.log('⚡ [Admins] Timeout reached - initializing Firebase listener (fallback)');
+                    this.loadAdmins();
+                }
+            }, 3000);
+        }
+    }
+
     // Load admins from Firebase using real-time listener
     loadAdmins() {
         // CRITICAL: Unsubscribe from existing listener first to prevent multiple listeners
@@ -313,8 +374,9 @@ class AdminsManager {
             // Wait for Firebase to be ready
             return this.waitForFirebase();
         }).then(() => {
-            // Initialize real-time listener ONLY after auth is confirmed
-            this.loadAdmins();
+            // LAZY LOAD: Initialize real-time listener only after page is visible/interactive
+            // This improves initial page load performance by deferring Firebase listener setup
+            this.loadAdminsLazy();
             // Check if we should open edit modal from URL hash (e.g., #edit-{adminId})
             // Use setTimeout to ensure listener has time to load data first
             setTimeout(() => {

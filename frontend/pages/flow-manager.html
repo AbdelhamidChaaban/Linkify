@@ -366,12 +366,15 @@
     <script src="/shared/auth-check.js"></script>
     
     <!-- Navigation Script -->
-    <script src="/shared/nav.js"></script>
-    <script src="/shared/ui-helpers.js"></script>
-    <script src="/shared/mobile-enhancements.js"></script>
+    <!-- Navigation Script - Deferred (navigation can wait until page is interactive) -->
+    <script src="/shared/nav.js" defer></script>
+    <!-- UI Helpers - Deferred (UI helpers are not critical initially) -->
+    <script src="/shared/ui-helpers.js" defer></script>
+    <!-- Mobile Enhancements - Deferred (mobile enhancements can wait) -->
+    <script src="/shared/mobile-enhancements.js" defer></script>
     
-    <!-- Push Notifications Script -->
-    <script src="/shared/push-notifications.js"></script>
+    <!-- Push Notifications Script - Deferred (push notifications can be initialized later) -->
+    <script src="/shared/push-notifications.js" defer></script>
     
     <!-- Manage Flow Modal -->
     <div class="manage-flow-modal-overlay" id="manageFlowModal">
@@ -451,8 +454,8 @@
         </div>
     </div>
     
-    <!-- PWA Registration -->
-    <script src="/shared/pwa-register.js"></script>
+    <!-- PWA Registration - Deferred (PWA registration can wait) -->
+    <script src="/shared/pwa-register.js" defer></script>
     
     <!-- Flow Manager Script -->
     <script src="/pages/flow-manager.js"></script>

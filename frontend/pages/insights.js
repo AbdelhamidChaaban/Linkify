@@ -66,6 +66,67 @@ class InsightsManager {
         return cleaned;
     }
     
+    // Lazy load subscribers: Wait until page is visible and interactive
+    loadSubscribersLazy() {
+        // If page is already visible and interactive, initialize immediately
+        if (document.visibilityState === 'visible' && document.readyState === 'complete') {
+            // Use requestIdleCallback to initialize when browser is idle (better performance)
+            if ('requestIdleCallback' in window) {
+                requestIdleCallback(() => {
+                    console.log('⚡ [Insights] Page visible and idle - initializing Firebase listener');
+                    this.loadSubscribers();
+                }, { timeout: 2000 }); // Max 2 second wait even if browser is busy
+            } else {
+                // Fallback: small delay to allow page to finish rendering
+                setTimeout(() => {
+                    console.log('⚡ [Insights] Page ready - initializing Firebase listener (fallback)');
+                    this.loadSubscribers();
+                }, 100);
+            }
+        } else {
+            // Wait for page to become visible and interactive
+            const initListener = () => {
+                if (document.visibilityState === 'visible') {
+                    // Page is visible, wait for it to be interactive
+                    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                        if ('requestIdleCallback' in window) {
+                            requestIdleCallback(() => {
+                                console.log('⚡ [Insights] Page visible and idle - initializing Firebase listener');
+                                this.loadSubscribers();
+                            }, { timeout: 2000 });
+                        } else {
+                            setTimeout(() => {
+                                console.log('⚡ [Insights] Page ready - initializing Firebase listener');
+                                this.loadSubscribers();
+                            }, 100);
+                        }
+                        document.removeEventListener('visibilitychange', initListener);
+                        if (document.readyState === 'loading') {
+                            document.removeEventListener('DOMContentLoaded', initListener);
+                        }
+                    }
+                }
+            };
+            
+            // Listen for page visibility and ready state
+            document.addEventListener('visibilitychange', initListener);
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initListener);
+            } else {
+                // Already loaded, try to initialize after a short delay
+                setTimeout(initListener, 100);
+            }
+            
+            // Fallback: Initialize after max 3 seconds even if page isn't fully ready
+            setTimeout(() => {
+                if (!this.unsubscribe) {
+                    console.log('⚡ [Insights] Timeout reached - initializing Firebase listener (fallback)');
+                    this.loadSubscribers();
+                }
+            }, 3000);
+        }
+    }
+
     loadSubscribers() {
         try {
             // Check if db is available
@@ -1296,7 +1357,9 @@ class InsightsManager {
         this.waitForAuth().then(() => {
             return this.waitForFirebase();
         }).then(() => {
-            this.loadSubscribers();
+            // LAZY LOAD: Initialize Firebase listener only after page is visible/interactive
+            // This improves initial page load performance by deferring Firebase listener setup
+            this.loadSubscribersLazy();
         }).catch(error => {
             console.error('Firebase initialization error:', error);
             this.showError('Error loading data. Please refresh the page.');
@@ -4918,11 +4981,15 @@ class InsightsManager {
                     console.log('✅ Subscribers updated successfully');
                     
                     // Copy success message to clipboard if there are additions
+                    // Format: "Send [adminPhone] to 1323 ([quota] GB)" - exactly like add subscriber page
                     if (results.additions.length > 0) {
                         const firstAddition = results.additions.find(r => r.success);
                         if (firstAddition && subscriber) {
+                            // Find the quota for the first successful addition
+                            const additionItem = additions.find(a => a.phone === firstAddition.phone);
+                            const quota = additionItem?.quota || 0;
                             const adminPhone = subscriber.phone || '';
-                            const message = `Send ${adminPhone} to 1323`;
+                            const message = `Send ${adminPhone} to 1323 (${quota} GB)`;
                             try {
                                 await navigator.clipboard.writeText(message);
                                 console.log('✅ Copied to clipboard:', message);
@@ -4944,36 +5011,43 @@ class InsightsManager {
                         messages.push(`Removed ${results.removals.length} subscriber(s)`);
                     }
                     
-                    const successMessage = messages.length > 0 
-                        ? `✅ Successfully ${messages.join(', ')}!`
-                        : '✅ Subscribers updated successfully!';
+                    // Show toast notification immediately (like add subscriber page)
+                    if (typeof notification !== 'undefined') {
+                        notification.set({ delay: 3000 });
+                        notification.success('Operation succeeded');
+                    } else {
+                        const successMessage = messages.length > 0 
+                            ? `✅ Successfully ${messages.join(', ')}!`
+                            : '✅ Subscribers updated successfully!';
+                        alert(successMessage);
+                    }
                     
-                    alert(successMessage);
+                    // Close the modal immediately (before refresh to give instant feedback)
+                    this.closeEditSubscribersModal();
                     
-                    // Automatically refresh the admin if there were successful removals, additions, or updates
-                    // CRITICAL: Refresh BEFORE closing modal to ensure it triggers
+                    // Automatically refresh the admin in the background (non-blocking)
+                    // Firebase real-time listeners will automatically update the UI when refresh completes
                     const hasSuccessfulRemovals = results.removals.length > 0 && results.removals.some(r => r.success);
                     const hasSuccessfulAdditions = results.additions.length > 0 && results.additions.some(r => r.success);
                     const hasSuccessfulUpdates = results.updates.length > 0 && results.updates.some(r => r.success);
                     
                     if (hasSuccessfulRemovals || hasSuccessfulAdditions || hasSuccessfulUpdates) {
-                        console.log(`🔄 Auto-refreshing admin ${adminId} after subscriber changes...`);
+                        console.log(`🔄 Auto-refreshing admin ${adminId} in background after subscriber changes...`);
                         console.log(`   - Successful removals: ${results.removals.filter(r => r.success).length}/${results.removals.length}`);
                         console.log(`   - Successful additions: ${results.additions.filter(r => r.success).length}/${results.additions.length}`);
                         console.log(`   - Successful updates: ${results.updates.filter(r => r.success).length}/${results.updates.length}`);
-                        // Refresh the admin to get updated data - don't await to avoid blocking modal close
+                        
+                        // Fire-and-forget: Refresh in background - don't await or catch (let it fail silently)
+                        // Firebase real-time listener will update UI automatically when refresh completes
                         this.refreshSubscriber(adminId).catch(error => {
-                            console.error('❌ Error auto-refreshing admin:', error);
-                            // Don't show alert - refresh failure is not critical
+                            console.error('⚠️ Error during background admin refresh (non-critical):', error);
+                            // Don't show alert - refresh failure is not critical, UI will update via Firebase listener
                         });
                     } else {
                         console.warn(`⚠️ No successful operations to trigger refresh (removals: ${results.removals.length}, additions: ${results.additions.length}, updates: ${results.updates.length})`);
                     }
-                    
-                    // Close the modal
-                    this.closeEditSubscribersModal();
                 } else {
-                    // Some operations failed - copy cancel message
+                    // Some operations failed - copy cancel message (exactly like add subscriber page)
                     const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
                     try {
                         await navigator.clipboard.writeText(cancelMessage);
@@ -4994,23 +5068,31 @@ class InsightsManager {
                         results.updates.filter(r => r.success).length +
                         results.removals.filter(r => r.success).length;
                     
-                    alert(`⚠️ Some operations failed (${successCount} succeeded). Errors:\n${failed.join('\n')}`);
+                    // Show toast notification immediately (like add subscriber page)
+                    if (typeof notification !== 'undefined') {
+                        notification.set({ delay: 3000 });
+                        notification.error('Cancel message copied to clipboard automatically');
+                    } else {
+                        alert(`⚠️ Some operations failed (${successCount} succeeded). Errors:\n${failed.join('\n')}\n\nCancel message copied to clipboard automatically.`);
+                    }
                     
-                    // Automatically refresh the admin if there were any successful removals, additions, or updates
-                    // CRITICAL: Refresh BEFORE closing modal to ensure it triggers
+                    // Automatically refresh the admin in the background (non-blocking)
+                    // Firebase real-time listeners will automatically update the UI when refresh completes
                     const hasSuccessfulRemovals = results.removals.length > 0 && results.removals.some(r => r.success);
                     const hasSuccessfulAdditions = results.additions.length > 0 && results.additions.some(r => r.success);
                     const hasSuccessfulUpdates = results.updates.length > 0 && results.updates.some(r => r.success);
                     
                     if (hasSuccessfulRemovals || hasSuccessfulAdditions || hasSuccessfulUpdates) {
-                        console.log(`🔄 Auto-refreshing admin ${adminId} after partial subscriber changes...`);
+                        console.log(`🔄 Auto-refreshing admin ${adminId} in background after partial subscriber changes...`);
                         console.log(`   - Successful removals: ${results.removals.filter(r => r.success).length}/${results.removals.length}`);
                         console.log(`   - Successful additions: ${results.additions.filter(r => r.success).length}/${results.additions.length}`);
                         console.log(`   - Successful updates: ${results.updates.filter(r => r.success).length}/${results.updates.length}`);
-                        // Refresh the admin to get updated data - don't await to avoid blocking modal close
+                        
+                        // Fire-and-forget: Refresh in background - don't await (let it run in background)
+                        // Firebase real-time listener will update UI automatically when refresh completes
                         this.refreshSubscriber(adminId).catch(error => {
-                            console.error('❌ Error auto-refreshing admin:', error);
-                            // Don't show alert - refresh failure is not critical
+                            console.error('⚠️ Error during background admin refresh (non-critical):', error);
+                            // Don't show alert - refresh failure is not critical, UI will update via Firebase listener
                         });
                     } else {
                         console.warn(`⚠️ No successful operations to trigger refresh (removals: ${results.removals.length}, additions: ${results.additions.length}, updates: ${results.updates.length})`);

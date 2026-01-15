@@ -646,13 +646,14 @@
     <script src="/shared/auth-check.js"></script>
     
     <!-- Navigation Script -->
-    <script src="/shared/nav.js"></script>
+    <!-- Navigation Script - Deferred (navigation can wait until page is interactive) -->
+    <script src="/shared/nav.js" defer></script>
     
-    <!-- Push Notifications Script -->
-    <script src="/shared/push-notifications.js"></script>
+    <!-- Push Notifications Script - Deferred (push notifications can be initialized later) -->
+    <script src="/shared/push-notifications.js" defer></script>
     
-    <!-- PWA Registration -->
-    <script src="/shared/pwa-register.js"></script>
+    <!-- PWA Registration - Deferred (PWA registration can wait) -->
+    <script src="/shared/pwa-register.js" defer></script>
     
     <!-- Profit Engine Script -->
     <script src="/pages/profit-engine.js"></script>

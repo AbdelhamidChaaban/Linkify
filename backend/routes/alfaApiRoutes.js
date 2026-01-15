@@ -335,12 +335,39 @@ router.get('/refreshAdmins', authenticateJWT, async (req, res) => {
         processedData.expiry = expiryResult.status === 'fulfilled' ? expiryResult.value.data : null;
         processedData.services = servicesResult.status === 'fulfilled' ? servicesResult.value.data : null;
         
+        // CRITICAL: Build apiResponses array for bundle renewal detection
+        // Format: [{ url: '/en/account/getconsumption', data: {...}, success: true/false }]
+        const apiResponses = [];
+        if (consumptionResult.status === 'fulfilled' && consumptionResult.value.success && consumptionResult.value.data) {
+            apiResponses.push({
+                url: '/en/account/getconsumption',
+                data: consumptionResult.value.data,
+                success: true
+            });
+        }
+        if (expiryResult.status === 'fulfilled' && expiryResult.value.success && expiryResult.value.data !== undefined && expiryResult.value.data !== null) {
+            apiResponses.push({
+                url: '/en/account/getexpirydate',
+                data: expiryResult.value.data,
+                success: true
+            });
+        }
+        if (servicesResult.status === 'fulfilled' && servicesResult.value.success && servicesResult.value.data) {
+            apiResponses.push({
+                url: '/en/account/manage-services/getmyservices',
+                data: servicesResult.value.data,
+                success: true
+            });
+        }
+        
         // Aggregate results (processed data at root level for frontend compatibility)
         const aggregated = {
             ...processedData, // Processed data at root level
             adminId: adminId,
             timestamp: Date.now(),
             duration: Date.now() - startTime,
+            // CRITICAL: Include apiResponses array for bundle renewal detection in updateDashboardData
+            apiResponses: apiResponses,
             // Also include raw API responses for debugging
             apis: {
                 consumption: {

@@ -35,8 +35,9 @@ class HomeManager {
             console.log('🔍 [Home] Initializing card listeners...');
             this.initCardListeners();
             
-            // Initialize real-time listener ONLY after auth is confirmed
-            this.initRealTimeListener();
+            // LAZY LOAD: Initialize real-time listener only after page is visible/interactive
+            // This improves initial page load performance by deferring Firebase listener setup
+            this.initRealTimeListenerLazy();
             
             // Wait a bit for listener to get initial data, then do force refresh as backup
             // This prevents race condition where forceRefresh clears data before listener loads
@@ -253,6 +254,67 @@ class HomeManager {
             this.updateCardCounts();
         } catch (error) {
             console.error('❌ [Home] Force refresh failed:', error);
+        }
+    }
+
+    // Lazy load real-time listener: Wait until page is visible and interactive
+    initRealTimeListenerLazy() {
+        // If page is already visible and interactive, initialize immediately
+        if (document.visibilityState === 'visible' && document.readyState === 'complete') {
+            // Use requestIdleCallback to initialize when browser is idle (better performance)
+            if ('requestIdleCallback' in window) {
+                requestIdleCallback(() => {
+                    console.log('⚡ [Home] Page visible and idle - initializing Firebase listener');
+                    this.initRealTimeListener();
+                }, { timeout: 2000 }); // Max 2 second wait even if browser is busy
+            } else {
+                // Fallback: small delay to allow page to finish rendering
+                setTimeout(() => {
+                    console.log('⚡ [Home] Page ready - initializing Firebase listener (fallback)');
+                    this.initRealTimeListener();
+                }, 100);
+            }
+        } else {
+            // Wait for page to become visible and interactive
+            const initListener = () => {
+                if (document.visibilityState === 'visible') {
+                    // Page is visible, wait for it to be interactive
+                    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                        if ('requestIdleCallback' in window) {
+                            requestIdleCallback(() => {
+                                console.log('⚡ [Home] Page visible and idle - initializing Firebase listener');
+                                this.initRealTimeListener();
+                            }, { timeout: 2000 });
+                        } else {
+                            setTimeout(() => {
+                                console.log('⚡ [Home] Page ready - initializing Firebase listener');
+                                this.initRealTimeListener();
+                            }, 100);
+                        }
+                        document.removeEventListener('visibilitychange', initListener);
+                        if (document.readyState === 'loading') {
+                            document.removeEventListener('DOMContentLoaded', initListener);
+                        }
+                    }
+                }
+            };
+            
+            // Listen for page visibility and ready state
+            document.addEventListener('visibilitychange', initListener);
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initListener);
+            } else {
+                // Already loaded, try to initialize after a short delay
+                setTimeout(initListener, 100);
+            }
+            
+            // Fallback: Initialize after max 3 seconds even if page isn't fully ready
+            setTimeout(() => {
+                if (!this.isListenerActive) {
+                    console.log('⚡ [Home] Timeout reached - initializing Firebase listener (fallback)');
+                    this.initRealTimeListener();
+                }
+            }, 3000);
         }
     }
 

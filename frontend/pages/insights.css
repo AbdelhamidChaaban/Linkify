@@ -3527,6 +3527,40 @@ body.light-mode .progress-text {
     color: #475569;
 }
 
+/* Light mode styles for action buttons (view details and three dot menu) */
+body.light-mode .action-btn {
+    color: #1e293b;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    background: rgba(255, 255, 255, 0.8);
+}
+
+body.light-mode .action-btn:hover {
+    background: linear-gradient(135deg, rgba(124, 58, 237, 0.15), rgba(124, 58, 237, 0.08));
+    color: #7c3aed;
+    border-color: rgba(124, 58, 237, 0.3);
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.25);
+}
+
+body.light-mode .action-btn img {
+    opacity: 0.9;
+    filter: brightness(0.4);
+}
+
+body.light-mode .action-btn:hover img {
+    opacity: 1;
+    filter: brightness(1);
+}
+
+body.light-mode .action-btn svg {
+    opacity: 0.9;
+    color: #1e293b;
+}
+
+body.light-mode .action-btn:hover svg {
+    opacity: 1;
+    color: #7c3aed;
+}
+
 body.light-mode .pagination-section {
     border-top-color: rgba(0, 0, 0, 0.12);
 }

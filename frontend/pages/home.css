@@ -822,6 +822,40 @@ body:not(.light-mode) .available-services-table .action-btn:hover {
     color: #cbd5e1;
 }
 
+/* Light mode styles for action buttons on home page */
+body.light-mode .available-services-table .action-btn {
+    color: #1e293b;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    background: rgba(255, 255, 255, 0.8);
+}
+
+body.light-mode .available-services-table .action-btn:hover {
+    background: linear-gradient(135deg, rgba(124, 58, 237, 0.15), rgba(124, 58, 237, 0.08));
+    color: #7c3aed;
+    border-color: rgba(124, 58, 237, 0.3);
+    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.25);
+}
+
+body.light-mode .available-services-table .action-btn img {
+    opacity: 0.9;
+    filter: brightness(0.4);
+}
+
+body.light-mode .available-services-table .action-btn:hover img {
+    opacity: 1;
+    filter: brightness(1);
+}
+
+body.light-mode .available-services-table .action-btn svg {
+    opacity: 0.9;
+    color: #1e293b;
+}
+
+body.light-mode .available-services-table .action-btn:hover svg {
+    opacity: 1;
+    color: #7c3aed;
+}
+
 .available-services-table .action-btn svg {
     width: 18px;
     height: 18px;

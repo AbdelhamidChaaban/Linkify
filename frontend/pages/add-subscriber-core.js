@@ -24,8 +24,9 @@ class AddSubscriberPageManager {
             
             console.log('✅ [Add Subscriber] User authenticated:', this.currentUserId);
             
-            // Load admins data
-            this.loadAdmins();
+            // LAZY LOAD: Load admins data only after page is visible/interactive
+            // This improves initial page load performance by deferring Firebase listener setup
+            this.loadAdminsLazy();
             
             // Initialize the form
             this.initAddSubscribersPage();

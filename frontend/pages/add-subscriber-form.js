@@ -8,6 +8,9 @@ AddSubscriberPageManager.prototype.initAddSubscribersPage = function() {
     // Clear existing items
     container.innerHTML = '';
     
+    // Clear messages when form is initialized
+    this.clearMessages();
+    
     // Start with just 1 subscriber row (user can add more up to 3)
     this.addSubscriberRow();
     
@@ -24,6 +27,8 @@ AddSubscriberPageManager.prototype.initAddSubscribersPage = function() {
     if (form) {
         form.onsubmit = (e) => {
             e.preventDefault();
+            // Clear previous messages before submitting
+            this.clearMessages();
             this.handleAddSubscribersSubmit();
         };
     }
@@ -349,45 +354,29 @@ AddSubscriberPageManager.prototype.handleAddSubscribersSubmit = async function()
         
         // Handle results based on success/failure
         if (failCount === 0) {
-            // All succeeded - copy success message and show toast
-            const firstSuccess = results.find(r => r.success);
-            if (firstSuccess) {
-                const firstItem = items.find(item => item.subscriber === firstSuccess.subscriber);
-                if (firstItem) {
-                    const admin = this.subscribers.find(s => s.id === firstItem.adminId);
-                    const adminPhone = admin?.phone || firstItem.adminId;
-                    const quota = firstItem.quota !== undefined && firstItem.quota !== null ? firstItem.quota : 0;
-                    const message = `Send ${adminPhone} to 1323 (${quota} GB)`;
-                    await this.copyToClipboard(message);
+            // All succeeded - generate and display success messages for each subscriber
+            const successMessages = [];
+            results.forEach(result => {
+                if (result.success) {
+                    const item = items.find(item => item.subscriber === result.subscriber);
+                    if (item) {
+                        const admin = this.subscribers.find(s => s.id === item.adminId);
+                        const adminPhone = admin?.phone || item.adminId;
+                        const quota = item.quota !== undefined && item.quota !== null ? item.quota : 0;
+                        const message = `Send ${adminPhone} to 1323 (${quota} GB)`;
+                        successMessages.push(message);
+                    }
                 }
+            });
+            
+            // Display all success messages (each on a separate line)
+            if (successMessages.length > 0) {
+                this.displayMessages(successMessages, 'success');
+                // Also copy first message to clipboard (for backward compatibility)
+                this.copyToClipboard(successMessages[0]).catch(() => {});
             }
             
-            // Automatically refresh all selected admins
-            const uniqueAdminIds = [...new Set(items.map(item => item.adminId))];
-            console.log(`🔄 [Add Subscriber] Refreshing ${uniqueAdminIds.length} admin(s) after successful subscriber addition...`);
-            
-            if (window.AlfaAPIService) {
-                try {
-                    // Refresh all admins in parallel
-                    const refreshPromises = uniqueAdminIds.map(adminId => {
-                        return window.AlfaAPIService.refreshAdmin(adminId).catch(error => {
-                            console.error(`⚠️ [Add Subscriber] Failed to refresh admin ${adminId}:`, error);
-                            // Don't throw - continue with other refreshes
-                            return { success: false, adminId, error: error.message };
-                        });
-                    });
-                    
-                    await Promise.allSettled(refreshPromises);
-                    console.log(`✅ [Add Subscriber] Admin refresh completed`);
-                } catch (error) {
-                    console.error('⚠️ [Add Subscriber] Error during admin refresh:', error);
-                    // Continue anyway - refresh is not critical
-                }
-            } else {
-                console.warn('⚠️ [Add Subscriber] AlfaAPIService not available, skipping admin refresh');
-            }
-            
-            // Show toast notification
+            // Show toast notification immediately (don't wait for refresh)
             if (typeof notification !== 'undefined') {
                 notification.set({ delay: 3000 });
                 notification.success('Operation succeeded');
@@ -395,12 +384,42 @@ AddSubscriberPageManager.prototype.handleAddSubscribersSubmit = async function()
                 alert(`✅ Successfully added ${successCount} subscriber(s)!`);
             }
             
-            // Redirect to insights page on success (instead of closing modal)
-            window.location.href = '/pages/insights.html';
+            // Automatically refresh all selected admins in the background (non-blocking)
+            // Firebase real-time listeners will automatically update the UI when refresh completes
+            const uniqueAdminIds = [...new Set(items.map(item => item.adminId))];
+            console.log(`🔄 [Add Subscriber] Refreshing ${uniqueAdminIds.length} admin(s) in background after successful subscriber addition...`);
+            
+            if (window.AlfaAPIService) {
+                // Fire-and-forget: Don't await - let it run in background
+                // The Firebase real-time listener will update the UI automatically when data is refreshed
+                Promise.allSettled(
+                    uniqueAdminIds.map(adminId => {
+                        return window.AlfaAPIService.refreshAdmin(adminId).catch(error => {
+                            console.error(`⚠️ [Add Subscriber] Failed to refresh admin ${adminId}:`, error);
+                            // Don't throw - continue with other refreshes
+                            return { success: false, adminId, error: error.message };
+                        });
+                    })
+                ).then(() => {
+                    console.log(`✅ [Add Subscriber] Background admin refresh completed`);
+                }).catch(error => {
+                    console.error('⚠️ [Add Subscriber] Error during background admin refresh:', error);
+                    // Not critical - Firebase listener will still update when data changes
+                });
+            } else {
+                console.warn('⚠️ [Add Subscriber] AlfaAPIService not available, skipping admin refresh');
+            }
+            
+            // Don't redirect immediately - let user see the messages
+            // User can manually navigate away or we can add a delay if needed
+            // For now, keep the messages visible so user can copy them
         } else {
-            // Errors occurred - copy cancel message and show toast
+            // Errors occurred - display cancel message
             const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
             await this.copyToClipboard(cancelMessage);
+            
+            // Display cancel message
+            this.displayMessages([cancelMessage], 'error');
             
             // Show toast notification
             if (typeof notification !== 'undefined') {
@@ -476,6 +495,71 @@ AddSubscriberPageManager.prototype.hidePageLoading = function() {
     const loadingOverlay = container.querySelector('.add-modal-loading');
     if (loadingOverlay) {
         loadingOverlay.style.display = 'none';
+    }
+};
+
+// Display messages in the messages container
+AddSubscriberPageManager.prototype.displayMessages = function(messages, type = 'success') {
+    const container = document.getElementById('addSubscribersMessagesContainer');
+    const messagesList = document.getElementById('addSubscribersMessagesList');
+    
+    if (!container || !messagesList) return;
+    
+    // Clear existing messages
+    messagesList.innerHTML = '';
+    
+    // Add each message on a separate line with copy button
+    messages.forEach((message, index) => {
+        const messageItem = document.createElement('div');
+        messageItem.className = `add-subscribers-message-item add-subscribers-message-${type}`;
+        messageItem.innerHTML = `
+            <div class="add-subscribers-message-text">${this.escapeHtml(message)}</div>
+            <button type="button" class="add-subscribers-message-copy-btn" data-message="${this.escapeHtml(message)}" title="Copy message">
+                <img src="/assets/copy.png" alt="Copy" style="width: 16px; height: 16px; object-fit: contain;">
+            </button>
+        `;
+        
+        // Add copy button click handler
+        const copyBtn = messageItem.querySelector('.add-subscribers-message-copy-btn');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', async () => {
+                const messageText = copyBtn.dataset.message;
+                const success = await this.copyToClipboard(messageText);
+                if (success) {
+                    // Visual feedback
+                    const img = copyBtn.querySelector('img');
+                    if (img) {
+                        img.style.opacity = '0.5';
+                        setTimeout(() => {
+                            img.style.opacity = '1';
+                        }, 2000);
+                    }
+                }
+            });
+        }
+        
+        messagesList.appendChild(messageItem);
+    });
+    
+    // Show the messages container
+    container.style.display = 'block';
+    
+    // Scroll to messages container
+    setTimeout(() => {
+        container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 100);
+};
+
+// Clear messages display
+AddSubscriberPageManager.prototype.clearMessages = function() {
+    const container = document.getElementById('addSubscribersMessagesContainer');
+    const messagesList = document.getElementById('addSubscribersMessagesList');
+    
+    if (container) {
+        container.style.display = 'none';
+    }
+    if (messagesList) {
+        messagesList.innerHTML = '';
     }
 };
 
