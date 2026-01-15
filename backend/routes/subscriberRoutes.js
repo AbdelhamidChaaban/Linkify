@@ -298,11 +298,26 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
         const isRedirect = response.status >= 300 && response.status < 400;
         const is200 = response.status === 200;
         
-        // If we got a redirect, follow it to check for errors
-        if (isRedirect && !location.includes('/login')) {
-            console.log(`🔄 [Add Subscriber] Following redirect to check for errors...`);
+        // Check response HTML first before following redirect (faster)
+        // Simplified error detection: Just check for alert-danger marker
+        let hasAlertDanger = html.includes('alert-danger') || /alert-danger/i.test(html);
+        let hasAlertSuccess = html.includes('alert-success') || /alert-success/i.test(html);
+        
+        // Check for subscriber card (success indicator)
+        const subscriberCardPattern = new RegExp(`(?:961|0)?${cleanSubscriberNumber}`, 'i');
+        let hasSubscriberCard = subscriberCardPattern.test(html) && 
+                                 html.includes('secondary-numbers') &&
+                                 (html.includes('ushare-numbers') || html.includes('col-sm-4'));
+        
+        // OPTIMIZATION: Only follow redirect if we don't have clear success/error indicators
+        // This saves ~9 seconds when success is already clear from redirect response
+        const needsRedirectCheck = isRedirect && !location.includes('/login') && !hasAlertDanger && !hasAlertSuccess && !hasSubscriberCard;
+        
+        if (needsRedirectCheck) {
+            console.log(`🔄 [Add Subscriber] Following redirect to check for errors (no clear indicators in response)...`);
             try {
                 const redirectUrl = location.startsWith('http') ? location : `${ALFA_BASE_URL}${location}`;
+                // Reduced timeout - we're just checking for errors, don't need to wait 20s
                 const redirectResponse = await axios.get(redirectUrl, {
                     headers: {
                         'Cookie': cookieHeader,
@@ -311,7 +326,7 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
                     },
                     maxRedirects: 5,
                     validateStatus: (status) => status >= 200 && status < 400,
-                    timeout: 20000
+                    timeout: 10000 // Reduced from 20s to 10s - this is just a verification step
                 });
                 
                 // Get redirected HTML
@@ -320,21 +335,20 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
                 } else if (redirectResponse.data) {
                     html = JSON.stringify(redirectResponse.data);
                 }
+                
+                // Re-check for markers after following redirect
+                hasAlertDanger = html.includes('alert-danger') || /alert-danger/i.test(html);
+                hasAlertSuccess = html.includes('alert-success') || /alert-success/i.test(html);
+                hasSubscriberCard = subscriberCardPattern.test(html) && 
+                                     html.includes('secondary-numbers') &&
+                                     (html.includes('ushare-numbers') || html.includes('col-sm-4'));
             } catch (redirectError) {
                 console.warn(`⚠️ [Add Subscriber] Error following redirect: ${redirectError.message}`);
-                // Continue with original HTML if redirect fails
+                // Continue with original HTML if redirect fails - we'll check what we have
             }
+        } else if (isRedirect && !location.includes('/login')) {
+            console.log(`✅ [Add Subscriber] Skipping redirect check - clear indicators already found (${hasAlertSuccess || hasSubscriberCard ? 'success' : hasAlertDanger ? 'error' : 'unknown'})`);
         }
-        
-        // Simplified error detection: Just check for alert-danger marker
-        const hasAlertDanger = html.includes('alert-danger') || /alert-danger/i.test(html);
-        const hasAlertSuccess = html.includes('alert-success') || /alert-success/i.test(html);
-        
-        // Check for subscriber card (success indicator)
-        const subscriberCardPattern = new RegExp(`(?:961|0)?${cleanSubscriberNumber}`, 'i');
-        const hasSubscriberCard = subscriberCardPattern.test(html) && 
-                                 html.includes('secondary-numbers') &&
-                                 (html.includes('ushare-numbers') || html.includes('col-sm-4'));
         
         console.log(`🔍 [Add Subscriber] Detection: hasAlertDanger=${hasAlertDanger}, hasAlertSuccess=${hasAlertSuccess}, hasSubscriberCard=${hasSubscriberCard}`);
         

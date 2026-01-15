@@ -4265,8 +4265,8 @@ class InsightsManager {
     }
     
     editSubscriber(id) {
-        // Open Edit Subscribers modal instead of navigating to admin edit
-        this.openEditSubscribersModal(id);
+        // Navigate to Edit Subscribers page instead of opening modal
+        window.location.href = `/pages/edit-subscriber.html?id=${encodeURIComponent(id)}`;
     }
     
     async openEditSubscribersModal(adminId) {

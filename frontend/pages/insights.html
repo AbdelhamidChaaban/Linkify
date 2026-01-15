@@ -24,7 +24,6 @@
     <link rel="stylesheet" href="/shared/table-sort.css">
     <link rel="stylesheet" href="/pages/insights.css">
     <link rel="stylesheet" href="/pages/add-subscribers-modal.css">
-    <link rel="stylesheet" href="/pages/edit-subscribers-modal.css">
     <link rel="stylesheet" href="/shared/notification.css">
     <link rel="stylesheet" href="/shared/mobile-enhancements.css">
     <link rel="stylesheet" href="/shared/ui-polish.css">
@@ -514,49 +513,6 @@
     </div>
 
     <!-- Edit Subscribers Modal -->
-    <div class="edit-subscribers-modal-overlay" id="editSubscribersModal">
-        <div class="edit-subscribers-modal-container">
-            <div class="edit-subscribers-header">
-                <div class="edit-subscribers-header-content">
-                    <h4 class="edit-subscribers-title">Edit</h4>
-                    <nav class="edit-subscribers-breadcrumbs">
-                        <a href="/pages/home.html">Home</a>
-                        <span class="breadcrumb-separator">/</span>
-                        <a href="/pages/insights.html">Insights</a>
-                    </nav>
-                </div>
-                <button class="edit-subscribers-close" onclick="insightsManager.closeEditSubscribersModal()" aria-label="Close">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M18 6L6 18M6 6l12 12"/>
-                    </svg>
-                </button>
-            </div>
-            <form id="editSubscribersForm">
-                <div class="edit-subscribers-content">
-                    <div class="edit-subscribers-admin-info" id="editSubscribersAdminInfo">
-                        <!-- Admin name and phone will be populated here -->
-                    </div>
-                    <div class="edit-subscribers-items" id="editSubscribersItems">
-                        <!-- Subscriber items will be populated here -->
-                    </div>
-                    <hr class="edit-subscribers-divider">
-                    <div class="edit-subscribers-actions">
-                        <button type="button" class="edit-subscribers-add-btn" id="editSubscribersAddBtn">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M12 5v14M5 12h14"/>
-                            </svg>
-                            Add Subscriber
-                        </button>
-                    </div>
-                </div>
-                <div class="edit-subscribers-footer">
-                    <button type="submit" class="edit-subscribers-submit-btn" id="editSubscribersSubmitBtn">
-                        Apply
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
 
     <!-- API Configuration - Must load first -->
     <script src="/config.js"></script>

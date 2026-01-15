@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" class="home-page">
+<html lang="en" class="edit-subscriber-page">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Cell Spott Manage - Home</title>
+    <title>Cell Spott Manage - Edit Subscribers</title>
     <link rel="icon" type="image/png" href="/assets/logo1.png">
     
     <!-- PWA Manifest -->
@@ -21,13 +21,14 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/shared/layout.css">
-    <link rel="stylesheet" href="/pages/home.css">
-    <link rel="stylesheet" href="/pages/home-welcome.css">
-    <link rel="stylesheet" href="/pages/home-stats.css">
+    <link rel="stylesheet" href="/pages/edit-subscriber.css">
+    <link rel="stylesheet" href="/pages/edit-subscribers-modal.css">
+    <link rel="stylesheet" href="/pages/add-subscribers-modal.css">
     <link rel="stylesheet" href="/shared/mobile-enhancements.css">
     <link rel="stylesheet" href="/shared/ui-polish.css">
-    <link rel="stylesheet" href="/shared/mobile-fixes.css">
     <link rel="stylesheet" href="/shared/notification-panel.css">
+    <link rel="stylesheet" href="/shared/mobile-fixes.css">
+    <link rel="stylesheet" href="/shared/native-pull-to-refresh.css">
     <!-- Prefetch pages for faster navigation -->
     <script src="/shared/prefetch-pages.js"></script>
     <!-- Fast Navigation - Optimize link clicks -->
@@ -48,7 +49,7 @@
         })();
     </script>
 </head>
-<body class="home-page">
+<body class="edit-subscriber-page">
     <!-- Copy light-mode class from html to body immediately -->
     <script>
         (function() {
@@ -142,35 +143,33 @@
         </ul>
         
         <div class="mobile-sidebar-footer">
-            <div class="mobile-sidebar-actions">
-                <button class="mobile-sidebar-theme" id="mobileThemeToggle">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
-                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-                    </svg>
-                    Toggle Theme
-                </button>
-                <div class="mobile-sidebar-avatar-wrapper" id="mobileAvatarWrapper">
-                    <div class="mobile-sidebar-avatar" id="mobileUserAvatar"></div>
-                    <div class="mobile-sidebar-user-info">
-                        <div id="mobileUserEmail">User</div>
-                    </div>
+            <button class="mobile-sidebar-theme-toggle" id="mobileThemeToggle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                </svg>
+                Toggle Theme
+            </button>
+            <div class="mobile-sidebar-avatar-wrapper" id="mobileAvatarWrapper">
+                <div class="mobile-sidebar-avatar" id="mobileUserAvatar"></div>
+                <div class="mobile-sidebar-user-info">
+                    <div id="mobileUserEmail">User</div>
                 </div>
-                <a href="/pages/settings.html" class="mobile-sidebar-nav-link">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/>
-                        <path d="M18.88 4h-.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
-                        <path d="M5.12 4h-.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
-                    </svg>
-                    Settings
-                </a>
-                <a href="#" class="mobile-sidebar-nav-link logout" id="mobileLogoutLink">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
-                    </svg>
-                    Logout
-                </a>
             </div>
+            <a href="/pages/settings.html" class="mobile-sidebar-nav-link">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/>
+                    <path d="M18.88 4h-.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+                    <path d="M5.12 4h-.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+                </svg>
+                Settings
+            </a>
+            <a href="#" class="mobile-sidebar-nav-link logout" id="mobileLogoutLink">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
+                </svg>
+                Logout
+            </a>
         </div>
     </div>
     
@@ -185,7 +184,7 @@
             </div>
             <div class="nav-center">
                 <ul class="nav-links">
-                    <li><a href="/pages/home.html" class="nav-link active">
+                    <li><a href="/pages/home.html" class="nav-link">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
                             <polyline points="9 22 9 12 15 12 15 22"/>
@@ -236,13 +235,6 @@
                         <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
                     </svg>
                 </button>
-                <button class="notification-toggle" id="notificationToggle" aria-label="Notifications">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-                    </svg>
-                    <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
-                </button>
                 <div class="avatar-container">
                     <div class="avatar" id="userAvatar"></div>
                     <div class="avatar-dropdown" id="avatarDropdown">
@@ -268,180 +260,88 @@
 
     <!-- Main Content -->
     <main class="main-content">
-        <div class="home-container">
-            <!-- Welcome Banner Section -->
-            <div class="home-welcome-banner" id="homeWelcomeBanner">
-                <div class="home-welcome-content">
-                    <div class="home-welcome-text">
-                        <h2 class="home-welcome-greeting">Welcome back 👋</h2>
-                        <p class="home-welcome-name" id="homeWelcomeName">User</p>
-                        <a href="/pages/add-subscriber.html" class="home-add-subscribers-btn">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M11 20a1 1 0 1 0 2 0v-7h7a1 1 0 1 0 0-2h-7V4a1 1 0 1 0-2 0v7H4a1 1 0 1 0 0 2h7z"/>
+        <div class="edit-subscriber-page-container">
+            <div class="edit-subscribers-header">
+                <div class="edit-subscribers-header-content">
+                    <h4 class="edit-subscribers-title">Edit</h4>
+                    <nav class="edit-subscribers-breadcrumbs">
+                        <a href="/pages/home.html">Home</a>
+                        <span class="breadcrumb-separator">/</span>
+                        <a href="/pages/insights.html">Insights</a>
+                    </nav>
+                </div>
+                <a href="/pages/insights.html" class="edit-subscribers-close" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </a>
+            </div>
+            <form id="editSubscribersForm">
+                <div class="edit-subscribers-content">
+                    <div class="edit-subscribers-admin-info" id="editSubscribersAdminInfo">
+                        <!-- Admin name and phone will be populated here -->
+                    </div>
+                    <div class="edit-subscribers-items" id="editSubscribersItems">
+                        <!-- Subscriber items will be populated here -->
+                    </div>
+                    <hr class="edit-subscribers-divider">
+                    <div class="edit-subscribers-actions">
+                        <button type="button" class="edit-subscribers-add-btn" id="editSubscribersAddBtn">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 5v14M5 12h14"/>
                             </svg>
-                            Add Subscribers
-                        </a>
-                    </div>
-                    <div class="home-welcome-illustration">
-                        <svg viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <circle cx="100" cy="100" r="80" fill="rgba(34, 197, 94, 0.1)"/>
-                            <rect x="60" y="60" width="80" height="80" rx="12" fill="rgba(34, 197, 94, 0.15)"/>
-                            <circle cx="100" cy="80" r="12" fill="rgba(34, 197, 94, 0.3)"/>
-                            <rect x="75" y="100" width="50" height="8" rx="4" fill="rgba(34, 197, 94, 0.3)"/>
-                            <rect x="75" y="115" width="35" height="8" rx="4" fill="rgba(34, 197, 94, 0.3)"/>
-                            <path d="M140 50 L160 40 L155 60 Z" fill="rgba(34, 197, 94, 0.4)"/>
-                        </svg>
+                            Add Subscriber
+                        </button>
                     </div>
                 </div>
-            </div>
+                <div class="edit-subscribers-footer">
+                    <button type="submit" class="edit-subscribers-submit-btn" id="editSubscribersSubmitBtn">
+                        Apply
+                    </button>
+                </div>
+            </form>
             
-            <!-- Stats Cards Section -->
-            <div class="home-stats-container">
-                <div class="home-stat-card" id="homeStatCard1">
-                    <div class="home-stat-card-content">
-                        <h3 class="home-stat-card-title">Total Active Subscribers</h3>
-                        <div class="home-stat-card-value" id="homeStatTotalActiveSubscribers">0</div>
-                    </div>
+            <!-- Messages Display Area (same as add subscriber page) -->
+            <div class="add-subscribers-messages-container" id="editSubscribersMessagesContainer" style="display: none;">
+                <div class="add-subscribers-messages-header">
+                    <h6 class="add-subscribers-messages-title">Messages to Send:</h6>
                 </div>
-                <div class="home-stat-card" id="homeStatCard2">
-                    <div class="home-stat-card-content">
-                        <h3 class="home-stat-card-title">Available Places</h3>
-                        <div class="home-stat-card-value" id="homeStatAvailablePlaces">0</div>
-                    </div>
-                </div>
-                <div class="home-stat-card" id="homeStatCard3">
-                    <div class="home-stat-card-content">
-                        <h3 class="home-stat-card-title">Total Balance</h3>
-                        <div class="home-stat-card-value" id="homeStatTotalBalance">$ 0.00</div>
-                    </div>
+                <div class="add-subscribers-messages-list" id="editSubscribersMessagesList">
+                    <!-- Messages will be displayed here dynamically -->
                 </div>
             </div>
-            
-            <div class="welcome-section">
-                <h1>Welcome to Cell Spott Manage</h1>
-                <p>Select a card to get your needed informations</p>
-            </div>
-            
-            <div class="cards-container">
-            <div class="card" data-card-id="1">
-                <div class="card-content">
-                    <h2>Available Services</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="2">
-                <div class="card-content">
-                    <h2>Expired Numbers</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="3">
-                <div class="card-content">
-                    <h2>Services to Expire Today</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="10">
-                <div class="card-content">
-                    <h2>Services Expired Yesterday</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="11">
-                <div class="card-content">
-                    <h2>Services to Expire Tomorrow</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="6">
-                <div class="card-content">
-                    <h2>Finished Services</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="7">
-                <div class="card-content">
-                    <h2>High Admin Consumption</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="8">
-                <div class="card-content">
-                    <h2>Requested Services</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="9">
-                <div class="card-content">
-                    <h2>Inactive Numbers</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-            
-            <div class="card" data-card-id="12">
-                <div class="card-content">
-                    <h2>Waiting Balance</h2>
-                    <button class="card-button">Open</button>
-                </div>
-            </div>
-        </div>
         </div>
     </main>
-    
-    <!-- Notification Panel -->
-    <div id="notificationPanel" class="notification-panel">
-        <div class="notification-panel-header">
-            <h2>Notifications</h2>
-            <button class="notification-panel-close" id="notificationPanelClose">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M18 6L6 18M6 6l12 12"/>
-                </svg>
-            </button>
-        </div>
-        
-        <div class="notification-panel-content">
-            <!-- Push Notification Toggle -->
-            <div class="notification-toggle-section">
-                <div class="notification-toggle-header">
-                    <span>Push Notifications</span>
-                    <div class="toggle-switch-container">
-                        <input type="checkbox" id="pushNotificationToggle" class="toggle-switch-input">
-                        <label for="pushNotificationToggle" class="toggle-switch-label">
-                            <span class="toggle-switch-slider"></span>
-                        </label>
-                    </div>
-                </div>
-                <p class="notification-toggle-description">Receive notifications about expiring admins and high consumption even when you're away</p>
+
+    <!-- Admin Selection Modal (reuse from add-subscriber) -->
+    <div class="admin-selector-modal-overlay" id="adminSelectorModal">
+        <div class="admin-selector-modal-container">
+            <div class="admin-selector-header">
+                <h5 class="admin-selector-title">Select Admin</h5>
+                <button class="admin-selector-close" id="adminSelectorClose" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                    </svg>
+                </button>
             </div>
-            
-            <!-- Notification List -->
-            <div class="notification-list-section">
-                <div class="notification-list-header">
-                    <h3>Recent Notifications</h3>
-                    <button id="deleteAllNotifications" class="delete-all-btn" style="display: none;">Delete All</button>
+            <div class="admin-selector-content">
+                <div class="admin-selector-search">
+                    <input type="text" id="adminSelectorSearch" placeholder="Search admins..." class="admin-selector-search-input">
                 </div>
-                <div id="notificationList" class="notification-list">
-                    <div class="notification-empty">No notifications yet</div>
+                <div class="admin-selector-list" id="adminSelectorList">
+                    <!-- Active admins will be populated here -->
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Notification Panel Overlay -->
-    <div id="notificationPanelOverlay" class="notification-panel-overlay"></div>
-    
     <!-- API Configuration - Must load first -->
     <script src="/config.js"></script>
     
-    <!-- Alfa API Service - Must load before home.js -->
+    <!-- Auth Helper for JWT -->
+    <script src="/shared/auth-helper.js"></script>
+    
+    <!-- API Service -->
     <script src="/shared/alfa-api.js"></script>
     
     <!-- Firebase SDK -->
@@ -455,24 +355,47 @@
     <!-- Block Status Check - Must run immediately after Firebase loads -->
     <script src="/shared/auth-check.js"></script>
     
-    <!-- Navigation Script - Deferred (navigation can wait until page is interactive) -->
-    <script src="/shared/nav.js" defer></script>
-    <!-- UI Helpers - Deferred (UI helpers are not critical initially) -->
-    <script src="/shared/ui-helpers.js" defer></script>
-    <!-- Mobile Enhancements - Deferred (mobile enhancements can wait) -->
-    <script src="/shared/mobile-enhancements.js" defer></script>
-    
-    <!-- Push Notifications - Deferred (push notifications can be initialized later) -->
-    <script src="/shared/push-notifications.js" defer></script>
-    
-    <!-- PWA Registration - Deferred (PWA registration can wait) -->
-    <script src="/shared/pwa-register.js" defer></script>
-    
-    <!-- Notification System - Must load before home.js for toast notifications -->
+    <!-- Notification System -->
     <script src="/shared/notification.js"></script>
     
-    <!-- Home Page Script - Must load after deferred scripts are ready -->
-    <script src="/pages/home.js"></script>
+    <!-- Navigation Script - Deferred -->
+    <script src="/shared/nav.js" defer></script>
+    
+    <!-- UI Helpers - Deferred -->
+    <script src="/shared/ui-helpers.js" defer></script>
+    
+    <!-- Mobile Enhancements - Deferred -->
+    <script src="/shared/mobile-enhancements.js" defer></script>
+    
+    <!-- Push Notifications Script - Deferred -->
+    <script src="/shared/push-notifications.js" defer></script>
+    
+    <!-- PWA Registration - Deferred -->
+    <script src="/shared/pwa-register.js" defer></script>
+    
+    <!-- Edit Subscriber Scripts - Load in order -->
+    <script src="/pages/edit-subscriber-core.js"></script>
+    <script src="/pages/edit-subscriber-data.js"></script>
+    <script src="/pages/edit-subscriber-form.js"></script>
+    <script src="/pages/edit-subscriber-admin-selector.js"></script>
+    
+    <!-- Initialize -->
+    <script>
+        let editSubscriberManager = null;
+        document.addEventListener('DOMContentLoaded', () => {
+            editSubscriberManager = new EditSubscriberPageManager();
+            editSubscriberManager.init();
+            // Make it globally accessible
+            window.editSubscriberManager = editSubscriberManager;
+        });
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (editSubscriberManager) {
+                editSubscriberManager.destroy();
+            }
+        });
+    </script>
 </body>
 </html>
 

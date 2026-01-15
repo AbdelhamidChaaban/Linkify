@@ -124,19 +124,21 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
         .then(data => ({ success: true, data, error: null }))
         .catch(error => ({ success: false, data: null, error }));
     
-    // Increased timeout to 10s to match actual API response time (~9s)
-    // Use Promise.race to ensure it never takes more than 10 seconds
+    // Increased timeout to 15s to match actual API response time (~12-15s based on logs)
+    // Use Promise.race to ensure it never takes more than 15 seconds
+    // CRITICAL: Alfa's getmyservices API consistently takes 12+ seconds, so we need higher timeout
     const servicesTimeoutPromise = new Promise((resolve) => {
         setTimeout(() => {
-            resolve({ success: false, data: null, error: { type: 'Timeout', message: 'Request timeout after 10000ms - using cached data' }, _timedOut: true });
-        }, 10000);
+            resolve({ success: false, data: null, error: { type: 'Timeout', message: 'Request timeout after 15000ms - using cached data' }, _timedOut: true });
+        }, 15000);
     });
     
-    const servicesApiPromise = apiRequest('/en/account/manage-services/getmyservices', cookies, { timeout: 10000, maxRetries: 0 })
+    const servicesApiPromise = apiRequest('/en/account/manage-services/getmyservices', cookies, { timeout: 15000, maxRetries: 0 })
         .then(data => ({ success: true, data, error: null, _timedOut: false }))
         .catch(error => ({ success: false, data: null, error, _timedOut: false }));
     
-    // Race between API call and 6-second timeout - timeout always wins if API takes >6s
+    // Race between API call and 15-second timeout - timeout wins if API takes >15s
+    // Note: The actual API call continues even if timeout wins, but we don't wait for it
     const servicesPromise = Promise.race([servicesApiPromise, servicesTimeoutPromise]);
     
     // OPTIMIZATION: Use cache for Ushare HTML (avoids waiting ~20s)
@@ -286,12 +288,12 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
     }
     
     // Process getmyservices
-    // CRITICAL: Check if Promise.race timeout won (10-second timeout)
+    // CRITICAL: Check if Promise.race timeout won (15-second timeout)
     if (servicesResult.status === 'fulfilled' && servicesResult.value._timedOut) {
-        // Timeout won - API took more than 10 seconds
+        // Timeout won - API took more than 15 seconds
         const cacheAge = cachedData && cachedData.timestamp ? Math.round((Date.now() - cachedData.timestamp) / 60000) : 'unknown';
         const cacheTime = cachedData && cachedData.timestamp ? new Date(cachedData.timestamp).toLocaleTimeString() : 'unknown';
-        console.log(`⏱️ API getmyservices timed out (>10s), using cached data from ${cacheTime} (${cacheAge}min ago)`);
+        console.log(`⏱️ API getmyservices timed out (>15s), using cached data from ${cacheTime} (${cacheAge}min ago)`);
         results._apiSuccess.services = false;
         results._apiErrors.services = 'Timeout';
         // Use cached services if available (raw API response)
@@ -303,7 +305,7 @@ async function fetchAllDataSources(phone, cookies, cachedData = null) {
             console.log(`⚠️ No cached services API response, will use extracted dates from dashboardData`);
         }
     } else if (servicesResult.status === 'fulfilled' && servicesResult.value.success) {
-        // API succeeded within 9 seconds - use the data
+        // API succeeded within 15 seconds - use the data
         results.services = servicesResult.value.data;
         results._apiSuccess.services = true;
         results._apiErrors.services = null;
@@ -719,15 +721,27 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             console.log(`🔄 MANUAL REFRESH STARTED for ${userId} at ${new Date().toISOString()}`);
             console.log(`${'='.repeat(80)}\n`);
             
-            // Step 1: Get cookies from Redis and check if they need proactive keep-alive
-            let cookies = await getCookies(userId);
+            // Step 1: Get cookies (or login if needed) - same approach as /api/refreshAdmins for consistency
+            // CRITICAL: Use getCookiesOrLogin to ensure cookies exist before proceeding (faster, avoids retry)
+            // Check if cookies exist BEFORE calling getCookiesOrLogin to know if login will happen
+            const existingCookies = await getCookies(userId);
+            const cookiesExistedBefore = existingCookies && existingCookies.length > 0;
+            
+            let cookies = await getCookiesOrLogin(phone, password, userId);
+            
+            // If cookies didn't exist before, getCookiesOrLogin performed login
+            if (!cookiesExistedBefore) {
+                loginPerformed = true;
+            }
+            
             const cookieExpiry = await getCookieExpiry(userId);
             const now = Date.now();
             
             // PROACTIVE KEEP-ALIVE: If cookies are about to expire (within 2 hours), extend them NOW
             // This prevents the "cookies expired" scenario and ensures keep-alive does its job
             // BUT: Skip keep-alive if cookies expire in < 10 minutes (too risky, just let APIs fail and do login)
-            if (cookieExpiry && cookies && cookies.length > 0) {
+            // Also skip if we just logged in (cookies are fresh)
+            if (cookiesExistedBefore && cookieExpiry && cookies && cookies.length > 0) {
                 const timeUntilExpiry = cookieExpiry - now;
                 const twoHours = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
                 const tenMinutes = 10 * 60 * 1000; // 10 minutes in milliseconds
@@ -1220,7 +1234,9 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                 }
             }
             } else {
-                console.log(`⚠️ [${userId}] No cookies found, will perform login...`);
+                // This shouldn't happen now since getCookiesOrLogin ensures cookies exist
+                // But keep it as a safety check
+                console.log(`⚠️ [${userId}] No cookies after getCookiesOrLogin - this shouldn't happen`);
             }
             
             // Ensure apiData is initialized (safety check)
@@ -1229,11 +1245,17 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
             }
         }
 
-        // Step 3: If no cookies or API calls failed, perform login (ONLY if we don't already have valid apiData)
-        // Skip this if manual refresh already succeeded (has apiData with consumption or services)
+        // Step 3: If APIs returned 401 (cookies expired during refresh), perform login
+        // NOTE: We already have cookies from getCookiesOrLogin above, but they might have expired
+        // during the refresh (race condition). Only login if APIs returned 401.
         const hasValidApiData = apiData && (apiData.consumption || apiData.services);
-        // Only login if we DON'T have valid API data AND we need cookies
-        if (!hasValidApiData && (!cookies || cookies.length === 0)) {
+        const apiErrors = apiData?._apiErrors || {};
+        const allUnauthorized = apiErrors.consumption === 'Unauthorized' && 
+                               apiErrors.services === 'Unauthorized' && 
+                               apiErrors.expiry === 'Unauthorized';
+        
+        // Only login if APIs returned 401 (cookies expired during refresh) AND we haven't logged in yet
+        if (!loginPerformed && allUnauthorized && (!hasValidApiData)) {
             // Mark login as in progress
             await setLoginInProgress(userId);
             
@@ -1803,7 +1825,7 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         
         // If API failed or returned invalid data, preserve existing dates (NEVER delete valid dates)
         if (apiServicesFailed) {
-            console.log(`📦 [${userId}] getmyservices API failed or returned invalid data (timeout >9s or any failure), using cached dates`);
+            console.log(`📦 [${userId}] getmyservices API failed or returned invalid data (timeout >15s or any failure), using cached dates`);
             
             // CRITICAL: When API fails, ALWAYS preserve existing dates from dashboardData
             // dashboardData was already initialized from cachedData.data, so dates should already be there
@@ -2022,6 +2044,45 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         if (dashboardData.validityDate && (dashboardData.validityDate.includes('NaN') || dashboardData.validityDate === 'NaN/NaN/NaN')) {
             console.log(`⚠️ [${userId}] FINAL CLEANUP: Removing invalid validityDate before save`);
             delete dashboardData.validityDate;
+        }
+        
+        // CRITICAL: Populate apiResponses array for bundle renewal detection
+        // This array is used by firebaseDbService.js to detect if getconsumption API was successfully fetched
+        // Format must match /api/refreshAdmins route for consistency
+        const apiResponses = [];
+        if (apiData && apiData._apiSuccess) {
+            // Add getconsumption response if successful (CRITICAL for bundle renewal detection)
+            if (apiData._apiSuccess.consumption && apiData.consumption !== null && apiData.consumption !== undefined) {
+                apiResponses.push({
+                    url: '/en/account/getconsumption',
+                    data: apiData.consumption,
+                    success: true
+                });
+            }
+            // Add getexpirydate response if successful
+            if (apiData._apiSuccess.expiry && apiData.expiry !== null && apiData.expiry !== undefined) {
+                apiResponses.push({
+                    url: '/en/account/getexpirydate',
+                    data: apiData.expiry,
+                    success: true
+                });
+            }
+            // Add getmyservices response if successful
+            if (apiData._apiSuccess.services && apiData.services !== null && apiData.services !== undefined) {
+                apiResponses.push({
+                    url: '/en/account/manage-services/getmyservices',
+                    data: apiData.services,
+                    success: true
+                });
+            }
+        }
+        
+        // Set apiResponses in dashboardData for bundle renewal detection
+        if (apiResponses.length > 0) {
+            dashboardData.apiResponses = apiResponses;
+            console.log(`✅ [${userId}] Populated apiResponses array with ${apiResponses.length} successful API response(s)`);
+        } else {
+            console.log(`ℹ️ [${userId}] No successful API responses to populate apiResponses array`);
         }
         
         // Step 5: Log unified summary of refresh

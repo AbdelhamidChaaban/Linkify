@@ -7,6 +7,9 @@ class HomeManager {
         this.currentUserId = null; // Current authenticated user ID
         this.hasReceivedInitialData = false; // Track if we've received initial data from listener
         this.isListenerActive = false; // Track if listener is currently active
+        this.refreshingAdmins = new Set(); // Track which admins are currently being refreshed
+        this.lastRefreshTime = new Map(); // Track when each admin was last refreshed (to skip modal updates)
+        this.modalUpdateTimeout = null; // Debounce timeout for modal updates
         
         // Initialize after auth is ready
         this.init();
@@ -16,11 +19,24 @@ class HomeManager {
         // Wait for Firebase auth to be ready and user to be authenticated
         try {
             // CRITICAL: Wait for auth to be confirmed before setting up listeners
-            await this.waitForAuth();
+            try {
+                await this.waitForAuth();
+            } catch (authError) {
+                console.error('❌ [Home] Auth wait failed:', authError.message);
+                // Try to get user ID directly as fallback
+                const fallbackUserId = this.getCurrentUserId();
+                if (fallbackUserId) {
+                    this.currentUserId = fallbackUserId;
+                    console.log('✅ [Home] Using fallback user ID:', fallbackUserId);
+                } else {
+                    throw authError; // Re-throw if no fallback available
+                }
+            }
+            
             await this.waitForFirebase();
             
             // Verify user is still authenticated before proceeding
-            const currentUserId = this.getCurrentUserId();
+            const currentUserId = this.getCurrentUserId() || this.currentUserId;
             if (!currentUserId) {
                 console.error('❌ [Home] User not authenticated after wait - cannot initialize');
                 return;
@@ -66,6 +82,26 @@ class HomeManager {
             }, 30000); // 30 seconds
         } catch (error) {
             console.error('❌ [Home] Initialization error:', error);
+            // Try to recover by checking auth one more time
+            const fallbackUserId = this.getCurrentUserId();
+            if (fallbackUserId) {
+                console.log('🔄 [Home] Attempting recovery with fallback user ID:', fallbackUserId);
+                this.currentUserId = fallbackUserId;
+                // Try to initialize listener anyway
+                try {
+                    this.initRealTimeListenerLazy();
+                    this.forceRefresh();
+                } catch (recoveryError) {
+                    console.error('❌ [Home] Recovery failed:', recoveryError);
+                }
+            } else {
+                // Show user-friendly error message
+                const errorMsg = document.createElement('div');
+                errorMsg.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #ef4444; color: white; padding: 2rem; border-radius: 8px; z-index: 10000; text-align: center; max-width: 400px;';
+                errorMsg.innerHTML = '<h3 style="margin: 0 0 1rem 0;">Authentication Error</h3><p style="margin: 0 0 1rem 0;">Please refresh the page or log in again.</p><button onclick="location.reload()" style="padding: 0.5rem 1rem; background: white; color: #ef4444; border: none; border-radius: 4px; cursor: pointer;">Refresh Page</button>';
+                document.body.appendChild(errorMsg);
+                setTimeout(() => errorMsg.remove(), 10000);
+            }
         }
     }
     
@@ -78,40 +114,85 @@ class HomeManager {
                 // Wait for auth state to be confirmed via onAuthStateChanged
                 return new Promise((resolve, reject) => {
                     let resolved = false;
+                    
+                    // CRITICAL: Check currentUser FIRST before setting up listener (faster path)
+                    // This handles cases where user is already authenticated but onAuthStateChanged hasn't fired
+                    if (auth.currentUser && auth.currentUser.uid) {
+                        this.currentUserId = auth.currentUser.uid;
+                        console.log('✅ [Home] User already authenticated (immediate check):', auth.currentUser.uid);
+                        resolve();
+                        return;
+                    }
+                    
+                    // If currentUser is null, wait for onAuthStateChanged to fire
                     const unsubscribe = auth.onAuthStateChanged((user) => {
-                        unsubscribe(); // Stop listening after first state change
                         if (!resolved) {
                             resolved = true;
+                            unsubscribe();
                             if (user && user.uid) {
                                 this.currentUserId = user.uid;
                                 console.log('✅ [Home] Auth state confirmed - User authenticated:', user.uid);
                                 resolve();
                             } else {
-                                console.error('❌ [Home] Auth state confirmed - No user signed in');
-                                reject(new Error('User not authenticated. Please log in.'));
+                                // No user - check currentUser one more time as fallback
+                                if (auth.currentUser && auth.currentUser.uid) {
+                                    this.currentUserId = auth.currentUser.uid;
+                                    console.log('✅ [Home] User found via currentUser fallback:', auth.currentUser.uid);
+                                    resolve();
+                                } else {
+                                    console.error('❌ [Home] Auth state confirmed - No user signed in');
+                                    reject(new Error('User not authenticated. Please log in.'));
+                                }
                             }
                         }
                     });
                     
-                    // Also check if user is already logged in (faster path)
-                    if (auth.currentUser && auth.currentUser.uid) {
-                        if (!resolved) {
+                    // Increased timeout to 15 seconds - auth state can take time to initialize
+                    // Also check currentUser periodically as fallback
+                    let checkCount = 0;
+                    const checkInterval = setInterval(() => {
+                        checkCount++;
+                        if (auth.currentUser && auth.currentUser.uid && !resolved) {
                             resolved = true;
+                            clearInterval(checkInterval);
+                            unsubscribe();
                             this.currentUserId = auth.currentUser.uid;
-                            console.log('✅ [Home] User already authenticated (fast path):', auth.currentUser.uid);
-                            unsubscribe();
+                            console.log('✅ [Home] User authenticated via periodic check:', auth.currentUser.uid);
                             resolve();
+                        } else if (checkCount >= 30) {
+                            // 15 seconds (30 * 500ms)
+                            clearInterval(checkInterval);
+                            if (!resolved) {
+                                resolved = true;
+                                unsubscribe();
+                                // Final fallback: check currentUser one last time
+                                if (auth.currentUser && auth.currentUser.uid) {
+                                    this.currentUserId = auth.currentUser.uid;
+                                    console.log('✅ [Home] User authenticated via final fallback check:', auth.currentUser.uid);
+                                    resolve();
+                                } else {
+                                    reject(new Error('Auth state timeout - user authentication state not confirmed'));
+                                }
+                            }
                         }
-                    }
+                    }, 500);
                     
-                    // Timeout after 5 seconds if auth state doesn't change
+                    // Also set a timeout as backup
                     setTimeout(() => {
+                        clearInterval(checkInterval);
                         if (!resolved) {
                             resolved = true;
                             unsubscribe();
-                            reject(new Error('Auth state timeout - user authentication state not confirmed'));
+                            // Final fallback: check currentUser one last time
+                            if (auth.currentUser && auth.currentUser.uid) {
+                                this.currentUserId = auth.currentUser.uid;
+                                console.log('✅ [Home] User authenticated via timeout fallback:', auth.currentUser.uid);
+                                resolve();
+                            } else {
+                                reject(new Error('Auth state timeout - user authentication state not confirmed'));
+                            }
                         }
-                    }, 5000);
+                    }, 15000);
                 });
             }
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -472,7 +553,44 @@ class HomeManager {
                 // ALWAYS update card counts when listener fires (to catch any deletions)
                 console.log(`🔄 [Home] Updating card counts (hasDeletions: ${hasDeletions}, deletedIds: ${deletedIds.length})`);
                 this.updateCardCounts();
-                this.updateOpenModals();
+                
+                // Debounce modal updates to prevent closing/reopening during refresh
+                // Skip modal updates if any admin was refreshed in the last 5 seconds
+                const now = Date.now();
+                const recentRefresh = Array.from(this.lastRefreshTime.entries()).some(([adminId, refreshTime]) => 
+                    now - refreshTime < 5000
+                );
+                
+                // Check if any modals are currently open
+                const hasOpenModal = document.getElementById('availableServicesModal') ||
+                                    document.getElementById('expiredNumbersModal') ||
+                                    document.getElementById('servicesToExpireTodayModal') ||
+                                    document.getElementById('finishedServicesModal') ||
+                                    document.getElementById('highAdminConsumptionModal') ||
+                                    document.getElementById('inactiveNumbersModal');
+                
+                if (recentRefresh && hasOpenModal) {
+                    console.log('⏸️ [Home] Skipping modal update - refresh completed recently and modal is open (will update silently when user closes/reopens)');
+                    // Clear any pending modal update timeout
+                    if (this.modalUpdateTimeout) {
+                        clearTimeout(this.modalUpdateTimeout);
+                    }
+                    // Don't schedule update - let user close/reopen modal to see fresh data
+                    // This prevents the flicker of closing/reopening during refresh
+                } else if (recentRefresh && !hasOpenModal) {
+                    // No modal open, but recent refresh - schedule update after cooldown
+                    console.log('⏸️ [Home] Skipping modal update - refresh completed recently (no modal open)');
+                    if (this.modalUpdateTimeout) {
+                        clearTimeout(this.modalUpdateTimeout);
+                    }
+                    this.modalUpdateTimeout = setTimeout(() => {
+                        this.updateOpenModals();
+                        this.modalUpdateTimeout = null;
+                    }, 5000);
+                } else {
+                    // No recent refresh or no open modal - update normally
+                    this.updateOpenModals();
+                }
 
                 // If using cache, log but don't force refresh (it will fail if offline)
                 if (source === 'cache') {
@@ -767,32 +885,180 @@ class HomeManager {
             }))
         };
 
+        // Check if modal is already open - if so, update in place instead of recreating
+        let modalElement = null;
         switch (modalType) {
             case 'availableServices':
-                const availableServices = this.filterAvailableServices(snapshot);
-                this.showAvailableServicesModal(availableServices);
+                modalElement = document.getElementById('availableServicesModal');
+                if (modalElement) {
+                    // Modal is open - update table content in place
+                    const availableServices = this.filterAvailableServices(snapshot);
+                    this.updateModalTableContent(modalElement, availableServices, 'availableServices');
+                } else {
+                    const availableServices = this.filterAvailableServices(snapshot);
+                    this.showAvailableServicesModal(availableServices);
+                }
                 break;
             case 'expiredNumbers':
-                const expiredNumbers = this.filterExpiredNumbers(snapshot);
-                this.showExpiredNumbersModal(expiredNumbers);
+                modalElement = document.getElementById('expiredNumbersModal');
+                if (modalElement) {
+                    const expiredNumbers = this.filterExpiredNumbers(snapshot);
+                    this.updateModalTableContent(modalElement, expiredNumbers, 'expiredNumbers');
+                } else {
+                    const expiredNumbers = this.filterExpiredNumbers(snapshot);
+                    this.showExpiredNumbersModal(expiredNumbers);
+                }
                 break;
             case 'servicesToExpireToday':
-                const expiringToday = this.filterServicesToExpireToday(snapshot);
-                this.showServicesToExpireTodayModal(expiringToday);
+                modalElement = document.getElementById('servicesToExpireTodayModal');
+                if (modalElement) {
+                    const expiringToday = this.filterServicesToExpireToday(snapshot);
+                    this.updateModalTableContent(modalElement, expiringToday, 'servicesToExpireToday');
+                } else {
+                    const expiringToday = this.filterServicesToExpireToday(snapshot);
+                    this.showServicesToExpireTodayModal(expiringToday);
+                }
                 break;
             case 'finishedServices':
-                const finishedServices = this.filterFinishedServices(snapshot);
-                this.showFinishedServicesModal(finishedServices);
+                modalElement = document.getElementById('finishedServicesModal');
+                if (modalElement) {
+                    const finishedServices = this.filterFinishedServices(snapshot);
+                    this.updateModalTableContent(modalElement, finishedServices, 'finishedServices');
+                } else {
+                    const finishedServices = this.filterFinishedServices(snapshot);
+                    this.showFinishedServicesModal(finishedServices);
+                }
                 break;
             case 'highAdminConsumption':
-                const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
-                this.showHighAdminConsumptionModal(highAdminConsumption);
+                modalElement = document.getElementById('highAdminConsumptionModal');
+                if (modalElement) {
+                    const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
+                    this.updateModalTableContent(modalElement, highAdminConsumption, 'highAdminConsumption');
+                } else {
+                    const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
+                    this.showHighAdminConsumptionModal(highAdminConsumption);
+                }
                 break;
             case 'inactiveNumbers':
-                const inactiveNumbers = this.filterInactiveNumbers(snapshot);
-                this.showInactiveNumbersModal(inactiveNumbers);
+                modalElement = document.getElementById('inactiveNumbersModal');
+                if (modalElement) {
+                    const inactiveNumbers = this.filterInactiveNumbers(snapshot);
+                    this.updateModalTableContent(modalElement, inactiveNumbers, 'inactiveNumbers');
+                } else {
+                    const inactiveNumbers = this.filterInactiveNumbers(snapshot);
+                    this.showInactiveNumbersModal(inactiveNumbers);
+                }
                 break;
         }
+    }
+    
+    // Update modal table content in place without removing/recreating the modal
+    updateModalTableContent(modalElement, services, modalType) {
+        if (!modalElement || !services) return;
+        
+        const tbody = modalElement.querySelector('tbody');
+        if (!tbody) return;
+        
+        // Build new table rows
+        let tableRows = '';
+        if (services.length === 0) {
+            tableRows = `
+                <tr>
+                    <td colspan="6" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No data found
+                    </td>
+                </tr>
+            `;
+        } else {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
+                const usagePercent = service.usageLimit > 0 ? (service.usage / service.usageLimit) * 100 : 0;
+                const progressClass = usagePercent >= 90 ? 'progress-fill error' : 'progress-fill';
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                
+                return `
+                    <tr class="${hiddenClass}">
+                        <td>
+                            <div>
+                                <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="progress-container">
+                                <div class="progress-bar">
+                                    <div class="${progressClass}" style="width: ${usagePercent}%"></div>
+                                </div>
+                                <div class="progress-text">${service.usage.toFixed(2)} / ${service.usageLimit} GB</div>
+                            </div>
+                        </td>
+                        <td>${service.subscribersCount}</td>
+                        <td>${service.freeSpace.toFixed(2)} GB</td>
+                        <td>${this.escapeHtml(service.validityDate)}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }, 4);
+            tableRows = result.rows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (result.hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!result.hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+        }
+        
+        // Update table body content
+        tbody.innerHTML = tableRows;
+        
+        // Re-bind event handlers for new rows
+        const viewButtons = tbody.querySelectorAll('.view-btn');
+        viewButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.viewSubscriberDetails(id, services);
+            });
+        });
+        
+        const menuButtons = tbody.querySelectorAll('.menu-btn');
+        menuButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
+            });
+        });
     }
 
     initCardListeners() {
@@ -1447,6 +1713,13 @@ class HomeManager {
                                         <circle cx="12" cy="12" r="3"/>
                                     </svg>
                                 </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
                             </div>
                         </td>
                     </tr>
@@ -1501,6 +1774,16 @@ class HomeManager {
                 e.stopPropagation();
                 const id = e.currentTarget.dataset.subscriberId;
                 this.viewSubscriberDetails(id, services);
+            });
+        });
+
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
             });
         });
 
@@ -2437,6 +2720,13 @@ class HomeManager {
                                         <circle cx="12" cy="12" r="3"/>
                                     </svg>
                                 </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
                             </div>
                         </td>
                     </tr>
@@ -2492,6 +2782,16 @@ class HomeManager {
             });
         });
 
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
+            });
+        });
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -2542,6 +2842,13 @@ class HomeManager {
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
                                         <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
                                     </svg>
                                 </button>
                             </div>
@@ -2599,6 +2906,16 @@ class HomeManager {
             });
         });
 
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
+            });
+        });
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -2649,6 +2966,13 @@ class HomeManager {
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
                                         <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
                                     </svg>
                                 </button>
                             </div>
@@ -2706,6 +3030,16 @@ class HomeManager {
             });
         });
 
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
+            });
+        });
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -2748,6 +3082,13 @@ class HomeManager {
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
                                         <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${number.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
                                     </svg>
                                 </button>
                             </div>
@@ -2798,6 +3139,16 @@ class HomeManager {
                 e.stopPropagation();
                 const id = e.currentTarget.dataset.subscriberId;
                 this.viewSubscriberDetails(id, numbers);
+            });
+        });
+
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
             });
         });
 
@@ -2947,6 +3298,13 @@ class HomeManager {
                             <div class="action-buttons">
                                 <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
                                     <img src="/assets/eye.png" alt="View Details" style="width: 20px; height: 20px; object-fit: contain;" />
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
                                 </button>
                             </div>
                         </td>
@@ -3558,6 +3916,13 @@ class HomeManager {
                                         <circle cx="12" cy="12" r="3"/>
                                     </svg>
                                 </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
                             </div>
                         </td>
                     </tr>
@@ -3608,6 +3973,16 @@ class HomeManager {
                 e.stopPropagation();
                 const id = e.currentTarget.dataset.subscriberId;
                 this.viewSubscriberDetails(id, services);
+            });
+        });
+
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
             });
         });
 
@@ -3668,6 +4043,13 @@ class HomeManager {
                                         <circle cx="12" cy="12" r="3"/>
                                     </svg>
                                 </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
                             </div>
                         </td>
                     </tr>
@@ -3719,6 +4101,16 @@ class HomeManager {
                 e.stopPropagation();
                 const id = e.currentTarget.dataset.subscriberId;
                 this.viewSubscriberDetails(id, services);
+            });
+        });
+
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
             });
         });
 
@@ -3852,7 +4244,7 @@ class HomeManager {
         if (numbers.length === 0) {
             tableRows = `
                 <tr>
-                    <td colspan="2" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                    <td colspan="3" style="text-align: center; padding: 3rem; color: #94a3b8;">
                         No inactive numbers found
                     </td>
                 </tr>
@@ -3868,6 +4260,23 @@ class HomeManager {
                             </div>
                         </td>
                         <td>$${number.balance.toFixed(2)}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn view-btn" data-subscriber-id="${number.id}" title="View Details">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${number.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
                     </tr>
                 `;
             });
@@ -3894,6 +4303,7 @@ class HomeManager {
                                     <tr>
                                         <th>Name</th>
                                         <th>Balance</th>
+                                        <th class="actions-col">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -3907,12 +4317,708 @@ class HomeManager {
         `;
         document.body.appendChild(modal);
 
+        // Bind view buttons
+        modal.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.viewSubscriberDetails(id, numbers);
+            });
+        });
+
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
+            });
+        });
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
                 modal.remove();
             }
         });
+    }
+
+    // Three-dot menu functions (copied from insights.js)
+    toggleMenu(id, button) {
+        // Close any existing menus
+        document.querySelectorAll('.dropdown-menu').forEach(menu => {
+            if (menu.dataset.subscriberId !== id) {
+                menu.remove();
+            }
+        });
+        
+        // Check if menu already exists
+        let menu = document.querySelector(`.dropdown-menu[data-subscriber-id="${id}"]`);
+        
+        if (menu) {
+            menu.remove();
+            return;
+        }
+        
+        // Create menu
+        menu = document.createElement('div');
+        menu.className = 'dropdown-menu';
+        menu.dataset.subscriberId = id;
+        menu.innerHTML = `
+            <div class="dropdown-item" data-action="refresh">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+                Refresh
+            </div>
+            <div class="dropdown-item" data-action="edit">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                </svg>
+                Edit
+            </div>
+            <div class="dropdown-item" data-action="statement">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+                </svg>
+                Statement
+            </div>
+        `;
+        
+        // Position menu - ensure it doesn't cover table data
+        const rect = button.getBoundingClientRect();
+        const modal = button.closest('.available-services-modal-overlay');
+        const isInModal = modal !== null;
+        
+        menu.style.position = 'fixed';
+        menu.style.zIndex = '10000';
+        
+        // Calculate position - prefer placing below button, aligned to right edge of button
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const spaceAbove = rect.top;
+        const menuHeight = 150; // Approximate menu height (3 items)
+        
+        if (spaceBelow >= menuHeight || spaceBelow >= spaceAbove) {
+            // Place below button
+            menu.style.top = `${rect.bottom + 4}px`;
+        } else {
+            // Place above button
+            menu.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+            menu.style.top = 'auto';
+        }
+        
+        // Align to right edge of button, but ensure it doesn't go off-screen
+        const menuWidth = 150; // Approximate menu width
+        const rightPosition = window.innerWidth - rect.right;
+        if (rightPosition + menuWidth > window.innerWidth - 16) {
+            // Menu would go off-screen, align to left instead
+            menu.style.left = `${rect.left}px`;
+            menu.style.right = 'auto';
+        } else {
+            menu.style.right = `${rightPosition}px`;
+            menu.style.left = 'auto';
+        }
+        
+        document.body.appendChild(menu);
+        
+        // Add click handlers
+        menu.querySelectorAll('.dropdown-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = item.dataset.action;
+                this.handleMenuAction(action, id);
+                menu.remove();
+            });
+        });
+        
+        // Close on outside click
+        setTimeout(() => {
+            const clickHandler = (e) => {
+                if (!menu.contains(e.target) && e.target !== button) {
+                    menu.remove();
+                    document.removeEventListener('click', clickHandler);
+                }
+            };
+            document.addEventListener('click', clickHandler);
+        }, 0);
+    }
+    
+    handleMenuAction(action, id) {
+        if (action === 'refresh') {
+            this.refreshSubscriber(id);
+        } else if (action === 'edit') {
+            this.editSubscriber(id);
+        } else if (action === 'statement') {
+            this.showStatement(id);
+        }
+    }
+    
+    editSubscriber(id) {
+        // Navigate to Edit Subscribers page instead of opening modal
+        window.location.href = `/pages/edit-subscriber.html?id=${encodeURIComponent(id)}`;
+    }
+    
+    async showStatement(adminId) {
+        // Show modal immediately with loading state
+        this.createStatementModal(adminId, null); // null = loading state
+        
+        try {
+            // Fetch balance history from backend
+            // Get backend base URL from config
+            const baseURL = window.AEFA_API_URL || window.ALFA_API_URL || 'https://cell-spott-manage-backend.onrender.com';
+            const response = await fetch(`${baseURL}/api/admin/${adminId}/balance-history`);
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.error('❌ Error fetching balance history:', result.error);
+                this.updateStatementModal(adminId, [], 'error');
+                return;
+            }
+            
+            const balanceHistory = result.data || [];
+            
+            // Update modal with data
+            this.updateStatementModal(adminId, balanceHistory);
+        } catch (error) {
+            console.error('❌ Error showing statement:', error);
+            this.updateStatementModal(adminId, [], 'error');
+        }
+    }
+    
+    createStatementModal(adminId, balanceHistory) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('statementModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // Find admin name from this.admins
+        const admin = this.admins.find(s => s.id === adminId);
+        const adminName = admin ? admin.name : 'Admin';
+        
+        // Determine content based on state
+        let content = '';
+        if (balanceHistory === null) {
+            // Loading state
+            content = `
+                <div class="statement-loading">
+                    <div class="statement-spinner"></div>
+                    <p>Loading balance history...</p>
+                </div>
+            `;
+        } else if (balanceHistory.length === 0) {
+            // Empty state
+            content = `
+                <div class="statement-empty">
+                    <p>No balance history available yet.</p>
+                    <p class="statement-empty-hint">Balance history will appear here after successful refreshes.</p>
+                </div>
+            `;
+        } else {
+            // Data state
+            content = `
+                <div class="statement-table">
+                    <div class="statement-table-header">
+                        <div class="statement-col-date">Date</div>
+                        <div class="statement-col-balance">Balance</div>
+                    </div>
+                    <div class="statement-table-body">
+                        ${balanceHistory.map(entry => {
+                            const dateTime = this.formatDateTime(new Date(entry.timestamp || entry.date));
+                            return `
+                                <div class="statement-table-row">
+                                    <div class="statement-col-date">${dateTime.date} ${dateTime.time}</div>
+                                    <div class="statement-col-balance">${this.escapeHtml(entry.balance || 'N/A')}</div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.id = 'statementModal';
+        modal.className = 'statement-modal-overlay';
+        modal.innerHTML = `
+            <div class="statement-modal-container">
+                <div class="statement-modal-header">
+                    <h3>Statement - ${this.escapeHtml(adminName)}</h3>
+                    <button class="statement-modal-close" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="1em" height="1em">
+                            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="statement-modal-content">
+                    ${content}
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Add event listeners
+        const closeBtn = modal.querySelector('.statement-modal-close');
+        closeBtn.addEventListener('click', () => {
+            modal.remove();
+        });
+        
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+        
+        // Close on Escape key
+        const escapeHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escapeHandler);
+            }
+        };
+        document.addEventListener('keydown', escapeHandler);
+    }
+    
+    updateStatementModal(adminId, balanceHistory, error = null) {
+        const modal = document.getElementById('statementModal');
+        if (!modal) return;
+        
+        const contentDiv = modal.querySelector('.statement-modal-content');
+        if (!contentDiv) return;
+        
+        let content = '';
+        if (error === 'error') {
+            content = `
+                <div class="statement-empty">
+                    <p>Failed to load balance history.</p>
+                    <p class="statement-empty-hint">Please try again later.</p>
+                </div>
+            `;
+        } else if (balanceHistory.length === 0) {
+            content = `
+                <div class="statement-empty">
+                    <p>No balance history available yet.</p>
+                    <p class="statement-empty-hint">Balance history will appear here after successful refreshes.</p>
+                </div>
+            `;
+        } else {
+            content = `
+                <div class="statement-table">
+                    <div class="statement-table-header">
+                        <div class="statement-col-date">Date</div>
+                        <div class="statement-col-balance">Balance</div>
+                    </div>
+                    <div class="statement-table-body">
+                        ${balanceHistory.map(entry => {
+                            const dateTime = this.formatDateTime(new Date(entry.timestamp || entry.date));
+                            return `
+                                <div class="statement-table-row">
+                                    <div class="statement-col-date">${dateTime.date} ${dateTime.time}</div>
+                                    <div class="statement-col-balance">${this.escapeHtml(entry.balance || 'N/A')}</div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        contentDiv.innerHTML = content;
+    }
+    
+    formatDateTime(date) {
+        // CRITICAL: Always validate input and return valid date or N/A
+        if (!date) {
+            console.warn('formatDateTime: No date provided');
+            return { date: 'N/A', time: '' };
+        }
+        
+        // Ensure we have a valid Date object
+        let d;
+        if (date instanceof Date) {
+            d = date;
+        } else if (typeof date === 'number') {
+            // If it's a number, treat as milliseconds since epoch
+            if (date <= 0 || date > 9999999999999) {
+                console.warn('formatDateTime: Invalid timestamp number:', date);
+                return { date: 'N/A', time: '' };
+            }
+            d = new Date(date);
+        } else if (typeof date === 'string') {
+            d = new Date(date);
+        } else {
+            console.warn('formatDateTime: Invalid date type:', typeof date, date);
+            return { date: 'N/A', time: '' };
+        }
+        
+        // Validate the date
+        if (isNaN(d.getTime()) || d.getTime() <= 0) {
+            console.warn('formatDateTime: Invalid date value:', date, '->', d);
+            return { date: 'N/A', time: '' };
+        }
+        
+        // Use local timezone methods
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = d.getFullYear();
+        
+        let hours = d.getHours();
+        const minutes = d.getMinutes();
+        const seconds = d.getSeconds();
+        
+        const minutesStr = String(minutes).padStart(2, '0');
+        const secondsStr = String(seconds).padStart(2, '0');
+        
+        // 12-hour format
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const hoursStr = String(hours).padStart(2, '0');
+        
+        return {
+            date: `${day}/${month}/${year}`,
+            time: `${hoursStr}:${minutesStr}:${secondsStr} ${ampm}`
+        };
+    }
+
+    async refreshSubscriber(id) {
+        // CRITICAL: Verify ownership before refreshing
+        const currentUserId = this.getCurrentUserId();
+        if (!currentUserId) {
+            alert('Error: You must be logged in to refresh admins.');
+            return;
+        }
+        
+        // Find the admin in our data
+        const admin = this.admins.find(a => a.id === id);
+        if (!admin) {
+            console.error('Admin not found:', id);
+            return;
+        }
+        
+        // CRITICAL: Verify ownership
+        if (admin.userId && admin.userId !== currentUserId) {
+            alert('Error: You do not have permission to refresh this admin.');
+            return;
+        }
+        
+        // Mark this admin as being refreshed (prevents modal updates during refresh)
+        this.refreshingAdmins.add(id);
+        
+        // Record refresh start time immediately (before any async operations)
+        // This ensures the listener can detect the refresh is in progress
+        this.lastRefreshTime.set(id, Date.now());
+        
+        // Capture the refresh timestamp when user initiates the refresh (client-side time)
+        const refreshInitiatedAt = Date.now();
+        console.log('🔄 Refresh initiated at:', new Date(refreshInitiatedAt).toLocaleString(), 'timestamp:', refreshInitiatedAt);
+        
+        try {
+            console.log('Refreshing admin:', id);
+            
+            // Get admin data from Firestore to get phone and password
+            const phone = admin.phone || '';
+            
+            if (!phone) {
+                console.error('Phone not found for admin:', id);
+                alert('Cannot refresh: Phone number not found');
+                return;
+            }
+            
+            // Try to get password from Firestore
+            let password = admin.password || null;
+            
+            // If not in admin object, try to get from Firestore with improved error handling
+            if (!password) {
+                try {
+                    const waitForOnline = () => {
+                        return new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => {
+                                reject(new Error('Firestore request timed out. Trying to use cached data...'));
+                            }, 3000);
+                            
+                            const docRef = db.collection('admins').doc(id);
+                            
+                            docRef.get()
+                                .then((doc) => {
+                                    clearTimeout(timeout);
+                                    resolve(doc);
+                                })
+                                .catch((error) => {
+                                    clearTimeout(timeout);
+                                    reject(error);
+                                });
+                        });
+                    };
+                    
+                    const adminDoc = await waitForOnline();
+                    
+                    if (adminDoc.exists) {
+                        const adminData = adminDoc.data();
+                        password = adminData?.password || null;
+                        
+                        // Cache password in admin object and localStorage for next time
+                        if (password) {
+                            admin.password = password;
+                            try {
+                                localStorage.setItem(`admin_${id}`, JSON.stringify({
+                                    password: password,
+                                    phone: phone,
+                                    cachedAt: Date.now()
+                                }));
+                            } catch (e) {
+                                console.warn('Could not cache to localStorage:', e);
+                            }
+                        } else {
+                            console.warn(`⚠️ Admin document exists (${id}) but password field is missing or empty`);
+                        }
+                    } else {
+                        console.warn('Admin document not found in Firestore:', id);
+                    }
+                } catch (firestoreError) {
+                    console.warn('⚠️ Firestore fetch failed (will try to continue):', firestoreError.message);
+                    
+                    // Try to get password from cache/localStorage as fallback
+                    try {
+                        const cachedAdmin = localStorage.getItem(`admin_${id}`);
+                        if (cachedAdmin) {
+                            const adminData = JSON.parse(cachedAdmin);
+                            if (adminData.password) {
+                                password = adminData.password;
+                                console.log('✅ Using cached password from localStorage');
+                            }
+                        }
+                    } catch (cacheError) {
+                        console.warn('Could not read from cache:', cacheError);
+                    }
+                    
+                    // If still no password, show error but don't block
+                    if (!password) {
+                        const errorMsg = firestoreError.message || 'Cannot connect to Firestore';
+                        const userChoice = confirm(
+                            `Cannot get password from Firestore: ${errorMsg}\n\n` +
+                            `Would you like to:\n` +
+                            `- Click OK to try refreshing anyway (if password is cached)\n` +
+                            `- Click Cancel to abort`
+                        );
+                        
+                        if (!userChoice) {
+                            // Remove any loading indicators
+                            this.removeRefreshIndicators(id);
+                            return;
+                        }
+                    }
+                }
+            }
+            
+            if (!password) {
+                console.error('Password not found for admin:', id);
+                
+                // Try one more time to get password from localStorage cache
+                try {
+                    const cachedAdmin = localStorage.getItem(`admin_${id}`);
+                    if (cachedAdmin) {
+                        const adminData = JSON.parse(cachedAdmin);
+                        if (adminData.password) {
+                            password = adminData.password;
+                            console.log('✅ Using cached password from localStorage (final attempt)');
+                        }
+                    }
+                } catch (cacheError) {
+                    console.warn('Could not read from cache (final attempt):', cacheError);
+                }
+                
+                if (!password) {
+                    this.refreshingAdmins.delete(id);
+                    alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
+                    this.removeRefreshIndicators(id);
+                    return;
+                }
+            }
+            
+            // Check if AlfaAPIService is available
+            if (typeof window.AlfaAPIService === 'undefined' || !window.AlfaAPIService) {
+                this.refreshingAdmins.delete(id);
+                alert('Backend service not available. Please make sure the server is running and alfa-api.js is loaded.');
+                this.removeRefreshIndicators(id);
+                return;
+            }
+            
+            // Show animated loading indicator
+            const button = document.querySelector(`button[data-subscriber-id="${id}"], .menu-btn[data-subscriber-id="${id}"]`);
+            const row = button ? button.closest('tr') : null;
+            let loadingIndicator = null;
+            let successIndicator = null;
+            
+            if (row) {
+                // Add refreshing class for animation
+                row.classList.add('refreshing');
+                
+                // Remove any existing indicators
+                const existingLoading = row.querySelector('.refresh-loading');
+                const existingSuccess = row.querySelector('.refresh-success');
+                if (existingLoading) existingLoading.remove();
+                if (existingSuccess) existingSuccess.remove();
+                
+                // Create and add 3D rotating loader
+                loadingIndicator = document.createElement('div');
+                loadingIndicator.className = 'refresh-loading';
+                loadingIndicator.innerHTML = `
+                    <div class="loader">
+                        <div class="inner one"></div>
+                        <div class="inner two"></div>
+                        <div class="inner three"></div>
+                    </div>
+                `;
+                row.appendChild(loadingIndicator);
+                console.log('✅ 3D loader added to row');
+            } else {
+                console.warn('⚠️ Row not found for admin:', id);
+            }
+            
+            // Fetch Alfa data from backend
+            console.log('📡 Calling backend API with phone:', phone, 'adminId:', id);
+            const response = await window.AlfaAPIService.fetchDashboardData(phone, password, id);
+            
+            // Extract alfaData - handle both nested and flat structures
+            const alfaData = (response.data && response.data.data) ? response.data.data : response.data;
+            
+            // Validate that we have consumption data before saving
+            if (!alfaData.totalConsumption && !alfaData.adminConsumption && !alfaData.primaryData) {
+                console.error(`❌ [${id}] No consumption data found in API response!`);
+            }
+            
+            // Use the client-side timestamp when refresh was initiated
+            const refreshTimestamp = refreshInitiatedAt;
+            
+            // Update admin document with new Alfa data
+            try {
+                console.log('💾 Saving to Firebase:', {
+                    adminId: id,
+                    lastRefreshTimestamp: refreshTimestamp,
+                    timestampDate: new Date(refreshTimestamp).toLocaleString(),
+                    hasTotalConsumption: !!alfaData.totalConsumption,
+                    hasAdminConsumption: !!alfaData.adminConsumption,
+                    hasPrimaryData: !!alfaData.primaryData,
+                    alfaDataKeys: Object.keys(alfaData || {})
+                });
+                
+                // CRITICAL: Ensure userId is preserved when updating
+                const currentUserId = this.getCurrentUserId();
+                let currentDocData = {};
+                try {
+                    const currentDoc = await db.collection('admins').doc(id).get();
+                    if (currentDoc.exists()) {
+                        currentDocData = currentDoc.data();
+                        // Verify ownership one more time
+                        if (currentDocData.userId && currentDocData.userId !== currentUserId) {
+                            throw new Error('Permission denied: Admin does not belong to current user');
+                        }
+                    }
+                } catch (docError) {
+                    console.warn('⚠️ Could not verify ownership before update:', docError.message);
+                }
+                
+                await db.collection('admins').doc(id).set({
+                    userId: currentDocData.userId || currentUserId,
+                    alfaData: alfaData,
+                    alfaDataFetchedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    lastRefreshTimestamp: refreshTimestamp
+                }, { merge: true });
+                
+                console.log('✅ Successfully saved lastRefreshTimestamp to Firebase');
+            } catch (updateError) {
+                console.warn('⚠️ Failed to save to Firebase:', updateError.message);
+            }
+            
+            console.log('Alfa data refreshed successfully');
+            
+            // Show success notification
+            if (typeof notification !== 'undefined') {
+                notification.set({ delay: 2000 });
+                notification.success('Refresh completed successfully');
+            }
+            
+            // Wait a bit for Firebase real-time listener to update the UI
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Show success animation
+            if (row) {
+                // Remove loading indicator
+                if (loadingIndicator) {
+                    loadingIndicator.remove();
+                }
+                
+                // Remove refreshing class
+                row.classList.remove('refreshing');
+                
+                // Add success class and indicator
+                row.classList.add('refresh-success');
+                
+                // Create and add success checkmark
+                successIndicator = document.createElement('div');
+                successIndicator.className = 'refresh-success';
+                successIndicator.innerHTML = `
+                    <svg viewBox="0 0 24 24">
+                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                    </svg>
+                `;
+                row.appendChild(successIndicator);
+                
+                // Remove success indicator after animation completes
+                setTimeout(() => {
+                    if (successIndicator) {
+                        successIndicator.remove();
+                    }
+                    row.classList.remove('refresh-success');
+                }, 2000);
+                
+                // Mark refresh as complete and record timestamp (prevents modal updates for 3 seconds)
+                this.refreshingAdmins.delete(id);
+                this.lastRefreshTime.set(id, Date.now());
+            }
+            
+        } catch (error) {
+            console.error('Error refreshing admin:', error);
+            
+            // Mark refresh as complete even on error
+            this.refreshingAdmins.delete(id);
+            this.lastRefreshTime.set(id, Date.now());
+            
+            let errorMessage = error?.message || error?.toString() || 'Unknown error occurred';
+            
+            if (error?.details) {
+                console.error('Backend error details:', error.details);
+                errorMessage += '\n\nCheck the backend console for more details.';
+            }
+            
+            // Show error notification
+            if (typeof notification !== 'undefined') {
+                notification.set({ delay: 3000 });
+                notification.error('Refresh failed: ' + (errorMessage.length > 50 ? errorMessage.substring(0, 50) + '...' : errorMessage));
+            } else {
+                alert('Failed to refresh data: ' + errorMessage);
+            }
+            
+            // Remove loading indicators and restore row
+            this.removeRefreshIndicators(id);
+        }
+    }
+
+    removeRefreshIndicators(id) {
+        const button = document.querySelector(`button[data-subscriber-id="${id}"], .menu-btn[data-subscriber-id="${id}"]`);
+        const row = button ? button.closest('tr') : null;
+        if (row) {
+            row.classList.remove('refreshing', 'refresh-success');
+            const loadingIndicator = row.querySelector('.refresh-loading');
+            const successIndicator = row.querySelector('.refresh-success');
+            if (loadingIndicator) loadingIndicator.remove();
+            if (successIndicator) successIndicator.remove();
+        }
     }
 }
 

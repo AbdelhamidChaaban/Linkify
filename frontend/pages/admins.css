@@ -1314,7 +1314,7 @@ body.admins-page .main-content {
     }
     
     .form-actions {
-        flex-direction: column;
+        flex-direction: column-reverse; /* Reverse order on mobile - Create Admin first, Cancel second */
         gap: 0.75rem;
     }
     

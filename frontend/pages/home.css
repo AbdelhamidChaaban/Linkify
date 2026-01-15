@@ -1732,3 +1732,203 @@ body.light-mode .statement-col-date {
 body.light-mode .statement-col-balance {
     color: #1e293b;
 }
+
+/* Refresh Animation Styles - Matching insights.css */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+@keyframes rotate-one {
+    0% { transform: rotateX(35deg) rotateY(-45deg) rotateZ(0deg); }
+    100% { transform: rotateX(35deg) rotateY(-45deg) rotateZ(360deg); }
+}
+
+@keyframes rotate-two {
+    0% { transform: rotateX(50deg) rotateY(10deg) rotateZ(0deg); }
+    100% { transform: rotateX(50deg) rotateY(10deg) rotateZ(360deg); }
+}
+
+@keyframes rotate-three {
+    0% { transform: rotateX(35deg) rotateY(55deg) rotateZ(0deg); }
+    100% { transform: rotateX(35deg) rotateY(55deg) rotateZ(360deg); }
+}
+
+@keyframes checkmark {
+    0% {
+        stroke-dashoffset: 100;
+    }
+    100% {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes successScale {
+    0% {
+        transform: translateY(-50%) scale(0);
+    }
+    50% {
+        transform: translateY(-50%) scale(1.2);
+    }
+    100% {
+        transform: translateY(-50%) scale(1);
+    }
+}
+
+.refresh-loading {
+    position: absolute;
+    top: 50%;
+    right: 80px; /* Position to the left of action buttons */
+    transform: translateY(-50%);
+    width: 48px;
+    height: 48px;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+.refresh-loading .loader {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    perspective: 800px;
+}
+
+.refresh-loading .inner {
+    position: absolute;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+}
+
+.refresh-loading .inner.one {
+    left: 0%;
+    top: 0%;
+    animation: rotate-one 1s linear infinite;
+    border-bottom: 3px solid #3b82f6;
+}
+
+.refresh-loading .inner.two {
+    right: 0%;
+    top: 0%;
+    animation: rotate-two 1s linear infinite;
+    border-right: 3px solid #3b82f6;
+}
+
+.refresh-loading .inner.three {
+    right: 0%;
+    bottom: 0%;
+    animation: rotate-three 1s linear infinite;
+    border-top: 3px solid #3b82f6;
+}
+
+.refresh-success {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%) scale(0);
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    animation: successScale 0.5s ease-out forwards;
+}
+
+.refresh-success svg {
+    width: 20px;
+    height: 20px;
+    stroke: #10b981;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    fill: none;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    animation: checkmark 0.6s ease-out 0.2s forwards;
+}
+
+/* Row with refresh indicator */
+.available-services-table tbody tr {
+    position: relative;
+    overflow: visible;
+}
+
+.available-services-table tr.refreshing {
+    background: linear-gradient(90deg, 
+        rgba(59, 130, 246, 0.05) 0%, 
+        rgba(59, 130, 246, 0.1) 50%, 
+        rgba(59, 130, 246, 0.05) 100%);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.available-services-table tr.refreshing td {
+    opacity: 0.7;
+}
+
+.available-services-table tr.refresh-success {
+    position: relative;
+    background: linear-gradient(90deg, 
+        rgba(16, 185, 129, 0.05) 0%, 
+        rgba(16, 185, 129, 0.1) 50%, 
+        rgba(16, 185, 129, 0.05) 100%);
+    transition: background 0.3s ease;
+}
+
+.available-services-table tr.refresh-success td {
+    opacity: 1;
+}
+
+/* Dropdown Menu Styles - Matching insights page */
+.dropdown-menu {
+    position: fixed;
+    background: rgba(20, 20, 30, 0.95);
+    border: 1px solid rgba(58, 10, 78, 0.3);
+    border-radius: 8px;
+    padding: 0.5rem 0;
+    min-width: 150px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    z-index: 10000;
+    backdrop-filter: blur(10px);
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 1rem;
+    color: #cbd5e1;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.dropdown-item:hover {
+    background: rgba(58, 10, 78, 0.3);
+    color: #f8fafc;
+}
+
+.dropdown-item svg {
+    width: 1em;
+    height: 1em;
+    color: inherit;
+}
+
+/* Light Mode Dropdown */
+body.light-mode .dropdown-menu {
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+body.light-mode .dropdown-item {
+    color: #475569;
+}
+
+body.light-mode .dropdown-item:hover {
+    background: rgba(124, 58, 237, 0.08);
+    color: #1e293b;
+}
