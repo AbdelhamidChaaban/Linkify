@@ -3793,25 +3793,36 @@ class InsightsManager {
                 return;
             }
             
-            // Try to get password from Firestore
-            // First check if we have it cached in the subscriber object
+            // Try to get password - check cache first, then Firestore
             let password = subscriber.password || null;
             
-            // If not in subscriber object, try to get from Firestore with improved error handling
+            // First, try to get from localStorage cache (fastest, no network needed)
             if (!password) {
                 try {
-                    // Use a shorter timeout and better error handling
+                    const cachedAdmin = localStorage.getItem(`admin_${id}`);
+                    if (cachedAdmin) {
+                        const adminData = JSON.parse(cachedAdmin);
+                        if (adminData.password) {
+                            password = adminData.password;
+                            console.log('✅ Using cached password from localStorage');
+                        }
+                    }
+                } catch (cacheError) {
+                    console.warn('Could not read from cache:', cacheError);
+                }
+            }
+            
+            // If not in subscriber object or cache, try to get from Firestore (but don't block if it fails)
+            if (!password) {
+                try {
                     const waitForOnline = () => {
                         return new Promise((resolve, reject) => {
-                            // Reduced timeout to 3 seconds
                             const timeout = setTimeout(() => {
-                                reject(new Error('Firestore request timed out. Trying to use cached data...'));
+                                reject(new Error('Firestore request timed out'));
                             }, 3000);
                             
-                            // Try to get document
                             const docRef = db.collection('admins').doc(id);
                             
-                            // Use get() with timeout
                             docRef.get()
                                 .then((doc) => {
                                     clearTimeout(timeout);
@@ -3833,7 +3844,6 @@ class InsightsManager {
                         // Cache password in subscriber object and localStorage for next time
                         if (password) {
                             subscriber.password = password;
-                            // Also cache in localStorage as backup
                             try {
                                 localStorage.setItem(`admin_${id}`, JSON.stringify({
                                     password: password,
@@ -3850,81 +3860,29 @@ class InsightsManager {
                         console.warn('Admin document not found in Firestore:', id);
                     }
                 } catch (firestoreError) {
-                    console.warn('⚠️ Firestore fetch failed (will try to continue):', firestoreError.message);
-                    
-                    // Try to get password from cache/localStorage as fallback
-                    try {
-                        const cachedAdmin = localStorage.getItem(`admin_${id}`);
-                        if (cachedAdmin) {
-                            const adminData = JSON.parse(cachedAdmin);
-                            if (adminData.password) {
-                                password = adminData.password;
-                                console.log('✅ Using cached password from localStorage');
-                            }
-                        }
-                    } catch (cacheError) {
-                        console.warn('Could not read from cache:', cacheError);
-                    }
-                    
-                    // If still no password, show error but don't block - let user know
-                    if (!password) {
-                        const errorMsg = firestoreError.message || 'Cannot connect to Firestore';
-                        const userChoice = confirm(
-                            `Cannot get password from Firestore: ${errorMsg}\n\n` +
-                            `Would you like to:\n` +
-                            `- Click OK to try refreshing anyway (if password is cached)\n` +
-                            `- Click Cancel to abort`
-                        );
-                        
-                        if (!userChoice) {
-                            // Remove any loading indicators
-                            const checkbox = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
-                            const row = checkbox ? checkbox.closest('tr') : null;
-                            if (row) {
-                                row.classList.remove('refreshing', 'refresh-success');
-                                const loadingIndicator = row.querySelector('.refresh-loading');
-                                const successIndicator = row.querySelector('.refresh-success');
-                                if (loadingIndicator) loadingIndicator.remove();
-                                if (successIndicator) successIndicator.remove();
-                            }
-                            return;
-                        }
-                    }
+                    // Firestore failed, but we already checked cache above
+                    // Only log warning, don't bother user - we'll check if password exists below
+                    console.warn('⚠️ Firestore fetch failed (using cached data if available):', firestoreError.message);
                 }
             }
             
+            // Final check: only show error if password truly cannot be found anywhere
             if (!password) {
                 console.error('Password not found for admin:', id);
                 
-                // Try one more time to get password from localStorage cache
-                try {
-                    const cachedAdmin = localStorage.getItem(`admin_${id}`);
-                    if (cachedAdmin) {
-                        const adminData = JSON.parse(cachedAdmin);
-                        if (adminData.password) {
-                            password = adminData.password;
-                            console.log('✅ Using cached password from localStorage (final attempt)');
-                        }
-                    }
-                } catch (cacheError) {
-                    console.warn('Could not read from cache (final attempt):', cacheError);
+                // Remove any loading indicators
+                const checkbox = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
+                const row = checkbox ? checkbox.closest('tr') : null;
+                if (row) {
+                    row.classList.remove('refreshing', 'refresh-success');
+                    const loadingIndicator = row.querySelector('.refresh-loading');
+                    const successIndicator = row.querySelector('.refresh-success');
+                    if (loadingIndicator) loadingIndicator.remove();
+                    if (successIndicator) successIndicator.remove();
                 }
                 
-                if (!password) {
-                    alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
-                    
-                    // Remove any loading indicators
-                    const checkbox2 = document.querySelector(`.row-checkbox[data-subscriber-id="${id}"]`);
-                    const row2 = checkbox2 ? checkbox2.closest('tr') : null;
-                    if (row2) {
-                        row2.classList.remove('refreshing', 'refresh-success');
-                        const loadingIndicator = row2.querySelector('.refresh-loading');
-                        const successIndicator = row2.querySelector('.refresh-success');
-                        if (loadingIndicator) loadingIndicator.remove();
-                        if (successIndicator) successIndicator.remove();
-                    }
-                    return;
-                }
+                alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
+                return;
             }
             
             // Check if AlfaAPIService is available

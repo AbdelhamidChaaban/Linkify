@@ -274,8 +274,9 @@ class HomeManager {
         }
     }
 
-    async forceRefresh() {
+    async forceRefresh(showNotification = false) {
         // Force a fresh fetch from server to ensure we have latest data
+        // showNotification: Only show toast notification if this is a manual refresh (user-initiated)
         if (typeof db === 'undefined') {
             console.warn('⚠️ [Home] Firebase not available, skipping force refresh');
             return;
@@ -333,8 +334,39 @@ class HomeManager {
             
             // Update card counts
             this.updateCardCounts();
+            
+            // Show success toast notification only if this is a manual refresh
+            if (showNotification) {
+                try {
+                    const notify = (typeof window !== 'undefined' && window.notification) ? window.notification : (typeof notification !== 'undefined' ? notification : null);
+                    if (notify && typeof notify.success === 'function') {
+                        notify.set({ delay: 3000 });
+                        notify.success('Data refreshed successfully');
+                    } else {
+                        console.warn('⚠️ Notification system not available or not initialized');
+                    }
+                } catch (e) {
+                    console.error('Error showing notification:', e);
+                }
+            }
         } catch (error) {
             console.error('❌ [Home] Force refresh failed:', error);
+            
+            // Show error toast notification only if this is a manual refresh
+            if (showNotification) {
+                const errorMessage = error?.message || error?.toString() || 'Unknown error occurred';
+                try {
+                    const notify = (typeof window !== 'undefined' && window.notification) ? window.notification : (typeof notification !== 'undefined' ? notification : null);
+                    if (notify && typeof notify.error === 'function') {
+                        notify.set({ delay: 3000 });
+                        notify.error('Refresh failed: ' + (errorMessage.length > 50 ? errorMessage.substring(0, 50) + '...' : errorMessage));
+                    } else {
+                        console.warn('⚠️ Notification system not available or not initialized');
+                    }
+                } catch (e) {
+                    console.error('Error showing notification:', e);
+                }
+            }
         }
     }
 
@@ -883,6 +915,21 @@ class HomeManager {
         if (accessDeniedNumbersModal && !accessDeniedNumbersModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
             this.refreshOpenModal('accessDeniedNumbers');
         }
+
+        const servicesExpiredYesterdayModal = document.getElementById('servicesExpiredYesterdayModal');
+        if (servicesExpiredYesterdayModal && !servicesExpiredYesterdayModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('servicesExpiredYesterday');
+        }
+
+        const servicesToExpireTomorrowModal = document.getElementById('servicesToExpireTomorrowModal');
+        if (servicesToExpireTomorrowModal && !servicesToExpireTomorrowModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('servicesToExpireTomorrow');
+        }
+
+        const requestedServicesModal = document.getElementById('requestedServicesModal');
+        if (requestedServicesModal && !requestedServicesModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('requestedServices');
+        }
     }
 
     refreshOpenModal(modalType) {
@@ -969,6 +1016,36 @@ class HomeManager {
                     this.showAccessDeniedNumbersModal(accessDeniedNumbers);
                 }
                 break;
+            case 'servicesExpiredYesterday':
+                modalElement = document.getElementById('servicesExpiredYesterdayModal');
+                if (modalElement) {
+                    const expiredYesterday = this.filterServicesExpiredYesterday(snapshot);
+                    this.updateModalTableContent(modalElement, expiredYesterday, 'servicesExpiredYesterday');
+                } else {
+                    const expiredYesterday = this.filterServicesExpiredYesterday(snapshot);
+                    this.showServicesExpiredYesterdayModal(expiredYesterday);
+                }
+                break;
+            case 'servicesToExpireTomorrow':
+                modalElement = document.getElementById('servicesToExpireTomorrowModal');
+                if (modalElement) {
+                    const expiringTomorrow = this.filterServicesToExpireTomorrow(snapshot);
+                    this.updateModalTableContent(modalElement, expiringTomorrow, 'servicesToExpireTomorrow');
+                } else {
+                    const expiringTomorrow = this.filterServicesToExpireTomorrow(snapshot);
+                    this.showServicesToExpireTomorrowModal(expiringTomorrow);
+                }
+                break;
+            case 'requestedServices':
+                modalElement = document.getElementById('requestedServicesModal');
+                if (modalElement) {
+                    const requestedServices = this.filterRequestedServices(snapshot);
+                    this.updateModalTableContent(modalElement, requestedServices, 'requestedServices');
+                } else {
+                    const requestedServices = this.filterRequestedServices(snapshot);
+                    this.showRequestedServicesModal(requestedServices);
+                }
+                break;
         }
     }
     
@@ -979,7 +1056,608 @@ class HomeManager {
         const tbody = modalElement.querySelector('tbody');
         if (!tbody) return;
         
-        // Build new table rows
+        // Helper function to bind event handlers for table rows
+        const bindEventHandlers = (tableRows, services) => {
+            const tbody = modalElement.querySelector('tbody');
+            if (!tbody) return;
+            
+            tbody.innerHTML = tableRows;
+            
+            // Re-bind event handlers for new rows
+            const viewButtons = tbody.querySelectorAll('.view-btn');
+            viewButtons.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const id = e.currentTarget.dataset.subscriberId;
+                    this.viewSubscriberDetails(id, services);
+                });
+            });
+            
+            const menuButtons = tbody.querySelectorAll('.menu-btn');
+            menuButtons.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const id = e.currentTarget.dataset.subscriberId;
+                    this.toggleMenu(id, e.currentTarget);
+                });
+            });
+        };
+        
+        // Handle modals with 7 columns: Name, Balance, Bundle Size, Subscribers, Needed Balance, Expiration, Actions
+        // (Services To Expire Today, Services Expired Yesterday, Services To Expire Tomorrow)
+        if (modalType === 'servicesToExpireToday' || modalType === 'servicesExpiredYesterday' || modalType === 'servicesToExpireTomorrow') {
+            let tableRows = '';
+            let hasMore = false;
+            if (services.length === 0) {
+                tableRows = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No services expiring today found
+                        </td>
+                    </tr>
+                `;
+            } else {
+                const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
+                    const statusClass = service.neededBalanceStatus === 'Ready To Renew' ? 'ready' : 'not-ready';
+                    const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                    
+                    return `
+                        <tr class="${hiddenClass}">
+                            <td>
+                                <div>
+                                    <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                    <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                                </div>
+                            </td>
+                            <td>$${service.balance.toFixed(2)}</td>
+                            <td>${(modalType === 'servicesExpiredYesterday' || modalType === 'servicesToExpireTomorrow') ? service.bundleSize.toFixed(2) : service.bundleSize} GB</td>
+                            <td>${service.subscribersCount}</td>
+                            <td>
+                                <span class="needed-balance-status ${statusClass}">${this.escapeHtml(service.neededBalanceStatus)}</span>
+                            </td>
+                            <td>${service.expiration}</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                            <circle cx="12" cy="12" r="3"/>
+                                        </svg>
+                                    </button>
+                                    <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <circle cx="12" cy="12" r="2"/>
+                                            <circle cx="12" cy="5" r="2"/>
+                                            <circle cx="12" cy="19" r="2"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }, 4);
+                tableRows = result.rows;
+                hasMore = result.hasMore;
+            }
+            
+            // Update table body content
+            tbody.innerHTML = tableRows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+            
+            bindEventHandlers(tableRows, services);
+            return; // Exit early for this modal type
+        }
+        
+        // Handle "Expired Numbers" modal - 3 columns: Name, Expiration, Actions
+        if (modalType === 'expiredNumbers') {
+            let tableRows = '';
+            let hasMore = false;
+            if (services.length === 0) {
+                tableRows = `
+                    <tr>
+                        <td colspan="3" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No expired numbers found
+                        </td>
+                    </tr>
+                `;
+            } else {
+                const result = this.buildTableRowsWithLimit(services, (number, index, isHidden = false) => {
+                    const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                    return `
+                        <tr class="${hiddenClass}">
+                            <td>
+                                <div>
+                                    <div class="subscriber-name">${this.escapeHtml(number.name)}</div>
+                                    <div class="subscriber-phone">${this.escapeHtml(number.phone)}</div>
+                                </div>
+                            </td>
+                            <td>${number.expiration}</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="action-btn view-btn" data-subscriber-id="${number.id}" title="View Details">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                            <circle cx="12" cy="12" r="3"/>
+                                        </svg>
+                                    </button>
+                                    <button class="action-btn menu-btn" data-subscriber-id="${number.id}" title="Menu">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <circle cx="12" cy="12" r="2"/>
+                                            <circle cx="12" cy="5" r="2"/>
+                                            <circle cx="12" cy="19" r="2"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }, 4);
+                tableRows = result.rows;
+                hasMore = result.hasMore;
+            }
+            
+            // Update table body content
+            tbody.innerHTML = tableRows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+            
+            bindEventHandlers(tableRows, services);
+            return;
+        }
+        
+        // Handle "Requested Services" modal - 3 columns: Name, Subscribers, Actions
+        if (modalType === 'requestedServices') {
+            let tableRows = '';
+            let hasMore = false;
+            if (services.length === 0) {
+                tableRows = `
+                    <tr>
+                        <td colspan="3" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No admins with requested subscribers found
+                        </td>
+                    </tr>
+                `;
+            } else {
+                const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
+                    const subscribersDisplay = this.formatSubscribersCount(
+                        service.subscribersActiveCount !== undefined ? service.subscribersActiveCount : service.subscribersCount,
+                        service.subscribersRequestedCount
+                    );
+                    const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                    
+                    return `
+                        <tr class="${hiddenClass}">
+                            <td>
+                                <div>
+                                    <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                    <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                                </div>
+                            </td>
+                            <td>${subscribersDisplay}</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                        <img src="/assets/eye.png" alt="View Details" style="width: 20px; height: 20px; object-fit: contain;" />
+                                    </button>
+                                    <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <circle cx="12" cy="12" r="2"/>
+                                            <circle cx="12" cy="5" r="2"/>
+                                            <circle cx="12" cy="19" r="2"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }, 4);
+                tableRows = result.rows;
+                hasMore = result.hasMore;
+            }
+            
+            // Update table body content
+            tbody.innerHTML = tableRows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+            
+            bindEventHandlers(tableRows, services);
+            return;
+        }
+        
+        // Handle "Finished Services" modal - 6 columns: Name, Usage, Subscribers, Expiration, Balance, Actions
+        if (modalType === 'finishedServices') {
+            let tableRows = '';
+            let hasMore = false;
+            if (services.length === 0) {
+                tableRows = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No finished services found (all services have available space)
+                        </td>
+                    </tr>
+                `;
+            } else {
+                const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
+                    const usagePercent = service.totalLimit > 0 ? (service.totalConsumption / service.totalLimit) * 100 : 0;
+                    const progressClass = usagePercent >= 100 ? 'progress-fill error' : 'progress-fill';
+                    const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                    
+                    return `
+                        <tr class="${hiddenClass}">
+                            <td>
+                                <div>
+                                    <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                    <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="progress-container">
+                                    <div class="progress-bar">
+                                        <div class="${progressClass}" style="width: ${usagePercent}%"></div>
+                                    </div>
+                                    <div class="progress-text">${service.totalConsumption.toFixed(2)} / ${service.totalLimit} GB</div>
+                                </div>
+                            </td>
+                            <td>${service.subscribersCount}</td>
+                            <td>${service.expiration}</td>
+                            <td>$${service.balance.toFixed(2)}</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                            <circle cx="12" cy="12" r="3"/>
+                                        </svg>
+                                    </button>
+                                    <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <circle cx="12" cy="12" r="2"/>
+                                            <circle cx="12" cy="5" r="2"/>
+                                            <circle cx="12" cy="19" r="2"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }, 4);
+                tableRows = result.rows;
+                hasMore = result.hasMore;
+            }
+            
+            // Update table body content
+            tbody.innerHTML = tableRows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+            
+            bindEventHandlers(tableRows, services);
+            return;
+        }
+        
+        // Handle "High Admin Consumption" modal - 5 columns: Name, Admin Usage, Total Usage, Expiration Date, Actions
+        if (modalType === 'highAdminConsumption') {
+            let tableRows = '';
+            let hasMore = false;
+            if (services.length === 0) {
+                tableRows = `
+                    <tr>
+                        <td colspan="5" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No admins with high admin consumption found
+                        </td>
+                    </tr>
+                `;
+            } else {
+                const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
+                    const adminPercent = service.adminLimit > 0 ? (service.adminConsumption / service.adminLimit) * 100 : 0;
+                    const adminProgressClass = adminPercent >= 95 ? 'progress-fill error' : 'progress-fill';
+                    const adminProgressWidth = Math.min(adminPercent, 100);
+                    
+                    const totalPercent = service.totalLimit > 0 ? (service.totalConsumption / service.totalLimit) * 100 : 0;
+                    const totalProgressClass = totalPercent >= 90 ? 'progress-fill error' : 'progress-fill';
+                    const totalProgressWidth = Math.min(totalPercent, 100);
+                    const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                    
+                    return `
+                        <tr class="${hiddenClass}">
+                            <td>
+                                <div>
+                                    <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                    <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="progress-container">
+                                    <div class="progress-bar">
+                                        <div class="${adminProgressClass}" style="width: ${adminProgressWidth}%"></div>
+                                    </div>
+                                    <div class="progress-text">${service.adminConsumption.toFixed(2)} / ${service.adminLimit.toFixed(2)} GB</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="progress-container">
+                                    <div class="progress-bar">
+                                        <div class="${totalProgressClass}" style="width: ${totalProgressWidth}%"></div>
+                                    </div>
+                                    <div class="progress-text">${service.totalConsumption.toFixed(2)} / ${service.totalLimit.toFixed(2)} GB</div>
+                                </div>
+                            </td>
+                            <td>${this.escapeHtml(service.validityDate)}</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                            <circle cx="12" cy="12" r="3"/>
+                                        </svg>
+                                    </button>
+                                    <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <circle cx="12" cy="12" r="2"/>
+                                            <circle cx="12" cy="5" r="2"/>
+                                            <circle cx="12" cy="19" r="2"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }, 4);
+                tableRows = result.rows;
+                hasMore = result.hasMore;
+            }
+            
+            // Update table body content
+            tbody.innerHTML = tableRows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+            
+            bindEventHandlers(tableRows, services);
+            return;
+        }
+        
+        // Handle "Inactive Numbers" modal - 3 columns: Name, Balance, Actions
+        if (modalType === 'inactiveNumbers') {
+            let tableRows = '';
+            let hasMore = false;
+            if (services.length === 0) {
+                tableRows = `
+                    <tr>
+                        <td colspan="3" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No inactive numbers found
+                        </td>
+                    </tr>
+                `;
+            } else {
+                const result = this.buildTableRowsWithLimit(services, (number, index, isHidden = false) => {
+                    const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                    return `
+                        <tr class="${hiddenClass}">
+                            <td>
+                                <div>
+                                    <div class="subscriber-name">${this.escapeHtml(number.name)}</div>
+                                    <div class="subscriber-phone">${this.escapeHtml(number.phone)}</div>
+                                </div>
+                            </td>
+                            <td>$${number.balance.toFixed(2)}</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="action-btn view-btn" data-subscriber-id="${number.id}" title="View Details">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                            <circle cx="12" cy="12" r="3"/>
+                                        </svg>
+                                    </button>
+                                    <button class="action-btn menu-btn" data-subscriber-id="${number.id}" title="Menu">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <circle cx="12" cy="12" r="2"/>
+                                            <circle cx="12" cy="5" r="2"/>
+                                            <circle cx="12" cy="19" r="2"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }, 4);
+                tableRows = result.rows;
+                hasMore = result.hasMore;
+            }
+            
+            // Update table body content
+            tbody.innerHTML = tableRows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+            
+            bindEventHandlers(tableRows, services);
+            return;
+        }
+        
+        // Handle "Access Denied Numbers" modal - 3 columns: Name, Details, Actions
+        if (modalType === 'accessDeniedNumbers') {
+            let tableRows = '';
+            let hasMore = false;
+            if (services.length === 0) {
+                tableRows = `
+                    <tr>
+                        <td colspan="3" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No access denied numbers found
+                        </td>
+                    </tr>
+                `;
+            } else {
+                const result = this.buildTableRowsWithLimit(services, (number, index, isHidden = false) => {
+                    const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                    return `
+                        <tr class="${hiddenClass}">
+                            <td>
+                                <div>
+                                    <div class="subscriber-name">${this.escapeHtml(number.name)}</div>
+                                    <div class="subscriber-phone">${this.escapeHtml(number.phone)}</div>
+                                </div>
+                            </td>
+                            <td style="color: #ef4444;">Access denied by Alfa system</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="action-btn view-btn" data-subscriber-id="${number.id}" title="View Details">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                            <circle cx="12" cy="12" r="3"/>
+                                        </svg>
+                                    </button>
+                                    <button class="action-btn menu-btn" data-subscriber-id="${number.id}" title="Menu">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <circle cx="12" cy="12" r="2"/>
+                                            <circle cx="12" cy="5" r="2"/>
+                                            <circle cx="12" cy="19" r="2"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }, 4);
+                tableRows = result.rows;
+                hasMore = result.hasMore;
+            }
+            
+            // Update table body content
+            tbody.innerHTML = tableRows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+            
+            bindEventHandlers(tableRows, services);
+            return;
+        }
+        
+        // Build new table rows for other modal types (availableServices uses generic format)
         let tableRows = '';
         if (services.length === 0) {
             tableRows = `
@@ -2735,8 +3413,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (services.length === 0) {
             tableRows = `
                 <tr>
@@ -2746,11 +3425,12 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            services.forEach(service => {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
                 const statusClass = service.neededBalanceStatus === 'Ready To Renew' ? 'ready' : 'not-ready';
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
                 
-                tableRows += `
-                    <tr>
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
@@ -2783,7 +3463,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -2819,6 +3501,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -2844,6 +3527,20 @@ class HomeManager {
             });
         });
 
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -2859,8 +3556,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (services.length === 0) {
             tableRows = `
                 <tr>
@@ -2870,11 +3568,12 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            services.forEach(service => {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
                 const statusClass = service.neededBalanceStatus === 'Ready To Renew' ? 'ready' : 'not-ready';
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
                 
-                tableRows += `
-                    <tr>
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
@@ -2907,7 +3606,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -2943,6 +3644,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -2968,6 +3670,20 @@ class HomeManager {
             });
         });
 
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -2983,8 +3699,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (services.length === 0) {
             tableRows = `
                 <tr>
@@ -2994,11 +3711,12 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            services.forEach(service => {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
                 const statusClass = service.neededBalanceStatus === 'Ready To Renew' ? 'ready' : 'not-ready';
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
                 
-                tableRows += `
-                    <tr>
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
@@ -3031,7 +3749,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -3067,6 +3787,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -3092,6 +3813,20 @@ class HomeManager {
             });
         });
 
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -3107,8 +3842,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (numbers.length === 0) {
             tableRows = `
                 <tr>
@@ -3118,9 +3854,10 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            numbers.forEach(number => {
-                tableRows += `
-                    <tr>
+            const result = this.buildTableRowsWithLimit(numbers, (number, index, isHidden = false) => {
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(number.name)}</div>
@@ -3147,7 +3884,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -3179,6 +3918,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -3320,8 +4060,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (services.length === 0) {
             tableRows = `
                 <tr>
@@ -3331,14 +4072,15 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            services.forEach(service => {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
                 const subscribersDisplay = this.formatSubscribersCount(
                     service.subscribersActiveCount !== undefined ? service.subscribersActiveCount : service.subscribersCount,
                     service.subscribersRequestedCount
                 );
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
                 
-                tableRows += `
-                    <tr>
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
@@ -3362,7 +4104,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -3394,6 +4138,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -3421,6 +4166,20 @@ class HomeManager {
                 this.toggleMenu(id, e.currentTarget);
             });
         });
+
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
@@ -3923,8 +4682,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (services.length === 0) {
             tableRows = `
                 <tr>
@@ -3934,7 +4694,7 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            services.forEach(service => {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
                 const adminPercent = service.adminLimit > 0 ? (service.adminConsumption / service.adminLimit) * 100 : 0;
                 // All admins in this table have 95%+ admin consumption, so show error (red) for all
                 const adminProgressClass = adminPercent >= 95 ? 'progress-fill error' : 'progress-fill';
@@ -3944,9 +4704,10 @@ class HomeManager {
                 // Total progress bar: error at 90%+ (matching available-services table logic)
                 const totalProgressClass = totalPercent >= 90 ? 'progress-fill error' : 'progress-fill';
                 const totalProgressWidth = Math.min(totalPercent, 100);
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
                 
-                tableRows += `
-                    <tr>
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
@@ -3989,7 +4750,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -4023,6 +4786,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -4048,6 +4812,20 @@ class HomeManager {
             });
         });
 
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -4063,8 +4841,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (services.length === 0) {
             tableRows = `
                 <tr>
@@ -4074,12 +4853,13 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            services.forEach(service => {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
                 const usagePercent = service.totalLimit > 0 ? (service.totalConsumption / service.totalLimit) * 100 : 0;
                 const progressClass = usagePercent >= 100 ? 'progress-fill error' : 'progress-fill';
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
                 
-                tableRows += `
-                    <tr>
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
@@ -4116,7 +4896,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -4151,6 +4933,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -4175,6 +4958,20 @@ class HomeManager {
                 this.toggleMenu(id, e.currentTarget);
             });
         });
+
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
@@ -4269,7 +5066,11 @@ class HomeManager {
             // Filter: only show admins with status === 'inactive' (using helper function)
             const isInactive = this.isAdminInactive(data, alfaData);
             
-            if (isInactive) {
+            // CRITICAL: Exclude admins that appear in "Access Denied Numbers" table
+            // Access denied admins should not appear in inactive numbers table
+            const isAccessDenied = alfaData.accessDenied === true;
+            
+            if (isInactive && !isAccessDenied) {
                 // Parse balance
                 let balance = 0;
                 if (alfaData.balance) {
@@ -4287,6 +5088,8 @@ class HomeManager {
                     balance: balance,
                     alfaData: alfaData
                 });
+            } else if (isInactive && isAccessDenied) {
+                console.log(`🚫 [Home] Skipping inactive admin ${doc.id} - appears in Access Denied Numbers table`);
             }
         });
 
@@ -4301,8 +5104,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (numbers.length === 0) {
             tableRows = `
                 <tr>
@@ -4312,9 +5116,10 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            numbers.forEach(number => {
-                tableRows += `
-                    <tr>
+            const result = this.buildTableRowsWithLimit(numbers, (number, index, isHidden = false) => {
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(number.name)}</div>
@@ -4341,7 +5146,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -4373,6 +5180,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -4397,6 +5205,20 @@ class HomeManager {
                 this.toggleMenu(id, e.currentTarget);
             });
         });
+
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
@@ -4505,8 +5327,9 @@ class HomeManager {
             existingModal.remove();
         }
 
-        // Build table rows
+        // Build table rows with limit
         let tableRows = '';
+        let hasMore = false;
         if (numbers.length === 0) {
             tableRows = `
                 <tr>
@@ -4516,9 +5339,10 @@ class HomeManager {
                 </tr>
             `;
         } else {
-            numbers.forEach(number => {
-                tableRows += `
-                    <tr>
+            const result = this.buildTableRowsWithLimit(numbers, (number, index, isHidden = false) => {
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                return `
+                    <tr class="${hiddenClass}">
                         <td>
                             <div>
                                 <div class="subscriber-name">${this.escapeHtml(number.name)}</div>
@@ -4545,7 +5369,9 @@ class HomeManager {
                         </td>
                     </tr>
                 `;
-            });
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
         }
 
         const modal = document.createElement('div');
@@ -4577,6 +5403,7 @@ class HomeManager {
                                 </tbody>
                             </table>
                         </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
                     </div>
                 </div>
             </div>
@@ -4601,6 +5428,20 @@ class HomeManager {
                 this.toggleMenu(id, e.currentTarget);
             });
         });
+
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
@@ -4994,16 +5835,32 @@ class HomeManager {
                 return;
             }
             
-            // Try to get password from Firestore
+            // Try to get password - check cache first, then Firestore
             let password = admin.password || null;
             
-            // If not in admin object, try to get from Firestore with improved error handling
+            // First, try to get from localStorage cache (fastest, no network needed)
+            if (!password) {
+                try {
+                    const cachedAdmin = localStorage.getItem(`admin_${id}`);
+                    if (cachedAdmin) {
+                        const adminData = JSON.parse(cachedAdmin);
+                        if (adminData.password) {
+                            password = adminData.password;
+                            console.log('✅ Using cached password from localStorage');
+                        }
+                    }
+                } catch (cacheError) {
+                    console.warn('Could not read from cache:', cacheError);
+                }
+            }
+            
+            // If not in admin object or cache, try to get from Firestore (but don't block if it fails)
             if (!password) {
                 try {
                     const waitForOnline = () => {
                         return new Promise((resolve, reject) => {
                             const timeout = setTimeout(() => {
-                                reject(new Error('Firestore request timed out. Trying to use cached data...'));
+                                reject(new Error('Firestore request timed out'));
                             }, 3000);
                             
                             const docRef = db.collection('admins').doc(id);
@@ -5045,64 +5902,19 @@ class HomeManager {
                         console.warn('Admin document not found in Firestore:', id);
                     }
                 } catch (firestoreError) {
-                    console.warn('⚠️ Firestore fetch failed (will try to continue):', firestoreError.message);
-                    
-                    // Try to get password from cache/localStorage as fallback
-                    try {
-                        const cachedAdmin = localStorage.getItem(`admin_${id}`);
-                        if (cachedAdmin) {
-                            const adminData = JSON.parse(cachedAdmin);
-                            if (adminData.password) {
-                                password = adminData.password;
-                                console.log('✅ Using cached password from localStorage');
-                            }
-                        }
-                    } catch (cacheError) {
-                        console.warn('Could not read from cache:', cacheError);
-                    }
-                    
-                    // If still no password, show error but don't block
-                    if (!password) {
-                        const errorMsg = firestoreError.message || 'Cannot connect to Firestore';
-                        const userChoice = confirm(
-                            `Cannot get password from Firestore: ${errorMsg}\n\n` +
-                            `Would you like to:\n` +
-                            `- Click OK to try refreshing anyway (if password is cached)\n` +
-                            `- Click Cancel to abort`
-                        );
-                        
-                        if (!userChoice) {
-                            // Remove any loading indicators
-                            this.removeRefreshIndicators(id);
-                            return;
-                        }
-                    }
+                    // Firestore failed, but we already checked cache above
+                    // Only log warning, don't bother user - we'll check if password exists below
+                    console.warn('⚠️ Firestore fetch failed (using cached data if available):', firestoreError.message);
                 }
             }
             
+            // Final check: only show error if password truly cannot be found anywhere
             if (!password) {
                 console.error('Password not found for admin:', id);
-                
-                // Try one more time to get password from localStorage cache
-                try {
-                    const cachedAdmin = localStorage.getItem(`admin_${id}`);
-                    if (cachedAdmin) {
-                        const adminData = JSON.parse(cachedAdmin);
-                        if (adminData.password) {
-                            password = adminData.password;
-                            console.log('✅ Using cached password from localStorage (final attempt)');
-                        }
-                    }
-                } catch (cacheError) {
-                    console.warn('Could not read from cache (final attempt):', cacheError);
-                }
-                
-                if (!password) {
-                    this.refreshingAdmins.delete(id);
-                    alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
-                    this.removeRefreshIndicators(id);
-                    return;
-                }
+                this.refreshingAdmins.delete(id);
+                alert('Cannot refresh: Password not found.\n\nPlease ensure:\n1. You are connected to the internet\n2. The admin account exists in Firestore\n3. The password is stored in the admin document');
+                this.removeRefreshIndicators(id);
+                return;
             }
             
             // Check if AlfaAPIService is available
@@ -5204,9 +6016,16 @@ class HomeManager {
             console.log('Alfa data refreshed successfully');
             
             // Show success notification
-            if (typeof notification !== 'undefined') {
-                notification.set({ delay: 2000 });
-                notification.success('Refresh completed successfully');
+            try {
+                const notify = (typeof window !== 'undefined' && window.notification) ? window.notification : (typeof notification !== 'undefined' ? notification : null);
+                if (notify && typeof notify.success === 'function') {
+                    notify.set({ delay: 3000 });
+                    notify.success('Refresh completed successfully');
+                } else {
+                    console.warn('⚠️ Notification system not available or not initialized');
+                }
+            } catch (e) {
+                console.error('Error showing notification:', e);
             }
             
             // Wait a bit for Firebase real-time listener to update the UI
@@ -5263,10 +6082,17 @@ class HomeManager {
             }
             
             // Show error notification
-            if (typeof notification !== 'undefined') {
-                notification.set({ delay: 3000 });
-                notification.error('Refresh failed: ' + (errorMessage.length > 50 ? errorMessage.substring(0, 50) + '...' : errorMessage));
-            } else {
+            try {
+                const notify = (typeof window !== 'undefined' && window.notification) ? window.notification : (typeof notification !== 'undefined' ? notification : null);
+                if (notify && typeof notify.error === 'function') {
+                    notify.set({ delay: 3000 });
+                    notify.error('Refresh failed: ' + (errorMessage.length > 50 ? errorMessage.substring(0, 50) + '...' : errorMessage));
+                } else {
+                    console.warn('⚠️ Notification system not available or not initialized');
+                    alert('Failed to refresh data: ' + errorMessage);
+                }
+            } catch (e) {
+                console.error('Error showing notification:', e);
                 alert('Failed to refresh data: ' + errorMessage);
             }
             
