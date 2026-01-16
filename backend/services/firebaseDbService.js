@@ -263,6 +263,69 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       };
     }
     
+    // Track when service actually expired (for "Services Expired Yesterday" table)
+    // This persists even after renewal, so admins stay in the table for the entire day after expiration
+    if (cleanDashboardData.validityDate && 
+        typeof cleanDashboardData.validityDate === 'string' && 
+        cleanDashboardData.validityDate.trim() && 
+        !cleanDashboardData.validityDate.includes('NaN')) {
+      
+      try {
+        // Parse validityDate from DD/MM/YYYY format
+        const validityDateParts = cleanDashboardData.validityDate.trim().split('/');
+        if (validityDateParts.length === 3) {
+          const day = parseInt(validityDateParts[0], 10);
+          const month = parseInt(validityDateParts[1], 10) - 1; // Month is 0-indexed
+          const year = parseInt(validityDateParts[2], 10);
+          
+          if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+            const validityDateObj = new Date(year, month, day);
+            validityDateObj.setHours(23, 59, 59, 999); // End of expiration day
+            
+            const nowDate = new Date();
+            nowDate.setHours(0, 0, 0, 0); // Start of today for comparison
+            
+            // Check if service expired (validity date is in the past)
+            if (validityDateObj < nowDate) {
+              // Service is expired - set serviceExpiredOn to the validity date (date it expired)
+              if (!currentData.serviceExpiredOn || currentData.serviceExpiredOn !== cleanDashboardData.validityDate) {
+                currentData.serviceExpiredOn = cleanDashboardData.validityDate;
+                console.log(`📅 [${adminId}] Service expired - set serviceExpiredOn to: ${cleanDashboardData.validityDate}`);
+              }
+            } else {
+              // Service is active (validity date is in the future) - clear serviceExpiredOn if exists
+              // This means the service was renewed
+              if (currentData.serviceExpiredOn) {
+                console.log(`🔄 [${adminId}] Service renewed (validity: ${cleanDashboardData.validityDate}) - will clear serviceExpiredOn at end of day`);
+                // Don't clear immediately - keep it until the day after expiration ends
+                // This ensures admins stay in "Services Expired Yesterday" table for the entire day after expiration
+                // We'll clear it when the day after expiration has passed
+                const expiredOnParts = currentData.serviceExpiredOn.split('/');
+                if (expiredOnParts.length === 3) {
+                  const expiredDay = parseInt(expiredOnParts[0], 10);
+                  const expiredMonth = parseInt(expiredOnParts[1], 10) - 1;
+                  const expiredYear = parseInt(expiredOnParts[2], 10);
+                  const expiredDateObj = new Date(expiredYear, expiredMonth, expiredDay);
+                  expiredDateObj.setDate(expiredDateObj.getDate() + 1); // Day after expiration
+                  expiredDateObj.setHours(0, 0, 0, 0); // Start of day after expiration
+                  
+                  // Clear serviceExpiredOn if we're past the day after expiration (i.e., on the day after that)
+                  // Example: expired Jan 15 -> keep until Jan 16 ends -> remove on Jan 17
+                  if (nowDate >= expiredDateObj) {
+                    currentData.serviceExpiredOn = null;
+                    const expiredDateStr = `${expiredDay}/${expiredMonth + 1}/${expiredYear}`;
+                    console.log(`🗑️ [${adminId}] Cleared serviceExpiredOn (expired on ${expiredDateStr}, now past cleanup date)`);
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`⚠️ [${adminId}] Error tracking service expiration:`, error.message);
+      }
+    }
+    
     // CRITICAL: Preserve existing removedActiveSubscribers and merge with newly detected ones
     // Start with existing removed subscribers from Firebase (always preserve them)
     let removedActiveSubscribersToSave = Array.isArray(currentData.removedActiveSubscribers) ? currentData.removedActiveSubscribers : [];
@@ -435,6 +498,7 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       removedSubscribers: removedSubscribersToSave, // Merged with detected removed subscribers (for backward compatibility)
       removedActiveSubscribers: removedActiveSubscribersToSave, // Merged with detected removed subscribers, cleared if consumption renewed
       _lastRemovedCleanupDate: currentData._lastRemovedCleanupDate || null, // Track when removed subscribers were last cleaned up (prevents duplicate cleanups on same day)
+      serviceExpiredOn: currentData.serviceExpiredOn || null, // Track when service actually expired (for "Services Expired Yesterday" table)
       createdAt: currentData.createdAt,
       updatedAt: currentData.updatedAt
     };

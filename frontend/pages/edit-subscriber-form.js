@@ -774,31 +774,53 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
                 }, 1000);
             }
         } else {
-            // Some operations failed - display cancel message (same as add subscriber page)
-            const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
-            await this.copyToClipboard(cancelMessage);
+            // Some operations failed
+            const hasFailedAdditions = results.additions.some(r => !r.success);
+            const hasFailedRemovals = results.removals.some(r => !r.success);
+            const hasFailedUpdates = results.updates.some(r => !r.success);
             
-            // Display cancel message with copy button
-            this.displayMessages([cancelMessage], 'error');
-            
-            // Show toast notification
-            if (typeof window !== 'undefined' && window.notification) {
-                window.notification.set({ delay: 3000 });
-                window.notification.error('Cancel message copied to clipboard automatically');
-            } else if (typeof notification !== 'undefined') {
-                notification.set({ delay: 3000 });
-                notification.error('Cancel message copied to clipboard automatically');
+            // Only show cancel message if ADDITION operations failed (not for removals or updates)
+            if (hasFailedAdditions) {
+                const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
+                await this.copyToClipboard(cancelMessage);
+                
+                // Display cancel message with copy button
+                this.displayMessages([cancelMessage], 'error');
+                
+                // Show toast notification
+                if (typeof window !== 'undefined' && window.notification) {
+                    window.notification.set({ delay: 3000 });
+                    window.notification.error('Operation failed. Cancel message copied to clipboard automatically');
+                } else if (typeof notification !== 'undefined') {
+                    notification.set({ delay: 3000 });
+                    notification.error('Operation failed. Cancel message copied to clipboard automatically');
+                }
             } else {
+                // Removal or update failed - show error messages without cancel message
                 const failed = [
-                    ...results.additions.filter(r => !r.success).map(r => `Add ${r.phone}: ${r.error}`),
-                    ...results.updates.filter(r => !r.success).map(r => `Update ${r.phone}: ${r.error}`),
-                    ...results.removals.filter(r => !r.success).map(r => `Remove ${r.phone}: ${r.error}`)
+                    ...results.removals.filter(r => !r.success).map(r => `Remove ${r.phone}: ${r.error || 'Unknown error'}`),
+                    ...results.updates.filter(r => !r.success).map(r => `Update ${r.phone}: ${r.error || 'Unknown error'}`)
                 ];
-                const successCount = 
-                    results.additions.filter(r => r.success).length +
-                    results.updates.filter(r => r.success).length +
-                    results.removals.filter(r => r.success).length;
-                alert(`⚠️ Some operations failed (${successCount} succeeded). Errors:\n${failed.join('\n')}\n\nCancel message copied to clipboard automatically.`);
+                
+                // Display error messages
+                if (failed.length > 0) {
+                    this.displayMessages(failed, 'error');
+                }
+                
+                // Show toast notification
+                if (typeof window !== 'undefined' && window.notification) {
+                    window.notification.set({ delay: 3000 });
+                    window.notification.error(`${failed.length} operation(s) failed`);
+                } else if (typeof notification !== 'undefined') {
+                    notification.set({ delay: 3000 });
+                    notification.error(`${failed.length} operation(s) failed`);
+                } else {
+                    const successCount = 
+                        results.additions.filter(r => r.success).length +
+                        results.updates.filter(r => r.success).length +
+                        results.removals.filter(r => r.success).length;
+                    alert(`⚠️ Some operations failed (${successCount} succeeded). Errors:\n${failed.join('\n')}`);
+                }
             }
         }
         

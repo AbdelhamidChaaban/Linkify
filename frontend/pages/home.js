@@ -2391,21 +2391,49 @@ class HomeManager {
                 return;
             }
             
-            // Get validity date
-            let validityDate = '';
-            if (alfaData.validityDate) {
-                validityDate = alfaData.validityDate;
-            } else {
-                // Fallback: calculate from createdAt + 30 days
-                let createdAt = new Date();
-                if (data.createdAt) {
-                    createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
+            // Check if service expired yesterday using serviceExpiredOn field
+            // This field persists even after renewal, so admins stay in the table for the entire day after expiration
+            const serviceExpiredOn = data.serviceExpiredOn || null;
+            
+            // If serviceExpiredOn exists and matches yesterday, include this admin
+            // Otherwise, fallback to checking current validity date (for backwards compatibility)
+            let shouldInclude = false;
+            
+            if (serviceExpiredOn && serviceExpiredOn === yesterdayFormatted) {
+                shouldInclude = true;
+            } else if (!serviceExpiredOn) {
+                // Fallback: check current validity date (for admins that don't have serviceExpiredOn yet)
+                let validityDate = '';
+                if (alfaData.validityDate) {
+                    validityDate = alfaData.validityDate;
+                } else {
+                    // Fallback: calculate from createdAt + 30 days
+                    let createdAt = new Date();
+                    if (data.createdAt) {
+                        createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
+                    }
+                    validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
                 }
-                validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+                
+                if (validityDate === yesterdayFormatted) {
+                    shouldInclude = true;
+                }
             }
+            
+            // Only include if serviceExpiredOn matches yesterday or validity date matches yesterday (fallback)
+            if (shouldInclude) {
+                // Get validity date for display
+                let validityDate = '';
+                if (alfaData.validityDate) {
+                    validityDate = alfaData.validityDate;
+                } else if (data.createdAt) {
+                    let createdAt = new Date();
+                    if (data.createdAt) {
+                        createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
+                    }
+                    validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+                }
 
-            // Check if validity date matches yesterday
-            if (validityDate === yesterdayFormatted) {
                 // Parse balance
                 let balance = 0;
                 if (alfaData.balance) {

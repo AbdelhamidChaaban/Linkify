@@ -19,17 +19,14 @@ class PushNotificationManager {
     }
     
     injectNotificationUI() {
-        // Check if notification icon already exists
-        if (document.getElementById('notificationToggle') || document.getElementById('mobileNotificationButton')) {
-            return; // Already injected
+        // Inject notification link in mobile sidebar (if not already present)
+        if (!document.getElementById('mobileNotificationButton')) {
+            this.injectMobileSidebarNotification();
         }
         
-        // Inject notification link in mobile sidebar
-        this.injectMobileSidebarNotification();
-        
-        // Inject notification icon in top bar for desktop (if nav-right exists)
+        // Inject notification icon in top bar for desktop (if nav-right exists and button not present)
         const navRight = document.querySelector('.nav-right');
-        if (navRight) {
+        if (navRight && !document.getElementById('notificationToggle')) {
             const themeToggle = document.getElementById('themeToggle');
             if (themeToggle) {
                 // Create notification icon button for desktop
