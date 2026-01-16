@@ -600,6 +600,97 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
         const originalSubscribers = viewData.subscribers.map(s => s.phoneNumber);
         const originalPending = (viewData.pendingSubscribers || []).map(p => p.phoneNumber || p.phone);
         
+        // Check for duplicate subscriber numbers (only for new additions)
+        // Normalize phone numbers for comparison
+        const normalizePhoneForComparison = (phone) => {
+            return (phone || '').replace(/^961/, '').replace(/^0+/, '').replace(/\D/g, '');
+        };
+        
+        // Build comprehensive set of all existing subscriber numbers
+        // Include both active and pending/requested subscribers
+        const allExistingPhones = new Set();
+        
+        // Add active subscribers (status = "Active" or no status)
+        originalSubscribers.forEach(phone => {
+            if (phone) {
+                allExistingPhones.add(normalizePhoneForComparison(phone));
+            }
+        });
+        
+        // Add pending subscribers from pendingSubscribers array
+        originalPending.forEach(phone => {
+            if (phone) {
+                allExistingPhones.add(normalizePhoneForComparison(phone));
+            }
+        });
+        
+        // Also check secondarySubscribers directly for "Requested" status subscribers
+        // (in case they're not in pendingSubscribers array)
+        const alfaData = subscriber.alfaData || {};
+        const secondarySubscribers = alfaData.secondarySubscribers || [];
+        secondarySubscribers.forEach(sub => {
+            if (sub && sub.phoneNumber) {
+                const status = (sub.status || '').toLowerCase();
+                // Include both "Active" and "Requested" status
+                if (status === 'active' || status === 'requested' || !status) {
+                    const normalizedPhone = normalizePhoneForComparison(sub.phoneNumber);
+                    allExistingPhones.add(normalizedPhone);
+                }
+            }
+        });
+        
+        // Also check subscriber.pendingSubscribers directly (if exists)
+        if (subscriber.pendingSubscribers && Array.isArray(subscriber.pendingSubscribers)) {
+            subscriber.pendingSubscribers.forEach(pending => {
+                const phone = pending.phoneNumber || pending.phone;
+                if (phone) {
+                    allExistingPhones.add(normalizePhoneForComparison(phone));
+                }
+            });
+        }
+        
+        const duplicateNewSubscribers = [];
+        items.forEach((item) => {
+            const subscriberInput = item.querySelector('input[name*="subscriber"]');
+            const isNew = item.dataset.isNew === 'true';
+            const originalPhone = item.dataset.phone;
+            
+            if (subscriberInput && isNew) {
+                let phone = subscriberInput.value.trim();
+                if (phone) {
+                    phone = this.normalizePhoneNumber(phone);
+                    const normalizedPhone = normalizePhoneForComparison(phone);
+                    
+                    // Check if this new subscriber already exists
+                    if (allExistingPhones.has(normalizedPhone)) {
+                        duplicateNewSubscribers.push(phone);
+                    } else {
+                        // Also check against other new subscribers in the same form to prevent duplicates within the form
+                        allExistingPhones.add(normalizedPhone);
+                    }
+                }
+            } else if (subscriberInput && originalPhone) {
+                // For existing subscribers being edited, add their normalized phone to the set
+                let phone = subscriberInput.value.trim();
+                if (phone) {
+                    phone = this.normalizePhoneNumber(phone);
+                    const normalizedPhone = normalizePhoneForComparison(phone);
+                    allExistingPhones.add(normalizedPhone);
+                }
+            }
+        });
+        
+        if (duplicateNewSubscribers.length > 0) {
+            alert(`Cannot add subscribers - the following numbers already exist for this admin:\n\n${duplicateNewSubscribers.join('\n')}\n\nPlease remove the duplicate subscriber numbers and try again.`);
+            this.isSubmittingEditForm = false;
+            this.hidePageLoading();
+            if (submitButton) {
+                submitButton.disabled = false;
+                submitButton.textContent = originalButtonText;
+            }
+            return;
+        }
+        
         // Collect data from form
         items.forEach((item) => {
             const subscriberInput = item.querySelector('input[name*="subscriber"]');
@@ -667,11 +758,28 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
         // Process additions
         for (const addition of additions) {
             try {
-                await window.AlfaAPIService.addSubscriber(adminId, addition.phone, addition.quota);
+                console.log(`🔄 [Edit Subscriber] Adding subscriber ${addition.phone} with quota ${addition.quota}...`);
+                const result = await window.AlfaAPIService.addSubscriber(adminId, addition.phone, addition.quota);
+                
+                // CRITICAL: Verify result - if API call succeeded (no exception), it means success
+                // The API throws an error if result.success is false, so if we reach here, it's success
+                console.log(`✅ [Edit Subscriber] Successfully added subscriber ${addition.phone}`, result);
                 results.additions.push({ phone: addition.phone, success: true });
             } catch (error) {
-                console.error(`❌ Failed to add subscriber ${addition.phone}:`, error);
-                results.additions.push({ phone: addition.phone, success: false, error: error.message });
+                // CRITICAL: Log full error details for debugging
+                console.error(`❌ [Edit Subscriber] Error adding subscriber ${addition.phone}:`, {
+                    message: error.message,
+                    error: error,
+                    stack: error.stack
+                });
+                
+                // Mark as failure only if we got a clear error
+                const errorMessage = error.message || String(error);
+                results.additions.push({ 
+                    phone: addition.phone, 
+                    success: false, 
+                    error: errorMessage || 'Unknown error' 
+                });
             }
         }
         
@@ -708,75 +816,98 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
             results.updates.every(r => r.success) &&
             results.removals.every(r => r.success);
         
-        if (allSuccess) {
-            // Check if there are any additions (new subscribers added)
-            const hasAdditions = results.additions.length > 0 && results.additions.some(r => r.success);
-            
-            if (hasAdditions) {
-                // Subscribers were added - generate and display success messages for each addition (same as add subscriber page)
-                const successMessages = [];
-                results.additions.forEach(result => {
-                    if (result.success) {
-                        const additionItem = additions.find(a => a.phone === result.phone);
-                        if (additionItem && subscriber) {
-                            const adminPhone = subscriber.phone || '';
-                            const quota = additionItem.quota !== undefined && additionItem.quota !== null ? additionItem.quota : 0;
-                            const message = `Send ${adminPhone} to 1323 (${quota} GB)`;
-                            successMessages.push(message);
-                        }
+        // Determine operation types (used in multiple places)
+        const hasAdditions = results.additions.length > 0 && results.additions.some(r => r.success);
+        const hasRemovals = results.removals.length > 0 && results.removals.some(r => r.success);
+        const hasUpdates = results.updates.length > 0 && results.updates.some(r => r.success);
+        const hasRemovalsOrUpdates = hasRemovals || hasUpdates;
+        const hasFailedAdditions = results.additions.some(r => !r.success);
+        
+        // Debug logging
+        console.log('📊 [Edit Subscriber] Operation results:', {
+            allSuccess,
+            hasAdditions,
+            hasFailedAdditions,
+            additions: results.additions.map(r => ({ phone: r.phone, success: r.success, error: r.error })),
+            updates: results.updates.map(r => ({ phone: r.phone, success: r.success })),
+            removals: results.removals.map(r => ({ phone: r.phone, success: r.success }))
+        });
+        
+        // CRITICAL: If we have successful additions, always show success messages first
+        // Even if some operations failed, we should acknowledge the successful ones
+        if (hasAdditions) {
+            // Subscribers were added - generate and display success messages for each successful addition
+            const successMessages = [];
+            results.additions.forEach(result => {
+                if (result.success) {
+                    const additionItem = additions.find(a => a.phone === result.phone);
+                    if (additionItem && subscriber) {
+                        const adminPhone = subscriber.phone || '';
+                        const quota = additionItem.quota !== undefined && additionItem.quota !== null ? additionItem.quota : 0;
+                        const message = `Send ${adminPhone} to 1323 (${quota} GB)`;
+                        successMessages.push(message);
                     }
-                });
-                
-                // Display all success messages (each on a separate line with copy button)
-                if (successMessages.length > 0) {
-                    this.displayMessages(successMessages, 'success');
-                    // Also copy first message to clipboard (for backward compatibility)
-                    this.copyToClipboard(successMessages[0]).catch(() => {});
                 }
-                
-                // Show toast notification (ensure it's always shown)
-                if (typeof window !== 'undefined' && window.notification) {
-                    window.notification.set({ delay: 3000 });
-                    window.notification.success('Subscriber added successfully!');
-                } else if (typeof notification !== 'undefined') {
-                    notification.set({ delay: 3000 });
-                    notification.success('Subscriber added successfully!');
+            });
+            
+            // Display all success messages (each on a separate line with copy button)
+            if (successMessages.length > 0) {
+                this.displayMessages(successMessages, 'success');
+                // Also copy first message to clipboard (for backward compatibility)
+                this.copyToClipboard(successMessages[0]).catch(() => {});
+            }
+            
+            // Show toast notification for successful additions
+            if (typeof window !== 'undefined' && window.notification) {
+                window.notification.set({ delay: 3000 });
+                window.notification.success('Subscriber added successfully!');
+            } else if (typeof notification !== 'undefined') {
+                notification.set({ delay: 3000 });
+                notification.success('Subscriber added successfully!');
+            }
+        }
+        
+        if (allSuccess) {
+            // All operations succeeded - success messages already shown above if hasAdditions
+            // Only handle removals/updates here
+            if (!hasAdditions) {
+                // No additions - only removals/updates - wait for refresh then redirect
+                // Show toast notification based on operation type
+                if (hasRemovals) {
+                    // Show removal success toast
+                    if (typeof window !== 'undefined' && window.notification) {
+                        window.notification.set({ delay: 3000 });
+                        window.notification.success('Subscriber removed successfully!');
+                    } else if (typeof notification !== 'undefined') {
+                        notification.set({ delay: 3000 });
+                        notification.success('Subscriber removed successfully!');
+                    } else {
+                        alert(`✅ Successfully removed ${results.removals.length} subscriber(s)!`);
+                    }
                 } else {
-                    // Fallback to alert if notification system not available
-                    const messages = [];
-                    if (results.additions.length > 0) messages.push(`Added ${results.additions.length} subscriber(s)`);
-                    if (results.updates.length > 0) messages.push(`Updated ${results.updates.length} subscriber(s)`);
-                    if (results.removals.length > 0) messages.push(`Removed ${results.removals.length} subscriber(s)`);
-                    alert(`✅ Successfully ${messages.join(', ')}!`);
+                    // Updates only
+                    if (typeof window !== 'undefined' && window.notification) {
+                        window.notification.set({ delay: 3000 });
+                        window.notification.success('Subscriber updated successfully!');
+                    } else if (typeof notification !== 'undefined') {
+                        notification.set({ delay: 3000 });
+                        notification.success('Subscriber updated successfully!');
+                    } else {
+                        alert(`✅ Successfully updated ${results.updates.length} subscriber(s)!`);
+                    }
                 }
                 
-                // Don't redirect - let user stay on the page to copy messages and leave manually
-                // User can navigate away using the close button or breadcrumbs when ready
-            } else {
-                // No additions - only removals/updates - redirect to insights page after refresh completes
-                // (refresh happens below, redirect will be handled after refresh completes)
-                // Show toast notification
-                if (typeof window !== 'undefined' && window.notification) {
-                    window.notification.set({ delay: 3000 });
-                    window.notification.success('Operation succeeded');
-                } else if (typeof notification !== 'undefined') {
-                    notification.set({ delay: 3000 });
-                    notification.success('Operation succeeded');
-                } else {
-                    const messages = [];
-                    if (results.updates.length > 0) messages.push(`Updated ${results.updates.length} subscriber(s)`);
-                    if (results.removals.length > 0) messages.push(`Removed ${results.removals.length} subscriber(s)`);
-                    alert(`✅ Successfully ${messages.join(', ')}!`);
-                }
+                // Note: Refresh will happen below, and redirect will happen after refresh completes
             }
         } else {
             // Some operations failed
-            const hasFailedAdditions = results.additions.some(r => !r.success);
+            // Note: If hasAdditions is true, success messages were already shown above
             const hasFailedRemovals = results.removals.some(r => !r.success);
             const hasFailedUpdates = results.updates.some(r => !r.success);
             
-            // Only show cancel message if ADDITION operations failed (not for removals or updates)
-            if (hasFailedAdditions) {
+            // Only show cancel message if ADDITION operations failed AND we don't have successful additions
+            // If we have successful additions, they were already shown above, so only show error for failed ones
+            if (hasFailedAdditions && !hasAdditions) {
                 const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;
                 await this.copyToClipboard(cancelMessage);
                 
@@ -820,60 +951,89 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
             }
         }
         
-        // Refresh admin after successful operations (wait for it to complete before hiding loading)
-        const hasSuccessfulOperations = 
-            (results.removals.length > 0 && results.removals.some(r => r.success)) ||
-            (results.additions.length > 0 && results.additions.some(r => r.success)) ||
-            (results.updates.length > 0 && results.updates.some(r => r.success));
+        // Refresh admin after successful operations
+        // For additions: wait for refresh to complete (user stays on page)
+        // For removals/updates: wait for refresh to complete, then redirect (ensures insights page shows updated data)
+        const hasSuccessfulOperations = hasRemovals || hasAdditions || hasUpdates;
         
-        const shouldRedirect = !results.additions.some(r => r.success); // Redirect if no additions (only removals/updates)
+        console.log('🔄 [Edit Subscriber] Refresh check:', {
+            hasSuccessfulOperations,
+            hasRemovals,
+            hasAdditions,
+            hasUpdates,
+            hasRemovalsOrUpdates,
+            alfaAPIServiceAvailable: !!window.AlfaAPIService,
+            adminId
+        });
         
         if (hasSuccessfulOperations && window.AlfaAPIService) {
             try {
                 // Update loading message to indicate refresh is in progress
                 this.showPageLoading('Refreshing admin data...');
+                console.log('🔄 [Edit Subscriber] Starting admin refresh...');
                 
-                // Wait for refresh to complete before hiding loading
+                // Wait for refresh to complete before hiding loading or redirecting
                 await window.AlfaAPIService.refreshAdmin(adminId);
-                console.log('✅ Admin refresh completed successfully');
+                console.log('✅ [Edit Subscriber] Admin refresh completed successfully');
                 
-                // If no additions, redirect to insights page after refresh completes
-                if (shouldRedirect) {
+                // For removals/updates: redirect to insights page after refresh completes
+                // This ensures the insights page shows the updated data
+                if (hasRemovalsOrUpdates && !hasAdditions) {
+                    console.log('🔄 [Edit Subscriber] Redirecting to insights page after refresh...');
+                    // Reset flag before redirect (page will change anyway)
+                    this.isSubmittingEditForm = false;
                     setTimeout(() => {
                         window.location.href = '/pages/insights.html';
                     }, 500);
                     return; // Exit early since we're redirecting (don't hide loading - page will change)
                 }
             } catch (error) {
-                console.error('⚠️ Error during admin refresh:', error);
+                console.error('⚠️ [Edit Subscriber] Error during admin refresh:', error);
                 // Don't fail the whole operation if refresh fails - operations already succeeded
                 // Still redirect if needed even if refresh fails
-                if (shouldRedirect) {
+                if (hasRemovalsOrUpdates && !hasAdditions) {
+                    console.log('🔄 [Edit Subscriber] Redirecting to insights page (refresh failed but operations succeeded)...');
+                    // Reset flag before redirect (page will change anyway)
+                    this.isSubmittingEditForm = false;
                     setTimeout(() => {
                         window.location.href = '/pages/insights.html';
                     }, 500);
                     return; // Exit early since we're redirecting
                 }
             }
-        } else if (shouldRedirect) {
-            // No successful operations but should redirect (shouldn't happen, but handle it)
-            setTimeout(() => {
-                window.location.href = '/pages/insights.html';
-            }, 1000);
-            return; // Exit early since we're redirecting
+        } else {
+            console.warn('⚠️ [Edit Subscriber] Refresh skipped:', {
+                hasSuccessfulOperations,
+                alfaAPIServiceAvailable: !!window.AlfaAPIService
+            });
+            
+            // If we have removals/updates but refresh didn't happen, still redirect
+            if (hasRemovalsOrUpdates && !hasAdditions) {
+                console.log('🔄 [Edit Subscriber] Redirecting to insights page (no refresh needed or available)...');
+                // Reset flag before redirect (page will change anyway)
+                this.isSubmittingEditForm = false;
+                setTimeout(() => {
+                    window.location.href = '/pages/insights.html';
+                }, 1000);
+                return; // Exit early since we're redirecting
+            }
         }
         
     } catch (error) {
         console.error('❌ Error calling API:', error);
         alert('Error updating subscribers: ' + (error.message || 'Please try again.'));
     } finally {
-        this.isSubmittingEditForm = false;
-        this.hidePageLoading();
-        
-        // Re-enable submit button
-        if (submitButton) {
-            submitButton.disabled = false;
-            submitButton.textContent = originalButtonText;
+        // Always reset flag and cleanup (except if we already reset it before redirect)
+        // The redirect checks above already reset the flag, so this is a safety net
+        if (this.isSubmittingEditForm) {
+            this.isSubmittingEditForm = false;
+            this.hidePageLoading();
+            
+            // Re-enable submit button
+            if (submitButton) {
+                submitButton.disabled = false;
+                submitButton.textContent = originalButtonText;
+            }
         }
     }
 };

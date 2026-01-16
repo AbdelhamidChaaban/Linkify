@@ -304,6 +304,98 @@ AddSubscriberPageManager.prototype.handleAddSubscribersSubmit = async function()
             return;
         }
         
+        // Check for duplicate subscriber numbers within the form itself first
+        const normalizePhoneForComparison = (phone) => {
+            return (phone || '').replace(/^961/, '').replace(/^0+/, '').replace(/\D/g, '');
+        };
+        
+        const phonesInForm = new Set();
+        const duplicatesInForm = [];
+        for (const item of items) {
+            const normalizedPhone = normalizePhoneForComparison(this.normalizePhoneNumber(item.subscriber));
+            if (phonesInForm.has(normalizedPhone)) {
+                duplicatesInForm.push(item.subscriber);
+            } else {
+                phonesInForm.add(normalizedPhone);
+            }
+        }
+        
+        if (duplicatesInForm.length > 0) {
+            alert(`Cannot add subscribers - the following numbers appear multiple times in the form:\n\n${duplicatesInForm.join('\n')}\n\nPlease remove the duplicate subscriber numbers and try again.`);
+            this.isSubmittingAddForm = false;
+            this.hidePageLoading();
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalButtonText;
+            }
+            return;
+        }
+        
+        // Check for duplicate subscriber numbers across all admins
+        const duplicateSubscribers = [];
+        for (const item of items) {
+            const normalizedPhone = normalizePhoneForComparison(this.normalizePhoneNumber(item.subscriber));
+            
+            // Check all admins for this subscriber number
+            for (const admin of this.subscribers || []) {
+                const adminData = admin.alfaData || {};
+                
+                // Check active subscribers (status = "Active" or no status)
+                const activeSubscribers = adminData.secondarySubscribers || [];
+                let existsInActive = false;
+                let existsInRequested = false;
+                
+                activeSubscribers.forEach(sub => {
+                    const subPhone = (sub.phoneNumber || '').replace(/^961/, '').replace(/^0+/, '') || sub.phoneNumber || '';
+                    const normalizedSubPhone = normalizePhoneForComparison(subPhone);
+                    if (normalizedSubPhone === normalizedPhone) {
+                        const status = (sub.status || '').toLowerCase();
+                        if (status === 'active' || !status) {
+                            existsInActive = true;
+                        } else if (status === 'requested') {
+                            existsInRequested = true;
+                        }
+                    }
+                });
+                
+                // Check pending subscribers in pendingSubscribers array
+                const pendingSubscribers = admin.pendingSubscribers || [];
+                const existsInPendingArray = pendingSubscribers.some(sub => {
+                    const subPhone = (sub.phoneNumber || sub.phone || '').replace(/^961/, '').replace(/^0+/, '') || (sub.phoneNumber || sub.phone) || '';
+                    const normalizedSubPhone = normalizePhoneForComparison(subPhone);
+                    return normalizedSubPhone === normalizedPhone;
+                });
+                
+                if (existsInActive || existsInRequested || existsInPendingArray) {
+                    const adminName = admin.name || 'Unknown Admin';
+                    let status = 'active';
+                    if (existsInRequested || existsInPendingArray) {
+                        status = 'pending';
+                    }
+                    duplicateSubscribers.push({
+                        phone: item.subscriber,
+                        adminName: adminName,
+                        status: status
+                    });
+                    break; // Found duplicate, no need to check other admins
+                }
+            }
+        }
+        
+        if (duplicateSubscribers.length > 0) {
+            const duplicateList = duplicateSubscribers.map(d => 
+                `${d.phone} (exists in ${d.adminName} as ${d.status})`
+            ).join('\n');
+            alert(`Cannot add subscribers - the following numbers already exist:\n\n${duplicateList}\n\nPlease remove the duplicate subscriber numbers and try again.`);
+            this.isSubmittingAddForm = false;
+            this.hidePageLoading();
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalButtonText;
+            }
+            return;
+        }
+        
         console.log('Submitting subscribers:', items);
         
         // Call API for each subscriber

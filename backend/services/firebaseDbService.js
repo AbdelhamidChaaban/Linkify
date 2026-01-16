@@ -503,6 +503,13 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       updatedAt: currentData.updatedAt
     };
     
+    // Preserve accessDenied flag from alfaData if it exists
+    if (cleanDashboardData.accessDenied !== undefined) {
+      preservedFields.accessDenied = cleanDashboardData.accessDenied;
+    } else if (currentData.alfaData && currentData.alfaData.accessDenied !== undefined) {
+      preservedFields.accessDenied = currentData.alfaData.accessDenied;
+    }
+    
     // Remove undefined values from preservedFields and currentData before merging
     const cleanPreservedFields = removeUndefined(preservedFields);
     const cleanCurrentData = removeUndefined(currentData || {});
@@ -523,13 +530,42 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     const { removedActiveSubscribers: _, removedSubscribers: __, pendingSubscribers: ___, _lastRemovedCleanupDate: ____, ...cleanCurrentDataWithoutPreserved } = cleanCurrentData;
     
     // CRITICAL: Only save if primaryData exists (prevents admins becoming inactive)
+    // EXCEPTION: Access Denied admins can be saved even without fresh primaryData (they keep cached primaryData to stay active)
     const hasPrimaryData = cleanDashboardData.primaryData && 
                           typeof cleanDashboardData.primaryData === 'object' && 
                           Object.keys(cleanDashboardData.primaryData).length > 0;
+    const isAccessDenied = cleanDashboardData.accessDenied === true || preservedFields.accessDenied === true;
     
-    if (!hasPrimaryData) {
+    // For access denied admins, restore primaryData from current admin data if missing
+    if (isAccessDenied && !hasPrimaryData && currentData && currentData.alfaData && currentData.alfaData.primaryData) {
+      cleanDashboardData.primaryData = currentData.alfaData.primaryData;
+      console.log(`🚫 [${adminId}] ACCESS DENIED: Restored primaryData from current Firebase data to keep admin active`);
+    }
+    
+    // Re-check after potential restoration
+    const finalHasPrimaryData = cleanDashboardData.primaryData && 
+                                typeof cleanDashboardData.primaryData === 'object' && 
+                                Object.keys(cleanDashboardData.primaryData).length > 0;
+    
+    if (!finalHasPrimaryData && !isAccessDenied) {
       console.warn(`⚠️ Skipping Firebase save for ${adminId} - primaryData missing (would mark admin inactive)`);
       return; // Don't save incomplete data
+    }
+    
+    if (isAccessDenied && !finalHasPrimaryData) {
+      console.log(`🚫 [${adminId}] ACCESS DENIED: Saving admin with accessDenied flag despite missing primaryData (will keep existing primaryData from Firebase)`);
+    }
+    
+    // For access denied admins without primaryData, ensure we preserve it from currentData
+    let finalAlfaData = {
+      ...cleanDashboardData,
+      accessDenied: preservedFields.accessDenied || cleanDashboardData.accessDenied || false // Ensure accessDenied is in alfaData
+    };
+    
+    // CRITICAL: If access denied and no primaryData, preserve it from current admin data
+    if (isAccessDenied && !finalAlfaData.primaryData && currentData && currentData.alfaData && currentData.alfaData.primaryData) {
+      finalAlfaData.primaryData = currentData.alfaData.primaryData;
+      console.log(`🚫 [${adminId}] ACCESS DENIED: Preserving primaryData from current Firebase data in final save`);
     }
     
     // Update document
@@ -537,7 +573,7 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       await userDocRef.set({
         ...cleanCurrentDataWithoutPreserved, // Include all other current data first
         ...cleanPreservedFields, // Then apply preserved fields (these take precedence)
-        alfaData: cleanDashboardData,
+        alfaData: finalAlfaData,
         alfaDataFetchedAt: new Date().toISOString(),
         lastDataFetch: new Date().toISOString()
       }, { merge: false });

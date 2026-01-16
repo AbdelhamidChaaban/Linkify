@@ -995,10 +995,22 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
                     const finalHasExpiry = apiData.expiry !== null && apiData.expiry !== undefined;
                     const finalHasUshare = apiData.ushare && apiData.ushare.totalCount !== undefined;
                     
+                    // Check if login succeeded but all APIs still return 401 (Access Denied case)
+                    const finalApiErrors = apiData?._apiErrors || {};
+                    const allStillUnauthorized = finalApiErrors.consumption === 'Unauthorized' && 
+                                               finalApiErrors.services === 'Unauthorized' && 
+                                               finalApiErrors.expiry === 'Unauthorized';
+                    
                     if (finalHasConsumption || finalHasServices || finalHasExpiry || finalHasUshare) {
                         console.log(`✅ [${userId}] Login completed, sources succeeded (${refreshDuration}ms)`);
                     } else {
-                        console.log(`⚠️ [${userId}] Login completed but sources still failed (${refreshDuration}ms)`);
+                        if (allStillUnauthorized && loginPerformed) {
+                            console.log(`🚫 [${userId}] ACCESS DENIED: Login succeeded but all APIs still return 401 - Alfa system problem detected`);
+                            // Mark for access denied (will be set in dashboardData below)
+                            apiData._accessDenied = true;
+                        } else {
+                            console.log(`⚠️ [${userId}] Login completed but sources still failed (${refreshDuration}ms)`);
+                        }
                     }
                     
                     // Release lock quickly
@@ -2027,12 +2039,48 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         }
         
         // FINAL CHECK: Ensure primaryData exists - if not, admin will become inactive
+        // EXCEPTION: If access denied, preserve primaryData from cache or Firebase to keep admin active
+        const isAccessDenied = apiData && apiData._accessDenied === true;
+        
         if (!dashboardData.primaryData) {
-            console.error(`❌ [${userId}] CRITICAL WARNING: primaryData is missing - admin will be marked inactive!`);
-            console.error(`   Available fields: ${Object.keys(dashboardData).join(', ')}`);
-            console.error(`   Cached data exists: ${!!cachedData}`);
-            console.error(`   Cached data fields: ${cachedData && cachedData.data ? Object.keys(cachedData.data).join(', ') : 'none'}`);
+            if (isAccessDenied) {
+                // ACCESS DENIED CASE: Try to preserve primaryData from cache first
+                if (cachedData && cachedData.data && cachedData.data.primaryData) {
+                    dashboardData.primaryData = cachedData.data.primaryData;
+                    dashboardData.accessDenied = true;
+                    console.log(`🚫 [${userId}] ACCESS DENIED: Preserved primaryData from cache to keep admin active (Alfa system problem)`);
+                } else {
+                    // No cache - try to get primaryData from Firebase (current admin data)
+                    try {
+                        console.log(`🚫 [${userId}] ACCESS DENIED: No cached primaryData, fetching from Firebase...`);
+                        const currentAdminData = await getFullAdminData(adminId);
+                        if (currentAdminData && currentAdminData.alfaData && currentAdminData.alfaData.primaryData) {
+                            dashboardData.primaryData = currentAdminData.alfaData.primaryData;
+                            dashboardData.accessDenied = true;
+                            console.log(`🚫 [${userId}] ACCESS DENIED: Restored primaryData from Firebase to keep admin active (Alfa system problem)`);
+                        } else {
+                            // Still no primaryData - but we'll still save with accessDenied flag
+                            dashboardData.accessDenied = true;
+                            console.log(`🚫 [${userId}] ACCESS DENIED: No primaryData found anywhere, but marking as access denied (will attempt to save)`);
+                        }
+                    } catch (firebaseError) {
+                        console.error(`⚠️ [${userId}] ACCESS DENIED: Error fetching from Firebase: ${firebaseError.message}`);
+                        dashboardData.accessDenied = true;
+                        console.log(`🚫 [${userId}] ACCESS DENIED: Marking as access denied despite Firebase fetch error`);
+                    }
+                }
+            } else {
+                console.error(`❌ [${userId}] CRITICAL WARNING: primaryData is missing - admin will be marked inactive!`);
+                console.error(`   Available fields: ${Object.keys(dashboardData).join(', ')}`);
+                console.error(`   Cached data exists: ${!!cachedData}`);
+                console.error(`   Cached data fields: ${cachedData && cachedData.data ? Object.keys(cachedData.data).join(', ') : 'none'}`);
+            }
         } else {
+            // Set accessDenied flag if detected
+            if (isAccessDenied) {
+                dashboardData.accessDenied = true;
+                console.log(`🚫 [${userId}] ACCESS DENIED: Marking admin with accessDenied flag (Alfa system problem)`);
+            }
             console.log(`✅ [${userId}] primaryData verified: ${typeof dashboardData.primaryData === 'object' ? 'object' : typeof dashboardData.primaryData}`);
         }
 
@@ -2115,20 +2163,26 @@ async function fetchAlfaDataInternal(phone, password, adminId, identifier, backg
         // Step 7: Save to Firebase (non-blocking, fire-and-forget)
         // CRITICAL: Only save to Firebase if we have valid primaryData (prevents admins becoming inactive)
         // For background refreshes, only save if APIs succeeded (don't overwrite good data with bad data)
+        // EXCEPTION: Access Denied case - save to mark admin with accessDenied flag
         const hasValidPrimaryData = dashboardData.primaryData && typeof dashboardData.primaryData === 'object' && Object.keys(dashboardData.primaryData).length > 0;
         const hasApiData = apiData && (apiData.consumption || apiData.services || apiData.expiry);
+        const isAccessDeniedSave = dashboardData.accessDenied === true;
         
         // Determine if we should save to Firebase:
-        // 1. Manual refresh: Always save if primaryData exists (user expects update)
+        // 1. Manual refresh: Always save if primaryData exists OR if accessDenied (user expects update)
         // 2. Background refresh: Only save if APIs succeeded AND primaryData exists (don't overwrite good data with bad)
-        const shouldSaveToFirebase = hasValidPrimaryData && (!background || hasApiData);
+        // 3. Access Denied: Always save to mark admin (even without API data)
+        const shouldSaveToFirebase = (hasValidPrimaryData || isAccessDeniedSave) && (!background || hasApiData || isAccessDeniedSave);
         
         if (!background || shouldSaveToFirebase) {
-            if (!hasValidPrimaryData) {
+            if (!hasValidPrimaryData && !isAccessDeniedSave) {
                 console.warn(`⚠️ [${userId}] Skipping Firebase save - primaryData missing (would mark admin inactive)`);
-            } else if (background && !hasApiData) {
+            } else if (background && !hasApiData && !isAccessDeniedSave) {
                 console.warn(`⚠️ [${userId}] Skipping Firebase save for background refresh - APIs failed (preserving existing good data)`);
             } else {
+                if (isAccessDeniedSave && !hasValidPrimaryData) {
+                    console.log(`🚫 [${userId}] ACCESS DENIED: Saving admin with accessDenied flag (primaryData may be missing but admin stays active)`);
+                }
                 process.nextTick(() => {
                     (async () => {
                         try {

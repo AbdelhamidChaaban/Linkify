@@ -376,10 +376,15 @@ class InsightsManager {
                 // Determine status based on getconsumption API response
                 // RULE 1: Admin is active if ServiceNameValue contains "U-share Main"
                 // RULE 2 (EXCEPTION): Admin is active if ServiceNameValue is "Mobile Internet" AND ValidityDateValue has a valid date
+                // RULE 3 (EXCEPTION): Admin is active if accessDenied === true (Alfa system problem, but admin should stay active)
                 // Otherwise, admin is inactive
                 let status = 'inactive'; // Default to inactive
                 
-                if (hasAlfaData && alfaData.primaryData) {
+                // Check for access denied first - these admins should be active
+                if (hasAlfaData && alfaData.accessDenied === true) {
+                    status = 'active';
+                    console.log(`🚫 [${doc.id}] Marked as active - access denied (Alfa system problem, but keeping admin active)`);
+                } else if (hasAlfaData && alfaData.primaryData) {
                     try {
                         const apiData = alfaData.primaryData;
                         
@@ -425,7 +430,8 @@ class InsightsManager {
                 }
                 
                 // Fallback: Also check apiResponses if primaryData not available
-                if (status === 'inactive' && hasAlfaData && alfaData.apiResponses && Array.isArray(alfaData.apiResponses)) {
+                // Skip if already marked active due to access denied
+                if (status === 'inactive' && hasAlfaData && !alfaData.accessDenied && alfaData.apiResponses && Array.isArray(alfaData.apiResponses)) {
                     const getConsumptionResponse = alfaData.apiResponses.find(resp => 
                         resp.url && resp.url.includes('getconsumption')
                     );
@@ -2463,7 +2469,7 @@ class InsightsManager {
                 </td>
                 <td>
                     <div>
-                        <div class="subscriber-name">${this.escapeHtml(subscriber.name)}</div>
+                        <div class="subscriber-name" ${(subscriber.alfaData && subscriber.alfaData.accessDenied) ? 'style="color: #ef4444;"' : ''}>${this.escapeHtml(subscriber.name)}</div>
                         <div class="subscriber-phone">${this.escapeHtml(subscriber.phone)}</div>
                     </div>
                 </td>

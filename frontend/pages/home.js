@@ -567,7 +567,8 @@ class HomeManager {
                                     document.getElementById('servicesToExpireTodayModal') ||
                                     document.getElementById('finishedServicesModal') ||
                                     document.getElementById('highAdminConsumptionModal') ||
-                                    document.getElementById('inactiveNumbersModal');
+                                    document.getElementById('inactiveNumbersModal') ||
+                                    document.getElementById('accessDeniedNumbersModal');
                 
                 if (recentRefresh && hasOpenModal) {
                     console.log('⏸️ [Home] Skipping modal update - refresh completed recently and modal is open (will update silently when user closes/reopens)');
@@ -678,7 +679,8 @@ class HomeManager {
             this.setCardCount('6', 0); // Finished Services
             this.setCardCount('7', 0); // High Admin Consumption
             this.setCardCount('9', 0); // Inactive Numbers
-            this.setCardCount('12', 0); // Coming Soon
+            this.setCardCount('12', 0); // Waiting Balance
+            this.setCardCount('13', 0); // Access Denied Numbers
             return;
         }
 
@@ -703,6 +705,7 @@ class HomeManager {
         const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
         const requestedServices = this.filterRequestedServices(snapshot);
         const inactiveNumbers = this.filterInactiveNumbers(snapshot);
+        const accessDeniedNumbers = this.filterAccessDeniedNumbers(snapshot);
 
         // Update card counts
         this.setCardCount('1', availableServices.length); // Available Services
@@ -714,6 +717,7 @@ class HomeManager {
         this.setCardCount('7', highAdminConsumption.length); // High Admin Consumption
         this.setCardCount('8', requestedServices.length); // Requested Services
         this.setCardCount('9', inactiveNumbers.length); // Inactive Numbers
+        this.setCardCount('13', accessDeniedNumbers.length); // Access Denied Numbers
         // Waiting Balance count
         const waitingBalanceCount = this.getWaitingBalanceData().length;
         this.setCardCount('12', waitingBalanceCount);
@@ -728,6 +732,7 @@ class HomeManager {
             highAdminConsumption: highAdminConsumption.length,
             requestedServices: requestedServices.length,
             inactiveNumbers: inactiveNumbers.length,
+            accessDeniedNumbers: accessDeniedNumbers.length,
             totalAdmins: this.admins.length
         });
         
@@ -873,6 +878,11 @@ class HomeManager {
         if (inactiveNumbersModal && !inactiveNumbersModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
             this.refreshOpenModal('inactiveNumbers');
         }
+
+        const accessDeniedNumbersModal = document.getElementById('accessDeniedNumbersModal');
+        if (accessDeniedNumbersModal && !accessDeniedNumbersModal.querySelector('.available-services-modal-inner')?.querySelector('.loading-spinner')) {
+            this.refreshOpenModal('accessDeniedNumbers');
+        }
     }
 
     refreshOpenModal(modalType) {
@@ -947,6 +957,16 @@ class HomeManager {
                 } else {
                     const inactiveNumbers = this.filterInactiveNumbers(snapshot);
                     this.showInactiveNumbersModal(inactiveNumbers);
+                }
+                break;
+            case 'accessDeniedNumbers':
+                modalElement = document.getElementById('accessDeniedNumbersModal');
+                if (modalElement) {
+                    const accessDeniedNumbers = this.filterAccessDeniedNumbers(snapshot);
+                    this.updateModalTableContent(modalElement, accessDeniedNumbers, 'accessDeniedNumbers');
+                } else {
+                    const accessDeniedNumbers = this.filterAccessDeniedNumbers(snapshot);
+                    this.showAccessDeniedNumbersModal(accessDeniedNumbers);
                 }
                 break;
         }
@@ -1120,6 +1140,10 @@ class HomeManager {
         // Handle "Waiting Balance" card (card-id="12")
         else if (cardId === '12') {
             this.openWaitingBalanceModal();
+        }
+        // Handle "Access Denied Numbers" card (card-id="13")
+        else if (cardId === '13') {
+            this.openAccessDeniedNumbersModal();
         }
         // Future cards will be handled here
     }
@@ -4382,6 +4406,210 @@ class HomeManager {
         });
     }
 
+    // Access Denied Numbers Modal
+    async openAccessDeniedNumbersModal() {
+        try {
+            // Show loading state
+            this.showLoadingModal();
+
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
+                snapshot = firebaseSnapshot;
+            }
+            
+            // Process and filter admins
+            const accessDeniedNumbers = this.filterAccessDeniedNumbers(snapshot);
+            
+            console.log(`📋 [Home] Found ${accessDeniedNumbers.length} access denied admin(s) for modal`);
+            
+            // Hide loading and show modal with data
+            this.hideLoadingModal();
+            this.showAccessDeniedNumbersModal(accessDeniedNumbers);
+        } catch (error) {
+            console.error('Error opening Access Denied Numbers modal:', error);
+            this.hideLoadingModal();
+            alert('Error loading data: ' + error.message);
+        }
+    }
+
+    filterAccessDeniedNumbers(snapshot) {
+        const accessDeniedNumbers = [];
+        const processedIds = new Set();
+
+        console.log(`🔍 [Home] Filtering access denied numbers from ${snapshot.docs.length} admin(s)`);
+
+        snapshot.docs.forEach(doc => {
+            // CRITICAL: Ensure document has valid ID
+            if (!doc || !doc.id) {
+                console.warn(`⚠️ [Home] Skipping invalid document in filterAccessDeniedNumbers`);
+                return;
+            }
+
+            // CRITICAL: Skip if we've already processed this ID (duplicate check)
+            if (processedIds.has(doc.id)) {
+                console.warn(`⚠️ [Home] Skipping duplicate admin ID: ${doc.id}`);
+                return;
+            }
+            processedIds.add(doc.id);
+
+            const data = doc.data();
+            
+            // CRITICAL: Ensure data exists
+            if (!data) {
+                console.warn(`⚠️ [Home] Skipping admin ${doc.id} - no data`);
+                return;
+            }
+
+            const alfaData = data.alfaData || {};
+            
+            // Check if admin has accessDenied flag (Alfa system problem - login succeeded but all APIs still 401)
+            const isAccessDenied = alfaData.accessDenied === true || data.accessDenied === true;
+            
+            if (isAccessDenied) {
+                console.log(`🚫 [Home] Found access denied admin: ${doc.id} (${data.name || 'N/A'})`);
+                
+                accessDeniedNumbers.push({
+                    id: doc.id,
+                    name: data.name || 'N/A',
+                    phone: data.phone || 'N/A',
+                    alfaData: alfaData
+                });
+            }
+        });
+
+        console.log(`✅ [Home] Filtered ${accessDeniedNumbers.length} access denied admin(s) from ${snapshot.docs.length} total`);
+        return accessDeniedNumbers;
+    }
+
+    showAccessDeniedNumbersModal(numbers) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('accessDeniedNumbersModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // Build table rows
+        let tableRows = '';
+        if (numbers.length === 0) {
+            tableRows = `
+                <tr>
+                    <td colspan="3" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No access denied numbers found
+                    </td>
+                </tr>
+            `;
+        } else {
+            numbers.forEach(number => {
+                tableRows += `
+                    <tr>
+                        <td>
+                            <div>
+                                <div class="subscriber-name">${this.escapeHtml(number.name)}</div>
+                                <div class="subscriber-phone">${this.escapeHtml(number.phone)}</div>
+                            </div>
+                        </td>
+                        <td style="color: #ef4444;">Access denied by Alfa system</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn view-btn" data-subscriber-id="${number.id}" title="View Details">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${number.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        const modal = document.createElement('div');
+        modal.id = 'accessDeniedNumbersModal';
+        modal.className = 'available-services-modal-overlay';
+        modal.innerHTML = `
+            <div class="available-services-modal">
+                <div class="available-services-modal-inner">
+                    <div class="available-services-modal-header">
+                        <h2>Access Denied Numbers</h2>
+                        <button class="modal-close-btn" onclick="this.closest('.available-services-modal-overlay').remove()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="available-services-modal-body">
+                        <div class="table-container">
+                            <table class="available-services-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Details</th>
+                                        <th class="actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Bind view buttons
+        modal.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.viewSubscriberDetails(id, numbers);
+            });
+        });
+
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
+            });
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+    }
+
     // Three-dot menu functions (copied from insights.js)
     toggleMenu(id, button) {
         // Close any existing menus
@@ -5168,6 +5396,50 @@ Object.assign(HomeManager.prototype, {
                         alfaData: alfaData
                     });
                 }
+            });
+            
+            // Sort by validity date: nearest (earliest) to farthest (latest)
+            const parseDDMMYYYY = (dateStr) => {
+                if (!dateStr || dateStr === 'N/A') return null;
+                const parts = String(dateStr).trim().split('/');
+                if (parts.length !== 3) return null;
+                const day = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+                const year = parseInt(parts[2], 10);
+                if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+                const date = new Date(year, month, day);
+                if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) {
+                    return null; // Invalid date
+                }
+                return date;
+            };
+            
+            waitingBalanceData.sort((a, b) => {
+                // Get validity dates
+                let validityDateA = a.alfaData?.validityDate || '';
+                let validityDateB = b.alfaData?.validityDate || '';
+                
+                // If no validity date in alfaData, try to calculate from createdAt
+                if (!validityDateA && a.alfaData) {
+                    // Fallback: use a far future date if no validity date
+                    validityDateA = '';
+                }
+                if (!validityDateB && b.alfaData) {
+                    // Fallback: use a far future date if no validity date
+                    validityDateB = '';
+                }
+                
+                // Parse dates
+                const dateA = parseDDMMYYYY(validityDateA);
+                const dateB = parseDDMMYYYY(validityDateB);
+                
+                // Handle null dates (put them at the end)
+                if (!dateA && !dateB) return 0;
+                if (!dateA) return 1; // A goes to end
+                if (!dateB) return -1; // B goes to end
+                
+                // Sort by date: earlier dates first (nearest validity dates first)
+                return dateA.getTime() - dateB.getTime();
             });
             
             this.hideLoadingModal();
