@@ -753,7 +753,8 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
                 // Don't redirect - let user stay on the page to copy messages and leave manually
                 // User can navigate away using the close button or breadcrumbs when ready
             } else {
-                // No additions - only removals/updates - redirect to insights page immediately
+                // No additions - only removals/updates - redirect to insights page after refresh completes
+                // (refresh happens below, redirect will be handled after refresh completes)
                 // Show toast notification
                 if (typeof window !== 'undefined' && window.notification) {
                     window.notification.set({ delay: 3000 });
@@ -767,11 +768,6 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
                     if (results.removals.length > 0) messages.push(`Removed ${results.removals.length} subscriber(s)`);
                     alert(`✅ Successfully ${messages.join(', ')}!`);
                 }
-                
-                // Redirect to insights page immediately (no additions, so no messages to copy)
-                setTimeout(() => {
-                    window.location.href = '/pages/insights.html';
-                }, 1000);
             }
         } else {
             // Some operations failed
@@ -824,16 +820,47 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
             }
         }
         
-        // Refresh admin in background (non-blocking)
+        // Refresh admin after successful operations (wait for it to complete before hiding loading)
         const hasSuccessfulOperations = 
             (results.removals.length > 0 && results.removals.some(r => r.success)) ||
             (results.additions.length > 0 && results.additions.some(r => r.success)) ||
             (results.updates.length > 0 && results.updates.some(r => r.success));
         
+        const shouldRedirect = !results.additions.some(r => r.success); // Redirect if no additions (only removals/updates)
+        
         if (hasSuccessfulOperations && window.AlfaAPIService) {
-            window.AlfaAPIService.refreshAdmin(adminId).catch(error => {
-                console.error('⚠️ Error during background admin refresh (non-critical):', error);
-            });
+            try {
+                // Update loading message to indicate refresh is in progress
+                this.showPageLoading('Refreshing admin data...');
+                
+                // Wait for refresh to complete before hiding loading
+                await window.AlfaAPIService.refreshAdmin(adminId);
+                console.log('✅ Admin refresh completed successfully');
+                
+                // If no additions, redirect to insights page after refresh completes
+                if (shouldRedirect) {
+                    setTimeout(() => {
+                        window.location.href = '/pages/insights.html';
+                    }, 500);
+                    return; // Exit early since we're redirecting (don't hide loading - page will change)
+                }
+            } catch (error) {
+                console.error('⚠️ Error during admin refresh:', error);
+                // Don't fail the whole operation if refresh fails - operations already succeeded
+                // Still redirect if needed even if refresh fails
+                if (shouldRedirect) {
+                    setTimeout(() => {
+                        window.location.href = '/pages/insights.html';
+                    }, 500);
+                    return; // Exit early since we're redirecting
+                }
+            }
+        } else if (shouldRedirect) {
+            // No successful operations but should redirect (shouldn't happen, but handle it)
+            setTimeout(() => {
+                window.location.href = '/pages/insights.html';
+            }, 1000);
+            return; // Exit early since we're redirecting
         }
         
     } catch (error) {
