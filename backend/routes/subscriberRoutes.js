@@ -352,7 +352,7 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
         
         console.log(`🔍 [Add Subscriber] Detection: hasAlertDanger=${hasAlertDanger}, hasAlertSuccess=${hasAlertSuccess}, hasSubscriberCard=${hasSubscriberCard}`);
         
-        // If alert-danger is found, it's an error
+        // If alert-danger is found, it's definitely an error - return immediately
         if (hasAlertDanger) {
             console.error(`❌ [Add Subscriber] Error detected (alert-danger found)`);
             const adminData = await getAdminData(adminId).catch(() => null);
@@ -360,7 +360,7 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
             return res.status(400).json(createErrorResponse('Operation failed'));
         }
         
-        // Only report success if explicit success markers are found
+        // If explicit success markers are found, return success immediately
         if (hasAlertSuccess || hasSubscriberCard) {
             console.log(`✅ [Add Subscriber] Success detected (explicit markers found)`);
             const { invalidateUshareCache } = require('../services/ushareHtmlParser');
@@ -377,20 +377,19 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
             }));
         }
         
-        // No success markers found - treat as failure
-        console.error(`❌ [Add Subscriber] No success markers found - treating as failure`);
-        const adminData = await getAdminData(adminId).catch(() => null);
-        await logAction(req.userId, adminId, adminData?.name || 'Unknown', adminPhone, 'add', cleanSubscriberNumber, quota, false, 'Operation failed - no success markers found');
+        // No clear success/error markers found - verify by checking if subscriber exists in Ushare HTML
+        // This is important because sometimes Alfa's HTML response doesn't contain clear markers
+        // but the operation actually succeeded (especially for pending subscribers)
+        console.log(`⚠️ [Add Subscriber] No clear success markers found - verifying by checking Ushare HTML...`);
         
-        return res.status(400).json(createErrorResponse('Operation failed'));
-        
-        // For 200 responses without clear indicators, do verification
+        // For 200 responses or redirects without clear indicators, do verification
         const { fetchUshareHtml, invalidateUshareCache } = require('../services/ushareHtmlParser');
         
-        // Only verify for 200 OK (might have error messages)
+        // Verify for both 200 OK and redirects (redirects often indicate success even without clear markers)
         let verifyResult = null;
-        if (response.status === 200) {
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Brief wait
+        if (is200 || isRedirect) {
+            // Brief wait to allow Alfa's system to update
+            await new Promise(resolve => setTimeout(resolve, 1500)); // Slightly longer wait for reliability
             verifyResult = await fetchUshareHtml(adminPhone, cookies, false).catch(() => null);
         }
         
