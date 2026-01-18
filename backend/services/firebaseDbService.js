@@ -280,37 +280,63 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
           
           if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
             const validityDateObj = new Date(year, month, day);
-            validityDateObj.setHours(23, 59, 59, 999); // End of expiration day
+            validityDateObj.setHours(0, 0, 0, 0); // Start of expiration day for comparison
             
             const nowDate = new Date();
             nowDate.setHours(0, 0, 0, 0); // Start of today for comparison
             
             // Check if service expired (validity date is in the past)
+            // If validityDate is Jan 18 and today is Jan 19, then Jan 18 < Jan 19 = TRUE (expired)
+            // If validityDate is Jan 18 and today is Jan 18, then Jan 18 < Jan 18 = FALSE (expires today, not expired yet)
             if (validityDateObj < nowDate) {
               // Service is expired - set serviceExpiredOn to the validity date (date it expired)
+              // Example: Service expires Jan 18, today is Jan 19 → set serviceExpiredOn = "18/01/2024"
               if (!currentData.serviceExpiredOn || currentData.serviceExpiredOn !== cleanDashboardData.validityDate) {
                 currentData.serviceExpiredOn = cleanDashboardData.validityDate;
                 console.log(`📅 [${adminId}] Service expired - set serviceExpiredOn to: ${cleanDashboardData.validityDate}`);
               }
             } else {
-              // Service is active (validity date is in the future) - clear serviceExpiredOn if exists
+              // Service is active (validity date is in the future) - handle serviceExpiredOn cleanup
               // This means the service was renewed
+              
+              // CRITICAL FIX: If serviceExpiredOn doesn't exist but service was just renewed (validityDate is today),
+              // it means the service expired yesterday. Set serviceExpiredOn to yesterday's date.
+              // This handles the edge case where renewal happened before first refresh at 00:00
+              if (!currentData.serviceExpiredOn) {
+                // Check if validityDate is today (meaning it was just renewed today, so it expired yesterday)
+                const validityDateObjCheck = new Date(year, month, day);
+                validityDateObjCheck.setHours(0, 0, 0, 0);
+                
+                // If validityDate is today, then yesterday is the expiration date
+                if (validityDateObjCheck.getTime() === nowDate.getTime()) {
+                  // Calculate yesterday's date
+                  const yesterdayDate = new Date(nowDate);
+                  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+                  const yesterdayDay = String(yesterdayDate.getDate()).padStart(2, '0');
+                  const yesterdayMonth = String(yesterdayDate.getMonth() + 1).padStart(2, '0');
+                  const yesterdayYear = yesterdayDate.getFullYear();
+                  currentData.serviceExpiredOn = `${yesterdayDay}/${yesterdayMonth}/${yesterdayYear}`;
+                  console.log(`📅 [${adminId}] Service renewed today - inferred serviceExpiredOn = ${currentData.serviceExpiredOn} (expired yesterday)`);
+                }
+              }
+              
+              // Clear serviceExpiredOn if exists and we're past cleanup date
               if (currentData.serviceExpiredOn) {
-                console.log(`🔄 [${adminId}] Service renewed (validity: ${cleanDashboardData.validityDate}) - will clear serviceExpiredOn at end of day`);
-                // Don't clear immediately - keep it until the day after expiration ends
+                console.log(`🔄 [${adminId}] Service renewed (validity: ${cleanDashboardData.validityDate}) - will clear serviceExpiredOn after 2 days`);
+                // Don't clear immediately - keep it until 2 days after expiration
                 // This ensures admins stay in "Services Expired Yesterday" table for the entire day after expiration
-                // We'll clear it when the day after expiration has passed
                 const expiredOnParts = currentData.serviceExpiredOn.split('/');
                 if (expiredOnParts.length === 3) {
                   const expiredDay = parseInt(expiredOnParts[0], 10);
                   const expiredMonth = parseInt(expiredOnParts[1], 10) - 1;
                   const expiredYear = parseInt(expiredOnParts[2], 10);
                   const expiredDateObj = new Date(expiredYear, expiredMonth, expiredDay);
-                  expiredDateObj.setDate(expiredDateObj.getDate() + 1); // Day after expiration
-                  expiredDateObj.setHours(0, 0, 0, 0); // Start of day after expiration
+                  expiredDateObj.setDate(expiredDateObj.getDate() + 2); // 2 days after expiration (clear on the day after "yesterday")
+                  expiredDateObj.setHours(0, 0, 0, 0); // Start of 2 days after expiration
                   
-                  // Clear serviceExpiredOn if we're past the day after expiration (i.e., on the day after that)
-                  // Example: expired Jan 15 -> keep until Jan 16 ends -> remove on Jan 17
+                  // Clear serviceExpiredOn if we're past 2 days after expiration
+                  // Example: expired Jan 15 -> keep for Jan 16 (to show in "Services Expired Yesterday" table) -> remove on Jan 17
+                  // This ensures that on Jan 16, serviceExpiredOn="15/01/2024" still exists, matching yesterday (Jan 15)
                   if (nowDate >= expiredDateObj) {
                     currentData.serviceExpiredOn = null;
                     const expiredDateStr = `${expiredDay}/${expiredMonth + 1}/${expiredYear}`;

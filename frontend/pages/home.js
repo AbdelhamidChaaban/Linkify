@@ -3210,6 +3210,13 @@ class HomeManager {
                 return;
             }
             
+            // Skip if serviceExpiredOn exists - this service already expired and should be in "Services Expired Yesterday"
+            // CRITICAL: Services that expired yesterday should NOT appear in "Services to Expire Today"
+            // Example: Service expired Jan 18 (serviceExpiredOn = "18/01/2024"), today is Jan 19 → skip (already expired)
+            if (data.serviceExpiredOn) {
+                return; // This service already expired, don't show in "Services to Expire Today"
+            }
+            
             // Get validity date
             let validityDate = '';
             if (alfaData.validityDate) {
@@ -3224,6 +3231,7 @@ class HomeManager {
             }
 
             // Check if validity date matches today
+            // This shows services that expire TODAY (not yet expired, no serviceExpiredOn set)
             if (validityDate === todayFormatted) {
                 // Parse balance
                 let balance = 0;
