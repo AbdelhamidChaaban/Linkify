@@ -263,8 +263,8 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       };
     }
     
-    // Track when service actually expired (for "Services Expired Yesterday" table)
-    // This persists even after renewal, so admins stay in the table for the entire day after expiration
+    // Track when admin should be shown in "Services Expired Yesterday" table
+    // If validity date matches yesterday, mark it to be shown for the whole day
     if (cleanDashboardData.validityDate && 
         typeof cleanDashboardData.validityDate === 'string' && 
         cleanDashboardData.validityDate.trim() && 
@@ -285,62 +285,38 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
             const nowDate = new Date();
             nowDate.setHours(0, 0, 0, 0); // Start of today for comparison
             
-            // Check if service expired (validity date is in the past)
-            // If validityDate is Jan 18 and today is Jan 19, then Jan 18 < Jan 19 = TRUE (expired)
-            // If validityDate is Jan 18 and today is Jan 18, then Jan 18 < Jan 18 = FALSE (expires today, not expired yet)
-            if (validityDateObj < nowDate) {
-              // Service is expired - set serviceExpiredOn to the validity date (date it expired)
-              // Example: Service expires Jan 18, today is Jan 19 → set serviceExpiredOn = "18/01/2024"
-              if (!currentData.serviceExpiredOn || currentData.serviceExpiredOn !== cleanDashboardData.validityDate) {
-                currentData.serviceExpiredOn = cleanDashboardData.validityDate;
-                console.log(`📅 [${adminId}] Service expired - set serviceExpiredOn to: ${cleanDashboardData.validityDate}`);
-              }
+            // Calculate yesterday's date
+            const yesterdayDate = new Date(nowDate);
+            yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+            
+            // If validity date matches yesterday, set tracking field to today
+            // This ensures the admin stays in the table for the whole day even if validity date changes
+            if (validityDateObj.getTime() === yesterdayDate.getTime()) {
+              const todayDay = String(nowDate.getDate()).padStart(2, '0');
+              const todayMonth = String(nowDate.getMonth() + 1).padStart(2, '0');
+              const todayYear = nowDate.getFullYear();
+              const todayFormatted = `${todayDay}/${todayMonth}/${todayYear}`;
+              currentData._expiredYesterdayShownDate = todayFormatted;
+              console.log(`📅 [${adminId}] Validity date matches yesterday - set _expiredYesterdayShownDate to: ${todayFormatted}`);
             } else {
-              // Service is active (validity date is in the future) - handle serviceExpiredOn cleanup
-              // This means the service was renewed
-              
-              // CRITICAL FIX: If serviceExpiredOn doesn't exist but service was just renewed (validityDate is today),
-              // it means the service expired yesterday. Set serviceExpiredOn to yesterday's date.
-              // This handles the edge case where renewal happened before first refresh at 00:00
-              if (!currentData.serviceExpiredOn) {
-                // Check if validityDate is today (meaning it was just renewed today, so it expired yesterday)
-                const validityDateObjCheck = new Date(year, month, day);
-                validityDateObjCheck.setHours(0, 0, 0, 0);
-                
-                // If validityDate is today, then yesterday is the expiration date
-                if (validityDateObjCheck.getTime() === nowDate.getTime()) {
-                  // Calculate yesterday's date
-                  const yesterdayDate = new Date(nowDate);
-                  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-                  const yesterdayDay = String(yesterdayDate.getDate()).padStart(2, '0');
-                  const yesterdayMonth = String(yesterdayDate.getMonth() + 1).padStart(2, '0');
-                  const yesterdayYear = yesterdayDate.getFullYear();
-                  currentData.serviceExpiredOn = `${yesterdayDay}/${yesterdayMonth}/${yesterdayYear}`;
-                  console.log(`📅 [${adminId}] Service renewed today - inferred serviceExpiredOn = ${currentData.serviceExpiredOn} (expired yesterday)`);
-                }
-              }
-              
-              // Clear serviceExpiredOn if exists and we're past cleanup date
-              if (currentData.serviceExpiredOn) {
-                console.log(`🔄 [${adminId}] Service renewed (validity: ${cleanDashboardData.validityDate}) - will clear serviceExpiredOn after 2 days`);
-                // Don't clear immediately - keep it until 2 days after expiration
-                // This ensures admins stay in "Services Expired Yesterday" table for the entire day after expiration
-                const expiredOnParts = currentData.serviceExpiredOn.split('/');
-                if (expiredOnParts.length === 3) {
-                  const expiredDay = parseInt(expiredOnParts[0], 10);
-                  const expiredMonth = parseInt(expiredOnParts[1], 10) - 1;
-                  const expiredYear = parseInt(expiredOnParts[2], 10);
-                  const expiredDateObj = new Date(expiredYear, expiredMonth, expiredDay);
-                  expiredDateObj.setDate(expiredDateObj.getDate() + 2); // 2 days after expiration (clear on the day after "yesterday")
-                  expiredDateObj.setHours(0, 0, 0, 0); // Start of 2 days after expiration
+              // If validity date no longer matches yesterday, clear the tracking field only if it's from a previous day
+              // If _expiredYesterdayShownDate === today, keep it (persist for the whole day even if validity date changed)
+              // This ensures the admin is removed on a new day, but stays visible throughout today
+              if (currentData._expiredYesterdayShownDate) {
+                const shownDateParts = currentData._expiredYesterdayShownDate.split('/');
+                if (shownDateParts.length === 3) {
+                  const shownDay = parseInt(shownDateParts[0], 10);
+                  const shownMonth = parseInt(shownDateParts[1], 10) - 1;
+                  const shownYear = parseInt(shownDateParts[2], 10);
+                  const shownDateObj = new Date(shownYear, shownMonth, shownDay);
+                  shownDateObj.setHours(0, 0, 0, 0);
                   
-                  // Clear serviceExpiredOn if we're past 2 days after expiration
-                  // Example: expired Jan 15 -> keep for Jan 16 (to show in "Services Expired Yesterday" table) -> remove on Jan 17
-                  // This ensures that on Jan 16, serviceExpiredOn="15/01/2024" still exists, matching yesterday (Jan 15)
-                  if (nowDate >= expiredDateObj) {
-                    currentData.serviceExpiredOn = null;
-                    const expiredDateStr = `${expiredDay}/${expiredMonth + 1}/${expiredYear}`;
-                    console.log(`🗑️ [${adminId}] Cleared serviceExpiredOn (expired on ${expiredDateStr}, now past cleanup date)`);
+                  // Only clear if shownDate is from a previous day (not today)
+                  // If it's today, keep it so admin stays visible for the whole day
+                  if (shownDateObj.getTime() !== nowDate.getTime()) {
+                    const previousDateStr = currentData._expiredYesterdayShownDate;
+                    currentData._expiredYesterdayShownDate = null;
+                    console.log(`🗑️ [${adminId}] Cleared _expiredYesterdayShownDate (from previous day: ${previousDateStr})`);
                   }
                 }
               }
@@ -348,7 +324,7 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
           }
         }
       } catch (error) {
-        console.warn(`⚠️ [${adminId}] Error tracking service expiration:`, error.message);
+        console.warn(`⚠️ [${adminId}] Error tracking expired yesterday date:`, error.message);
       }
     }
     
@@ -524,7 +500,7 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       removedSubscribers: removedSubscribersToSave, // Merged with detected removed subscribers (for backward compatibility)
       removedActiveSubscribers: removedActiveSubscribersToSave, // Merged with detected removed subscribers, cleared if consumption renewed
       _lastRemovedCleanupDate: currentData._lastRemovedCleanupDate || null, // Track when removed subscribers were last cleaned up (prevents duplicate cleanups on same day)
-      serviceExpiredOn: currentData.serviceExpiredOn || null, // Track when service actually expired (for "Services Expired Yesterday" table)
+      _expiredYesterdayShownDate: currentData._expiredYesterdayShownDate || null, // Track when admin was shown in "Services Expired Yesterday" table (for persistence throughout the day)
       createdAt: currentData.createdAt,
       updatedAt: currentData.updatedAt
     };
@@ -553,7 +529,7 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
     
     // CRITICAL: Remove fields from cleanCurrentData that are in preservedFields to prevent overwriting
     // These fields should be set by preservedFields, not by currentData
-    const { removedActiveSubscribers: _, removedSubscribers: __, pendingSubscribers: ___, _lastRemovedCleanupDate: ____, ...cleanCurrentDataWithoutPreserved } = cleanCurrentData;
+    const { removedActiveSubscribers: _, removedSubscribers: __, pendingSubscribers: ___, _lastRemovedCleanupDate: ____, _expiredYesterdayShownDate: _____, ...cleanCurrentDataWithoutPreserved } = cleanCurrentData;
     
     // CRITICAL: Only save if primaryData exists (prevents admins becoming inactive)
     // EXCEPTION: Access Denied admins can be saved even without fresh primaryData (they keep cached primaryData to stay active)
