@@ -199,25 +199,34 @@ async function updateDashboardData(adminId, dashboardData, expectedUserId = null
       // Continue with empty currentData (but we can't validate userId if offline)
     }
     
-    // Track balance history (last 5 successful refreshes)
+    // Track balance history (last 10 different balances from successful refreshes)
     if (balanceBackup && balanceBackup.trim()) {
       let balanceHistory = currentData.balanceHistory || [];
+      const newBalance = String(balanceBackup).trim();
       
-      // Add new balance entry with timestamp
-      const balanceEntry = {
-        balance: String(balanceBackup).trim(),
-        timestamp: Date.now(),
-        date: new Date().toISOString()
-      };
+      // Check if the new balance is different from the last entry (if exists)
+      // Only add if balance has changed (ensures we only store different balances)
+      const lastEntry = balanceHistory[0];
+      const isDifferent = !lastEntry || lastEntry.balance !== newBalance;
       
-      // Add to history (most recent first)
-      balanceHistory.unshift(balanceEntry);
-      
-      // Keep only last 5 entries
-      balanceHistory = balanceHistory.slice(0, 5);
-      
-      // Store in currentData for merging
-      currentData.balanceHistory = balanceHistory;
+      if (isDifferent) {
+        // Add new balance entry with timestamp (only when balance changes)
+        const balanceEntry = {
+          balance: newBalance,
+          timestamp: Date.now(),
+          date: new Date().toISOString()
+        };
+        
+        // Add to history (most recent first)
+        balanceHistory.unshift(balanceEntry);
+        
+        // Keep only last 10 different entries
+        balanceHistory = balanceHistory.slice(0, 10);
+        
+        // Store in currentData for merging
+        currentData.balanceHistory = balanceHistory;
+      }
+      // If balance is the same, don't add a new entry (skip storing duplicate)
     }
     
     // CRITICAL: Store successful dates/expiration with timestamps for fallback on API failure
@@ -952,7 +961,7 @@ async function addRemovedActiveSubscriber(adminId, subscriberData) {
 }
 
 /**
- * Get balance history for an admin (last 5 successful refreshes)
+ * Get balance history for an admin (last 10 different balances)
  * @param {string} adminId - Admin document ID
  * @returns {Promise<Array>} Balance history array
  */
@@ -981,8 +990,8 @@ async function getBalanceHistory(adminId) {
     const data = currentDoc.data();
     const balanceHistory = data.balanceHistory || [];
     
-    // Return last 5 entries (they're already sorted most recent first)
-    return balanceHistory.slice(0, 5);
+    // Return last 10 entries (they're already sorted most recent first)
+    return balanceHistory.slice(0, 10);
   } catch (error) {
     console.warn('⚠️ Could not get balance history:', error.message);
     return [];
