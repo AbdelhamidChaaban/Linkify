@@ -4866,6 +4866,52 @@ class InsightsManager {
             }
             });
             
+            // Check for duplicate subscribers in additions (already exist in admin's active/requested subscribers)
+            // Note: Removed subscribers are allowed to be added again
+            const duplicateErrors = [];
+            const seenInAdditions = new Set(); // Track duplicates within additions array itself
+            
+            additions.forEach(addition => {
+                const normalizedPhone = this.normalizePhoneNumber(addition.phone);
+                
+                // Check for duplicates within the additions array itself
+                if (seenInAdditions.has(normalizedPhone)) {
+                    duplicateErrors.push(addition.phone);
+                    return;
+                }
+                seenInAdditions.add(normalizedPhone);
+                
+                // Check if subscriber exists in active subscribers
+                const existsInActive = originalSubscribers.some(phone => 
+                    this.normalizePhoneNumber(phone) === normalizedPhone
+                );
+                
+                // Check if subscriber exists in pending subscribers
+                const existsInPending = originalPending.some(phone => 
+                    this.normalizePhoneNumber(phone) === normalizedPhone
+                );
+                
+                // Only prevent if subscriber exists in active or pending (removed subscribers are allowed)
+                if (existsInActive || existsInPending) {
+                    duplicateErrors.push(addition.phone);
+                }
+            });
+            
+            // If duplicates found, show error and prevent submission
+            if (duplicateErrors.length > 0) {
+                const errorMessage = duplicateErrors.join('\n');
+                alert(`You can't add same subscriber twice\n\nDuplicate subscribers:\n${errorMessage}`);
+                
+                // Re-enable submit button and reset loading state
+                this.hideEditModalLoading();
+                this.isSubmittingEditForm = false;
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = originalButtonText;
+                }
+                return;
+            }
+            
             // Find removed subscribers (in original but not in form)
             const currentPhones = items
                 .map(item => {
@@ -5072,12 +5118,36 @@ class InsightsManager {
                             // Don't show alert - refresh failure is not critical, UI will update via Firebase listener
                         });
                     } else {
-                        console.warn(`⚠️ No successful operations to trigger refresh (removals: ${results.removals.length}, additions: ${results.additions.length}, updates: ${results.updates.length})`);
+                        // Even if all operations failed, still refresh the admin
+                        console.log(`🔄 Auto-refreshing admin ${adminId} in background after all operations failed...`);
+                        console.log(`   - Failed removals: ${results.removals.filter(r => !r.success).length}/${results.removals.length}`);
+                        console.log(`   - Failed additions: ${results.additions.filter(r => !r.success).length}/${results.additions.length}`);
+                        console.log(`   - Failed updates: ${results.updates.filter(r => !r.success).length}/${results.updates.length}`);
+                        
+                        // Fire-and-forget: Refresh in background - don't await (let it run in background)
+                        // Firebase real-time listener will update UI automatically when refresh completes
+                        this.refreshSubscriber(adminId).catch(error => {
+                            console.error('⚠️ Error during background admin refresh (non-critical):', error);
+                            // Don't show alert - refresh failure is not critical, UI will update via Firebase listener
+                        });
                     }
                 }
             } catch (error) {
                 console.error('❌ Error calling API:', error);
                 alert('Error updating subscribers: ' + (error.message || 'Please try again.'));
+                
+                // Automatically refresh the admin in the background (non-blocking) even on exception
+                // Firebase real-time listeners will automatically update the UI when refresh completes
+                if (adminId) {
+                    console.log(`🔄 Auto-refreshing admin ${adminId} in background after exception...`);
+                    
+                    // Fire-and-forget: Refresh in background - don't await (let it run in background)
+                    // Firebase real-time listener will update UI automatically when refresh completes
+                    this.refreshSubscriber(adminId).catch(error => {
+                        console.error('⚠️ Error during background admin refresh (non-critical):', error);
+                        // Don't show alert - refresh failure is not critical, UI will update via Firebase listener
+                    });
+                }
             }
         } finally {
             // Hide loading animation

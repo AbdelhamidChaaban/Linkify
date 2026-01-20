@@ -333,6 +333,54 @@ AddSubscriberPageManager.prototype.handleAddSubscribersSubmit = async function()
         
         console.log('Submitting subscribers:', items);
         
+        // Check for duplicate subscribers (already exist in admin's subscriber list)
+        const duplicateErrors = [];
+        for (const item of items) {
+            const admin = this.subscribers.find(s => s.id === item.adminId);
+            if (!admin) {
+                continue; // Skip if admin not found (will be caught by other validation)
+            }
+            
+            // Normalize subscriber number for comparison
+            const normalizedSubscriber = this.normalizePhoneNumber(item.subscriber);
+            
+            // Check if subscriber exists in admin's current active/requested subscribers only
+            // Note: Removed subscribers are allowed to be added again
+            const alfaData = admin.alfaData || {};
+            const secondarySubscribers = alfaData.secondarySubscribers || [];
+            
+            // Check in active/requested subscribers only
+            const existsInSecondary = secondarySubscribers.some(sub => {
+                const subPhone = sub.phoneNumber || sub.phone || '';
+                return this.normalizePhoneNumber(subPhone) === normalizedSubscriber;
+            });
+            
+            if (existsInSecondary) {
+                duplicateErrors.push({
+                    subscriber: item.subscriber,
+                    adminName: item.adminName || admin.name || 'Unknown'
+                });
+            }
+        }
+        
+        // If duplicates found, show error and prevent submission
+        if (duplicateErrors.length > 0) {
+            const errorMessage = duplicateErrors.map(err => 
+                `${err.subscriber} (${err.adminName})`
+            ).join('\n');
+            
+            alert(`You can't add same subscriber twice\n\nDuplicate subscribers:\n${errorMessage}`);
+            
+            // Re-enable submit button and reset loading state
+            this.hidePageLoading();
+            this.isSubmittingAddForm = false;
+            if (submitBtn && originalButtonText) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalButtonText;
+            }
+            return;
+        }
+        
         // Call API for each subscriber
         const results = [];
         for (const item of items) {
@@ -456,6 +504,32 @@ AddSubscriberPageManager.prototype.handleAddSubscribersSubmit = async function()
                 alert('Cancel message copied to clipboard automatically');
             }
             
+            // Automatically refresh all selected admins in the background (non-blocking) even on failure
+            // Firebase real-time listeners will automatically update the UI when refresh completes
+            const uniqueAdminIds = [...new Set(items.map(item => item.adminId))];
+            console.log(`🔄 [Add Subscriber] Refreshing ${uniqueAdminIds.length} admin(s) in background after failed subscriber addition...`);
+            
+            if (window.AlfaAPIService) {
+                // Fire-and-forget: Don't await - let it run in background
+                // The Firebase real-time listener will update the UI automatically when data is refreshed
+                Promise.allSettled(
+                    uniqueAdminIds.map(adminId => {
+                        return window.AlfaAPIService.refreshAdmin(adminId).catch(error => {
+                            console.error(`⚠️ [Add Subscriber] Failed to refresh admin ${adminId}:`, error);
+                            // Don't throw - continue with other refreshes
+                            return { success: false, adminId, error: error.message };
+                        });
+                    })
+                ).then(() => {
+                    console.log(`✅ [Add Subscriber] Background admin refresh completed (after failure)`);
+                }).catch(error => {
+                    console.error('⚠️ [Add Subscriber] Error during background admin refresh:', error);
+                    // Not critical - Firebase listener will still update when data changes
+                });
+            } else {
+                console.warn('⚠️ [Add Subscriber] AlfaAPIService not available, skipping admin refresh');
+            }
+            
             // Re-enable submit button and reset loading state
             this.hidePageLoading();
             this.isSubmittingAddForm = false;
@@ -470,6 +544,36 @@ AddSubscriberPageManager.prototype.handleAddSubscribersSubmit = async function()
     } catch (error) {
         console.error('Error adding subscribers:', error);
         alert('Failed to add subscribers. Please try again.');
+        
+        // Automatically refresh all selected admins in the background (non-blocking) even on exception
+        // Firebase real-time listeners will automatically update the UI when refresh completes
+        if (items && items.length > 0) {
+            const uniqueAdminIds = [...new Set(items.map(item => item.adminId))];
+            console.log(`🔄 [Add Subscriber] Refreshing ${uniqueAdminIds.length} admin(s) in background after exception...`);
+            
+            if (window.AlfaAPIService) {
+                // Fire-and-forget: Don't await - let it run in background
+                // The Firebase real-time listener will update the UI automatically when data is refreshed
+                Promise.allSettled(
+                    uniqueAdminIds.map(adminId => {
+                        return window.AlfaAPIService.refreshAdmin(adminId).catch(error => {
+                            console.error(`⚠️ [Add Subscriber] Failed to refresh admin ${adminId}:`, error);
+                            // Don't throw - continue with other refreshes
+                            return { success: false, adminId, error: error.message };
+                        });
+                    })
+                ).then(() => {
+                    console.log(`✅ [Add Subscriber] Background admin refresh completed (after exception)`);
+                }).catch(error => {
+                    console.error('⚠️ [Add Subscriber] Error during background admin refresh:', error);
+                    // Not critical - Firebase listener will still update when data changes
+                });
+            } else {
+                console.warn('⚠️ [Add Subscriber] AlfaAPIService not available, skipping admin refresh');
+            }
+        } else {
+            console.warn('⚠️ [Add Subscriber] No items to refresh (error occurred before items were populated)');
+        }
     } finally {
         // Hide loading animation
         this.hidePageLoading();
