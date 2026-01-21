@@ -771,11 +771,13 @@ app.get('/service-worker.js', (req, res) => {
     });
 });
 
-// Explicitly serve manifest.json with proper headers
+// Explicitly serve manifest.json with proper headers (critical for PWA orientation)
 app.get('/manifest.json', (req, res) => {
     const manifestPath = path.join(frontendPath, 'manifest.json');
     res.setHeader('Content-Type', 'application/manifest+json');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(manifestPath);
 });
 
