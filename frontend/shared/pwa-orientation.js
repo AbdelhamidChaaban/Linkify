@@ -4,6 +4,19 @@
 (function() {
     'use strict';
     
+    // Debug logging (remove in production)
+    console.log('[PWA Orientation] Script loaded');
+    console.log('[PWA Orientation] Current orientation:', window.screen?.orientation?.angle || 'unknown');
+    console.log('[PWA Orientation] Screen dimensions:', window.innerWidth, 'x', window.innerHeight);
+    console.log('[PWA Orientation] Orientation type:', window.screen?.orientation?.type || window.orientation || 'unknown');
+    
+    // Check if manifest is loaded correctly
+    if (navigator.serviceWorker) {
+        navigator.serviceWorker.ready.then(registration => {
+            console.log('[PWA Orientation] Service Worker ready');
+        });
+    }
+    
     // Ensure orientation is unlocked on page load
     function unlockOrientation() {
         if ('screen' in window && 'orientation' in window.screen) {
@@ -11,11 +24,16 @@
             if (window.screen.orientation && typeof window.screen.orientation.unlock === 'function') {
                 try {
                     window.screen.orientation.unlock();
+                    console.log('[PWA Orientation] Orientation unlocked');
                 } catch (e) {
                     // Ignore errors if unlock is not allowed (requires user gesture in some browsers)
-                    console.log('Orientation unlock not available:', e);
+                    console.log('[PWA Orientation] Unlock failed (requires user gesture):', e.message);
                 }
+            } else {
+                console.log('[PWA Orientation] Orientation unlock not available');
             }
+        } else {
+            console.log('[PWA Orientation] Screen orientation API not available');
         }
     }
     
@@ -65,10 +83,19 @@
         }, 300);
     }
     
-    // Listen for orientation changes
-    window.addEventListener('orientationchange', function() {
+    // Listen for orientation changes - multiple methods for compatibility
+    window.addEventListener('orientationchange', function(e) {
+        console.log('[PWA Orientation] orientationchange event fired');
         handleOrientationChange();
     });
+    
+    // Alternative: listen to screen orientation API
+    if (window.screen?.orientation) {
+        window.screen.orientation.addEventListener('change', function(e) {
+            console.log('[PWA Orientation] screen.orientation.change event fired');
+            handleOrientationChange();
+        });
+    }
     
     // Also listen for resize events as fallback (some devices fire resize instead of orientationchange)
     let resizeTimer;
@@ -82,10 +109,13 @@
         // Check if this is likely an orientation change (width/height swap)
         const isOrientationChange = (
             (Math.abs(currentWidth - lastHeight) < 50 && Math.abs(currentHeight - lastWidth) < 50) ||
-            (currentWidth !== lastWidth && currentHeight !== lastHeight)
+            (currentWidth !== lastWidth && currentHeight !== lastHeight && 
+             Math.abs(currentWidth - lastWidth) > 100) // Significant size change
         );
         
         if (isOrientationChange) {
+            console.log('[PWA Orientation] Resize detected as orientation change:', 
+                       lastWidth + 'x' + lastHeight, '->', currentWidth + 'x' + currentHeight);
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(function() {
                 handleOrientationChange();
