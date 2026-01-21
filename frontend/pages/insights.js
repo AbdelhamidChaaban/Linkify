@@ -1643,6 +1643,80 @@ class InsightsManager {
         
         // Initialize table sorting
         this.initTableSorting();
+        
+        // Fix for landscape mode: allow vertical scrolling when touching table
+        this.setupLandscapeTouchHandling();
+    }
+    
+    setupLandscapeTouchHandling() {
+        // Check if we're in landscape mode on mobile
+        const isLandscape = () => {
+            return window.innerWidth > window.innerHeight && window.innerWidth <= 1024;
+        };
+        
+        const table = document.getElementById('subscribersTable');
+        const tableContainer = document.querySelector('.table-container');
+        const tableWrapper = document.querySelector('.table-wrapper');
+        
+        if (!table) return;
+        
+        let touchStartY = 0;
+        let touchStartX = 0;
+        let lastTouchY = 0;
+        let isVerticalGesture = false;
+        let touchTarget = null;
+        
+        const handleTouchStart = (e) => {
+            if (!isLandscape()) return;
+            
+            touchTarget = e.target.closest('.table-container, .table-wrapper, .subscribers-table');
+            if (!touchTarget) return;
+            
+            touchStartY = e.touches[0].clientY;
+            touchStartX = e.touches[0].clientX;
+            lastTouchY = touchStartY;
+            isVerticalGesture = false;
+        };
+        
+        const handleTouchMove = (e) => {
+            if (!isLandscape() || !touchTarget) return;
+            
+            const touchY = e.touches[0].clientY;
+            const touchX = e.touches[0].clientX;
+            const deltaY = touchY - touchStartY;
+            const deltaX = touchX - touchStartX;
+            const incrementalDeltaY = touchY - lastTouchY;
+            
+            // Determine if this is primarily a vertical scroll gesture
+            if (!isVerticalGesture && Math.abs(deltaY) > 10) {
+                isVerticalGesture = Math.abs(deltaY) > Math.abs(deltaX);
+            }
+            
+            // If it's a vertical gesture, scroll the page
+            if (isVerticalGesture) {
+                // Scroll the page/window
+                window.scrollBy(0, incrementalDeltaY);
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            
+            lastTouchY = touchY;
+        };
+        
+        const handleTouchEnd = (e) => {
+            touchTarget = null;
+            isVerticalGesture = false;
+        };
+        
+        // Add touch listeners to table elements with capture phase
+        const elements = [table, tableContainer, tableWrapper].filter(el => el !== null);
+        
+        elements.forEach(element => {
+            element.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true });
+            element.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
+            element.addEventListener('touchend', handleTouchEnd, { passive: true, capture: true });
+            element.addEventListener('touchcancel', handleTouchEnd, { passive: true, capture: true });
+        });
     }
     
     setActiveTab(tab) {

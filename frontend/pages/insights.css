@@ -819,7 +819,7 @@ body.light-mode .page-title {
 }
 
 /* On mobile, card container scrolls with adjusted max-height */
-@media (max-width: 768px) {
+@media (max-width: 768px) and (orientation: portrait) {
     body.insights-page .card-container {
         overflow-y: auto !important;
         overflow-x: hidden !important;
@@ -872,30 +872,33 @@ body.light-mode .page-title {
         pointer-events: auto !important;
     }
 
+    /* CRITICAL: Override base card-container - make it scroll internally */
+    .card-container,
     body.insights-page .card-container {
-        overflow-y: visible !important;
+        overflow-y: auto !important; /* Card scrolls internally */
         overflow-x: auto !important;
         touch-action: pan-y pan-x !important;
-        height: auto !important;
-        max-height: none !important; /* remove clamp so header scrolls with page */
+        height: calc(100vh - 80px) !important; /* Fixed height so it can scroll */
+        max-height: calc(100vh - 80px) !important; /* Override base rule */
+        min-height: 0 !important;
         position: relative !important;
+        display: flex !important;
+        flex-direction: column !important;
+        -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior: auto !important;
     }
     
+    /* Remove scroll contexts from table - let card-container handle all scrolling */
     body.insights-page .table-container {
-        overflow-x: auto !important;
-        overflow-y: visible !important;
-        touch-action: pan-y pan-x !important;
-        min-width: 100% !important;
-        position: relative !important;
+        overflow: visible !important;
+        touch-action: auto !important;
     }
     
     body.insights-page .table-wrapper {
-        overflow-x: auto !important;
-        overflow-y: visible !important;
-        -webkit-overflow-scrolling: touch !important;
-        touch-action: pan-y pan-x !important;
-        width: 100% !important;
-        min-width: max-content !important;
+        overflow: visible !important;
+        touch-action: auto !important;
+        -webkit-overflow-scrolling: auto !important;
+        /* NO scroll context - card-container handles all scrolling */
     }
     
     /* Ensure pagination section is visible and scrollable */
@@ -905,6 +908,157 @@ body.light-mode .page-title {
         position: relative !important;
         flex-shrink: 0 !important;
         overflow: visible !important;
+    }
+    
+    /* Improve readability in landscape - better font sizes and spacing */
+    body.insights-page .subscribers-table th,
+    body.insights-page .subscribers-table td {
+        padding: 0.75rem 0.625rem !important;
+        font-size: 0.875rem !important;
+    }
+    
+    /* Fix name column to allow proper text wrapping */
+    body.insights-page .subscribers-table td:nth-child(2) {
+        min-width: 160px !important;
+        max-width: 200px !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+    }
+    
+    body.insights-page .subscribers-table td:nth-child(2) > div {
+        display: flex !important;
+        flex-direction: column !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+    
+    body.insights-page .subscriber-name {
+        font-size: 0.875rem !important;
+        font-weight: 600 !important;
+        line-height: 1.4 !important;
+        margin-bottom: 0.125rem !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        word-break: break-word !important;
+        overflow-wrap: break-word !important;
+        display: block !important;
+        width: 100% !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+    }
+    
+    body.insights-page .subscriber-phone {
+        font-size: 0.75rem !important;
+        line-height: 1.3 !important;
+        margin-top: 0.25rem !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        display: block !important;
+        width: 100% !important;
+        overflow: visible !important;
+    }
+    
+    body.insights-page .progress-container {
+        gap: 0.375rem !important;
+        min-width: 140px !important;
+    }
+    
+    body.insights-page .progress-bar {
+        height: 10px !important;
+        min-width: 140px !important;
+        border-radius: 5px !important;
+    }
+    
+    body.insights-page .progress-text {
+        font-size: 0.8125rem !important;
+        font-weight: 500 !important;
+        line-height: 1.3 !important;
+    }
+    
+    body.insights-page .subscribers-table td:nth-child(3),
+    body.insights-page .subscribers-table td:nth-child(7) {
+        min-width: 200px !important;
+        max-width: 200px !important;
+        width: 200px !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    
+    /* Clean, consistent layout improvements */
+    body.insights-page .subscribers-table th,
+    body.insights-page .subscribers-table td {
+        padding: 0.875rem 0.75rem !important;
+        vertical-align: middle !important;
+    }
+    
+    /* Table rows - better spacing and visual separation */
+    body.insights-page .subscribers-table tbody tr {
+        border-bottom: 1px solid rgba(58, 10, 78, 0.15) !important;
+        transition: background-color 0.2s ease !important;
+    }
+    
+    body.insights-page .subscribers-table tbody tr:hover {
+        background-color: rgba(58, 10, 78, 0.08) !important;
+    }
+    
+    body:not(.light-mode) .subscribers-table tbody tr {
+        border-bottom: 1px solid rgba(139, 92, 246, 0.15) !important;
+    }
+    
+    body:not(.light-mode) .subscribers-table tbody tr:hover {
+        background-color: rgba(139, 92, 246, 0.1) !important;
+    }
+    
+    /* Progress containers - uniform width and alignment */
+    body.insights-page .progress-container {
+        gap: 0.5rem !important;
+        min-width: 180px !important;
+        max-width: 180px !important;
+        width: 180px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+    }
+    
+    body.insights-page .progress-bar {
+        height: 12px !important;
+        min-width: 180px !important;
+        max-width: 180px !important;
+        width: 180px !important;
+        border-radius: 6px !important;
+        margin: 0 !important;
+    }
+    
+    body.insights-page .progress-text {
+        font-size: 0.8125rem !important;
+        font-weight: 500 !important;
+        line-height: 1.4 !important;
+        margin: 0 !important;
+        white-space: nowrap !important;
+        text-align: left !important;
+    }
+    
+    /* Name column improvements */
+    body.insights-page .subscribers-table td:nth-child(2) {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    
+    body.insights-page .subscribers-table td:nth-child(2) > div {
+        gap: 0.25rem !important;
+    }
+    
+    body.insights-page .subscriber-name {
+        line-height: 1.5 !important;
+        margin: 0 !important;
+    }
+    
+    body.insights-page .subscriber-phone {
+        line-height: 1.4 !important;
+        margin: 0 !important;
+        opacity: 0.8 !important;
     }
 }
 
@@ -925,12 +1079,16 @@ body.light-mode .page-title {
         min-height: calc(100vh - 70px) !important;
     }
 
+    .card-container,
     body.insights-page .card-container {
-        overflow-y: auto !important;
+        overflow-y: visible !important;
         overflow-x: auto !important;
         touch-action: pan-y pan-x !important;
         height: auto !important;
         max-height: none !important;
+        min-height: auto !important;
+        display: flex !important;
+        flex-direction: column !important;
     }
     
     body.insights-page .table-container {
@@ -3972,6 +4130,22 @@ body.light-mode .dense-toggle-text {
         transform: translateZ(0) !important;
         -webkit-transform: translateZ(0) !important;
     }
+    
+    /* Override height constraints in landscape so pagination is visible */
+    @media (orientation: landscape) {
+        body.insights-page .card-container {
+            max-height: none !important;
+            height: auto !important;
+            overflow-y: auto !important;
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+        }
+        
+        body.insights-page .pagination-section {
+            display: flex !important;
+            visibility: visible !important;
+        }
+    }
 
     .page-header-section {
         margin-bottom: 0.75rem;
@@ -4100,11 +4274,63 @@ body.light-mode .dense-toggle-text {
     }
 }
 
-/* Landscape mode fixes for horizontal scrolling */
+/* Landscape mode fixes - use page-level scrolling like actions page */
 @media (max-width: 768px) and (orientation: landscape) {
+    /* Enable page-level scrolling like actions page */
+    html.insights-page,
+    body.insights-page {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        height: auto !important;
+        position: relative !important;
+        min-height: 100vh !important;
+        touch-action: pan-y pan-x !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+    
+    body.insights-page .main-content {
+        height: auto !important;
+        overflow: visible !important;
+        position: relative !important;
+        min-height: calc(100vh - 70px) !important;
+    }
+    
+    body.insights-page .container {
+        overflow: visible !important;
+        height: auto !important;
+    }
+    
+    /* CRITICAL: Override ALL height constraints on card-container - must be more specific than base rule */
+    .card-container,
     body.insights-page .card-container {
         overflow-x: auto !important;
+        overflow-y: visible !important;
         touch-action: pan-y pan-x !important;
+        max-height: none !important;
+        height: auto !important;
+        min-height: auto !important;
+        display: flex !important;
+        flex-direction: column !important;
+        flex: none !important;
+        /* Force height to auto to override any fixed heights */
+    }
+    
+    /* Ensure table container doesn't constrain height */
+    body.insights-page .table-container {
+        flex: 0 0 auto !important;
+    }
+    
+    /* Ensure pagination section is explicitly visible and not clipped */
+    body.insights-page .pagination-section {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        position: relative !important;
+        flex-shrink: 0 !important;
+        flex: 0 0 auto !important;
+        width: 100% !important;
+        min-height: auto !important;
+        height: auto !important;
     }
     
     body.insights-page .table-container {
@@ -4145,6 +4371,8 @@ body.light-mode .dense-toggle-text {
     .pagination-section {
         padding: 0.875rem;
         gap: 0.875rem;
+        display: flex !important;
+        visibility: visible !important;
     }
 
     .pagination-label,
@@ -4181,6 +4409,591 @@ body.light-mode .dense-toggle-text {
     
     .dense-toggle-text {
         font-size: 0.8125rem;
+    }
+}
+
+/* Landscape override for mobile devices only - so pagination is visible */
+@media (orientation: landscape) and (max-width: 1024px) {
+    /* Enable page-level scrolling in landscape on mobile so pagination is visible */
+    html.insights-page,
+    body.insights-page {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        position: relative !important;
+        width: 100% !important;
+        touch-action: pan-y pan-x !important;
+        -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior-y: auto !important;
+        overscroll-behavior-x: auto !important;
+    }
+    
+    body.insights-page .main-content {
+        overflow: visible !important;
+        height: auto !important;
+        min-height: calc(100vh - 70px) !important;
+        position: relative !important;
+        touch-action: pan-y pan-x !important;
+    }
+    
+    body.insights-page .container {
+        overflow: visible !important;
+        height: auto !important;
+        position: relative !important;
+    }
+    
+    /* Card container - expands fully, page scrolls to show pagination */
+    .card-container,
+    body.insights-page .card-container {
+        overflow-y: visible !important; /* No scrolling - expand fully */
+        overflow-x: auto !important; /* Horizontal scrolling for wide tables */
+        max-height: none !important; /* No height constraint */
+        height: auto !important;
+        min-height: auto !important;
+        flex: none !important;
+        position: relative !important;
+        touch-action: pan-y pan-x !important;
+        /* Card-container expands, page scrolls to reveal pagination */
+    }
+    
+    /* Page scrolls - ensure it's scrollable */
+    html.insights-page,
+    body.insights-page {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+    }
+    
+    /* ALL table elements - allow touches to pass through to page */
+    body.insights-page .table-container,
+    body.insights-page .table-wrapper,
+    body.insights-page .subscribers-table,
+    body.insights-page .subscribers-table * {
+        overflow: visible !important;
+        touch-action: pan-y pan-x !important; /* Allow panning - page scrolls */
+        pointer-events: auto !important;
+        /* No scroll context - page handles scrolling */
+    }
+    
+    /* Ensure pagination section is inside scrollable area and visible */
+    body.insights-page .pagination-section {
+        display: flex !important;
+        visibility: visible !important;
+        position: relative !important;
+        flex-shrink: 0 !important;
+        opacity: 1 !important;
+        /* This is inside card-container, so scrolling card-container will reveal it */
+    }
+    
+    /* Clean, consistent layout for landscape mode */
+    body.insights-page .subscribers-table th,
+    body.insights-page .subscribers-table td {
+        padding: 0.875rem 0.75rem !important;
+        font-size: 0.875rem !important;
+        vertical-align: middle !important;
+    }
+    
+    /* Table rows - better spacing and visual separation */
+    body.insights-page .subscribers-table tbody tr {
+        border-bottom: 1px solid rgba(58, 10, 78, 0.15) !important;
+        transition: background-color 0.2s ease !important;
+    }
+    
+    body.insights-page .subscribers-table tbody tr:hover {
+        background-color: rgba(58, 10, 78, 0.08) !important;
+    }
+    
+    body:not(.light-mode) .subscribers-table tbody tr {
+        border-bottom: 1px solid rgba(139, 92, 246, 0.15) !important;
+    }
+    
+    body:not(.light-mode) .subscribers-table tbody tr:hover {
+        background-color: rgba(139, 92, 246, 0.1) !important;
+    }
+    
+    /* Fix name column to allow proper text wrapping */
+    body.insights-page .subscribers-table td:nth-child(2) {
+        min-width: 160px !important;
+        max-width: 200px !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+    }
+    
+    body.insights-page .subscribers-table td:nth-child(2) > div {
+        display: flex !important;
+        flex-direction: column !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+    
+    body.insights-page .subscriber-name {
+        font-size: 0.875rem !important;
+        font-weight: 600 !important;
+        line-height: 1.4 !important;
+        margin-bottom: 0.125rem !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        word-break: break-word !important;
+        overflow-wrap: break-word !important;
+        display: block !important;
+        width: 100% !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+    }
+    
+    body.insights-page .subscriber-phone {
+        font-size: 0.75rem !important;
+        line-height: 1.3 !important;
+        margin-top: 0.25rem !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        display: block !important;
+        width: 100% !important;
+        overflow: visible !important;
+    }
+    
+    /* Progress containers - uniform width and alignment */
+    body.insights-page .progress-container {
+        gap: 0.5rem !important;
+        min-width: 180px !important;
+        max-width: 180px !important;
+        width: 180px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+    }
+    
+    body.insights-page .progress-bar {
+        height: 12px !important;
+        min-width: 180px !important;
+        max-width: 180px !important;
+        width: 180px !important;
+        border-radius: 6px !important;
+        margin: 0 !important;
+    }
+    
+    body.insights-page .progress-text {
+        font-size: 0.8125rem !important;
+        font-weight: 500 !important;
+        line-height: 1.4 !important;
+        margin: 0 !important;
+        white-space: nowrap !important;
+        text-align: left !important;
+    }
+    
+    /* Progress columns - consistent width */
+    body.insights-page .subscribers-table td:nth-child(3),
+    body.insights-page .subscribers-table td:nth-child(7) {
+        min-width: 200px !important;
+        max-width: 200px !important;
+        width: 200px !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    
+    /* Name column improvements */
+    body.insights-page .subscribers-table td:nth-child(2) {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    
+    body.insights-page .subscribers-table td:nth-child(2) > div {
+        gap: 0.25rem !important;
+    }
+    
+    body.insights-page .subscriber-name {
+        line-height: 1.5 !important;
+        margin: 0 !important;
+    }
+    
+    body.insights-page .subscriber-phone {
+        line-height: 1.4 !important;
+        margin: 0 !important;
+        opacity: 0.8 !important;
+    }
+}
+
+/* Specific fix for landscape mobile - stabilize layout and alignment */
+/* This must be the most specific rule for mobile landscape */
+@media screen and (max-width: 768px) and (orientation: landscape),
+       screen and (max-height: 600px) and (orientation: landscape) and (max-width: 1024px) {
+    /* Ensure card-container has stable flex layout */
+    body.insights-page .card-container {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        padding: 0 !important;
+        display: flex !important;
+        gap: 0 !important;
+    }
+    
+    /* Ensure pagination section is properly positioned */
+    body.insights-page .pagination-section {
+        margin-top: 0 !important;
+        display: flex !important;
+        flex-shrink: 0 !important;
+        width: 100% !important;
+        padding: 1rem !important;
+        border-top: 1px solid rgba(58, 10, 78, 0.2) !important;
+    }
+    
+    /* Stabilize table layout - use auto layout so all columns are visible */
+    body.insights-page .subscribers-table {
+        table-layout: auto !important;
+        width: auto !important;
+        min-width: 100% !important;
+        border-collapse: separate !important;
+        border-spacing: 0 !important;
+    }
+    
+    /* Ensure table wrapper allows horizontal scrolling */
+    body.insights-page .table-wrapper {
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        -webkit-overflow-scrolling: touch !important;
+        width: 100% !important;
+    }
+    
+    /* Ensure table container doesn't clip */
+    body.insights-page .table-container {
+        overflow-x: visible !important;
+        overflow-y: visible !important;
+        width: 100% !important;
+    }
+    
+    /* Ensure all table cells are properly aligned */
+    body.insights-page .subscribers-table th,
+    body.insights-page .subscribers-table td {
+        vertical-align: middle !important;
+        padding: 0.875rem 0.75rem !important;
+        text-align: left !important;
+        overflow: visible !important;
+        position: relative !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+    
+    /* Remove any hover effects that might be stuck */
+    body.insights-page .subscribers-table tbody tr {
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+    
+    body.insights-page .subscribers-table tbody tr:hover {
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+    
+    /* Name column - fixed width and proper alignment */
+    body.insights-page .subscribers-table td:nth-child(2),
+    body.insights-page .subscribers-table th:nth-child(2) {
+        width: 200px !important;
+        min-width: 200px !important;
+        max-width: 200px !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    
+    body.insights-page .subscribers-table td:nth-child(2) > div {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        justify-content: center !important;
+        gap: 0.25rem !important;
+        width: 100% !important;
+        height: 100% !important;
+    }
+    
+    body.insights-page .subscriber-name {
+        display: block !important;
+        width: 100% !important;
+        line-height: 1.5 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        font-size: 0.875rem !important;
+        font-weight: 600 !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        background: none !important;
+        background-color: transparent !important;
+        background-image: none !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+        border: none !important;
+        outline: none !important;
+        color: inherit !important;
+        -webkit-text-fill-color: inherit !important;
+        background-clip: unset !important;
+        -webkit-background-clip: unset !important;
+        filter: none !important;
+        position: relative !important;
+        z-index: 1 !important;
+    }
+    
+    /* Remove any ::before or ::after pseudo-elements that might add backgrounds */
+    body.insights-page .subscriber-name::before,
+    body.insights-page .subscriber-name::after {
+        display: none !important;
+        content: none !important;
+        background: none !important;
+        background-image: none !important;
+    }
+    
+    body.insights-page .subscriber-phone {
+        display: block !important;
+        width: 100% !important;
+        line-height: 1.4 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        font-size: 0.75rem !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        background: none !important;
+        background-color: transparent !important;
+        background-image: none !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+        border: none !important;
+        outline: none !important;
+        -webkit-text-fill-color: inherit !important;
+        background-clip: unset !important;
+        -webkit-background-clip: unset !important;
+        filter: none !important;
+    }
+    
+    body.insights-page .subscriber-phone::before,
+    body.insights-page .subscriber-phone::after {
+        display: none !important;
+        content: none !important;
+        background: none !important;
+        background-image: none !important;
+    }
+    
+    /* Remove any background from name container and all its children */
+    body.insights-page .subscribers-table td:nth-child(2) {
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+    
+    body.insights-page .subscribers-table td:nth-child(2) > div {
+        background: none !important;
+        background-color: transparent !important;
+        background-image: none !important;
+        box-shadow: none !important;
+        border: none !important;
+        padding: 0 !important;
+        position: relative !important;
+    }
+    
+    body.insights-page .subscribers-table td:nth-child(2) > div::before,
+    body.insights-page .subscribers-table td:nth-child(2) > div::after {
+        display: none !important;
+        content: none !important;
+        background: none !important;
+        background-image: none !important;
+        box-shadow: none !important;
+    }
+    
+    /* Ensure all table cells have clean backgrounds */
+    body.insights-page .subscribers-table td,
+    body.insights-page .subscribers-table th {
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+    
+    /* Remove row backgrounds completely in landscape */
+    body.insights-page .subscribers-table tbody tr {
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+    
+    body.insights-page .subscribers-table tbody tr:hover {
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+    
+    /* Progress columns - fixed width */
+    body.insights-page .subscribers-table td:nth-child(3),
+    body.insights-page .subscribers-table th:nth-child(3),
+    body.insights-page .subscribers-table td:nth-child(7),
+    body.insights-page .subscribers-table th:nth-child(7) {
+        width: 200px !important;
+        min-width: 200px !important;
+        max-width: 200px !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    
+    /* Ensure all other columns have minimum widths so they're visible */
+    body.insights-page .subscribers-table th:nth-child(1),
+    body.insights-page .subscribers-table td:nth-child(1) {
+        min-width: 50px !important;
+        width: auto !important;
+    }
+    
+    body.insights-page .subscribers-table th:nth-child(4),
+    body.insights-page .subscribers-table td:nth-child(4),
+    body.insights-page .subscribers-table th:nth-child(5),
+    body.insights-page .subscribers-table td:nth-child(5) {
+        min-width: 120px !important;
+        width: auto !important;
+        white-space: nowrap !important;
+    }
+    
+    body.insights-page .subscribers-table th:nth-child(6),
+    body.insights-page .subscribers-table td:nth-child(6) {
+        min-width: 140px !important;
+        width: auto !important;
+    }
+    
+    body.insights-page .subscribers-table th:nth-child(8),
+    body.insights-page .subscribers-table td:nth-child(8),
+    body.insights-page .subscribers-table th:nth-child(9),
+    body.insights-page .subscribers-table td:nth-child(9) {
+        min-width: 100px !important;
+        width: auto !important;
+        white-space: nowrap !important;
+    }
+    
+    body.insights-page .subscribers-table th:nth-child(10),
+    body.insights-page .subscribers-table td:nth-child(10) {
+        min-width: 140px !important;
+        width: auto !important;
+    }
+    
+    body.insights-page .subscribers-table th:nth-child(11),
+    body.insights-page .subscribers-table td:nth-child(11) {
+        min-width: 100px !important;
+        width: auto !important;
+    }
+    
+    body.insights-page .subscribers-table th:nth-child(12),
+    body.insights-page .subscribers-table td:nth-child(12) {
+        min-width: 80px !important;
+        width: auto !important;
+    }
+    
+    /* Progress containers - fixed width and alignment */
+    body.insights-page .progress-container {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        justify-content: center !important;
+        gap: 0.5rem !important;
+        width: 180px !important;
+        min-width: 180px !important;
+        max-width: 180px !important;
+        margin: 0 auto !important;
+        padding: 0 !important;
+    }
+    
+    body.insights-page .progress-bar {
+        width: 180px !important;
+        min-width: 180px !important;
+        max-width: 180px !important;
+        height: 12px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        flex-shrink: 0 !important;
+        box-sizing: border-box !important;
+    }
+    
+    body.insights-page .progress-text {
+        width: 100% !important;
+        text-align: left !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        white-space: nowrap !important;
+        font-size: 0.8125rem !important;
+        font-weight: 500 !important;
+    }
+    
+    /* Table container - ensure proper layout */
+    body.insights-page .table-container {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    
+    /* Table wrapper - no overflow issues */
+    body.insights-page .table-wrapper {
+        overflow: visible !important;
+        width: 100% !important;
+        flex: 1 1 auto !important;
+    }
+    
+    /* Table rows - ensure consistent height and alignment */
+    body.insights-page .subscribers-table tbody tr {
+        height: auto !important;
+        min-height: 70px !important;
+        display: table-row !important;
+    }
+    
+    body.insights-page .subscribers-table tbody tr td {
+        height: auto !important;
+        min-height: 70px !important;
+        vertical-align: middle !important;
+    }
+    
+    /* Override any transforms that might cause misalignment */
+    body.insights-page .subscribers-table tbody tr {
+        transform: none !important;
+        box-shadow: none !important;
+    }
+    
+    body.insights-page .subscribers-table tbody tr:hover {
+        transform: none !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+        box-shadow: none !important;
+    }
+    
+    /* Ensure name div has absolutely no background or visual effects */
+    body.insights-page .subscribers-table td:nth-child(2) > div {
+        background: none !important;
+        background-color: transparent !important;
+        background-image: none !important;
+        box-shadow: none !important;
+        border: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        position: relative !important;
+    }
+    
+    /* Remove any text effects from name */
+    body.insights-page .subscriber-name {
+        -webkit-text-fill-color: inherit !important;
+        background-clip: unset !important;
+        -webkit-background-clip: unset !important;
+        background: none !important;
+        background-image: none !important;
+        text-shadow: none !important;
+        filter: none !important;
+    }
+    
+    /* Ensure progress bars are clean and properly sized */
+    body.insights-page .progress-bar {
+        border-radius: 6px !important;
+        overflow: hidden !important;
+        position: relative !important;
+    }
+    
+    body.insights-page .progress-bar .progress-fill {
+        height: 100% !important;
+        border-radius: 6px !important;
     }
 }
 

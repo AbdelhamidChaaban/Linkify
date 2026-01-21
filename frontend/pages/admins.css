@@ -1100,6 +1100,49 @@ body.admins-page {
     }
 }
 
+/* CRITICAL: Landscape mode override - must come after base rules and override portrait mobile rule */
+@media screen and (max-width: 768px) and (orientation: landscape),
+       screen and (max-height: 600px) and (orientation: landscape) and (max-width: 1024px) {
+    /* Override both base rule (position: fixed) and portrait mobile rule (overflow-x: hidden) */
+    html.admins-page {
+        overflow: auto !important;
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        position: relative !important;
+        width: 100% !important;
+        touch-action: pan-y pan-x !important;
+        -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior-y: auto !important;
+    }
+    
+    body.admins-page {
+        overflow: auto !important;
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        position: relative !important;
+        width: 100% !important;
+        touch-action: pan-y pan-x !important;
+        -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior-y: auto !important;
+    }
+    
+    /* CRITICAL: Make main-content NOT a scroll container */
+    body.admins-page .main-content {
+        height: auto !important;
+        min-height: calc(100vh - 70px) !important;
+        max-height: none !important;
+        overflow: visible !important;
+        overflow-y: visible !important;
+        overflow-x: visible !important;
+        position: relative !important;
+        touch-action: pan-y pan-x !important;
+    }
+}
+
 body.admins-page .main-content {
     height: calc(100vh - 80px);
     height: calc(100dvh - 80px); /* Dynamic viewport height for mobile */
@@ -1466,6 +1509,117 @@ body.admins-page .main-content {
     .new-admin-btn {
         width: 100%;
         justify-content: center;
+    }
+}
+
+/* Landscape mode fix for mobile - ensure admins table is visible and scrollable */
+@media screen and (max-width: 768px) and (orientation: landscape),
+       screen and (max-height: 600px) and (orientation: landscape) and (max-width: 1024px) {
+    /* CRITICAL: Override base fixed positioning and hidden overflow */
+    html.admins-page {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        position: relative !important;
+        width: 100% !important;
+        touch-action: pan-y pan-x !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+    
+    body.admins-page {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        position: relative !important;
+        width: 100% !important;
+        touch-action: pan-y pan-x !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+    
+    /* CRITICAL: Make main-content expandable and scrollable */
+    body.admins-page .main-content {
+        height: auto !important;
+        min-height: calc(100vh - 70px) !important;
+        max-height: none !important;
+        overflow: visible !important;
+        overflow-y: visible !important;
+        overflow-x: visible !important;
+        position: relative !important;
+        flex: 1 1 auto !important;
+        touch-action: pan-y pan-x !important;
+    }
+    
+    /* Allow container to expand and scroll */
+    body.admins-page .container {
+        overflow: visible !important;
+        overflow-y: visible !important;
+        overflow-x: visible !important;
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        flex: 1 1 auto !important;
+        position: relative !important;
+    }
+    
+    /* Allow admins container to expand */
+    body.admins-page .admins-container {
+        overflow: visible !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        position: relative !important;
+    }
+    
+    /* Allow inner container to show content */
+    body.admins-page .admins-container-inner {
+        overflow: visible !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        position: relative !important;
+    }
+    
+    /* Ensure table wrapper allows horizontal scrolling only */
+    body.admins-page .table-wrapper {
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-y pan-x !important;
+        position: relative !important;
+    }
+    
+    /* Ensure table elements don't block touch events */
+    body.admins-page .admins-table,
+    body.admins-page .admins-table tbody,
+    body.admins-page .admins-table tbody tr,
+    body.admins-page .admins-table td,
+    body.admins-page .admins-table th {
+        touch-action: pan-y pan-x !important;
+        pointer-events: auto !important;
+    }
+    
+    /* Ensure table is visible */
+    body.admins-page .admins-table {
+        display: table !important;
+        visibility: visible !important;
+        min-width: 800px !important;
+    }
+    
+    /* Ensure table body and rows are visible */
+    body.admins-page .admins-table tbody {
+        display: table-row-group !important;
+        visibility: visible !important;
+    }
+    
+    body.admins-page .admins-table tbody tr {
+        display: table-row !important;
+        visibility: visible !important;
+    }
+    
+    body.admins-page .admins-table td,
+    body.admins-page .admins-table th {
+        display: table-cell !important;
+        visibility: visible !important;
     }
 }
 

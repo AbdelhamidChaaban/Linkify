@@ -67,12 +67,15 @@
         -webkit-transform: translateZ(0) !important;
     }
     
-    /* Admins page - make scrollable */
-    html.admins-page,
-    body.admins-page {
-        overflow: visible !important;
-        height: auto !important;
-        position: relative !important;
+    /* Admins page - make scrollable (portrait only) */
+    /* Landscape mode is handled by admins.css with overflow: auto for scrolling */
+    @media not (orientation: landscape) {
+        html.admins-page,
+        body.admins-page {
+            overflow: visible !important;
+            height: auto !important;
+            position: relative !important;
+        }
     }
     
     body.admins-page .main-content {
