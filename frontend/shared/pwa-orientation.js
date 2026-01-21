@@ -44,43 +44,56 @@
     document.addEventListener('touchstart', unlockOrientation, { once: true });
     document.addEventListener('click', unlockOrientation, { once: true });
     
-    // Handle orientation changes
+    // Handle orientation changes - debounced to prevent multiple calls
+    let orientationChangeTimer = null;
     function handleOrientationChange() {
-        // Force a viewport update on orientation change
-        const viewport = document.querySelector('meta[name="viewport"]');
-        if (viewport) {
-            // Temporarily remove and re-add viewport to force recalculation
-            const content = viewport.getAttribute('content');
-            viewport.setAttribute('content', 'width=device-width, initial-scale=1.0');
+        // Clear any pending orientation change handling
+        if (orientationChangeTimer) {
+            clearTimeout(orientationChangeTimer);
+        }
+        
+        console.log('[PWA Orientation] Orientation change detected');
+        console.log('[PWA Orientation] New dimensions:', window.innerWidth, 'x', window.innerHeight);
+        console.log('[PWA Orientation] New angle:', window.screen?.orientation?.angle || 'unknown');
+        
+        // Debounce the actual handling to avoid multiple rapid calls
+        orientationChangeTimer = setTimeout(() => {
+            // Save current scroll position if on insights page
+            const cardContainer = document.querySelector('.card-container');
+            const savedScrollTop = cardContainer ? cardContainer.scrollTop : window.pageYOffset || window.scrollY;
             
-            // Use requestAnimationFrame to ensure browser processes the change
-            requestAnimationFrame(() => {
-                if (content) {
-                    viewport.setAttribute('content', content);
-                }
-            });
-        }
-        
-        // Force layout recalculation
-        if (document.body) {
-            document.body.style.display = 'none';
-            requestAnimationFrame(() => {
-                document.body.style.display = '';
-            });
-        }
-        
-        // Trigger resize events to ensure CSS media queries update
-        window.dispatchEvent(new Event('resize'));
-        
-        // Multiple resize events with delays to catch all edge cases
-        setTimeout(() => {
+            // Force a viewport update on orientation change
+            const viewport = document.querySelector('meta[name="viewport"]');
+            if (viewport) {
+                // Temporarily remove and re-add viewport to force recalculation
+                const content = viewport.getAttribute('content');
+                viewport.setAttribute('content', 'width=device-width, initial-scale=1.0');
+                
+                // Use requestAnimationFrame to ensure browser processes the change
+                requestAnimationFrame(() => {
+                    if (content) {
+                        viewport.setAttribute('content', content);
+                        console.log('[PWA Orientation] Viewport restored');
+                    }
+                });
+            }
+            
+            // Trigger resize events to ensure CSS media queries update (only once, debounced)
             window.dispatchEvent(new Event('resize'));
-            window.dispatchEvent(new Event('orientationchange'));
-        }, 100);
-        
-        setTimeout(() => {
-            window.dispatchEvent(new Event('resize'));
-        }, 300);
+            
+            // Restore scroll position after a short delay to allow layout to settle
+            if (cardContainer) {
+                requestAnimationFrame(() => {
+                    cardContainer.scrollTop = savedScrollTop;
+                });
+            } else {
+                requestAnimationFrame(() => {
+                    window.scrollTo(0, savedScrollTop);
+                });
+            }
+            
+            orientationChangeTimer = null;
+        }, 150); // Debounce delay
     }
     
     // Listen for orientation changes - multiple methods for compatibility
@@ -98,31 +111,46 @@
     }
     
     // Also listen for resize events as fallback (some devices fire resize instead of orientationchange)
+    // But be careful not to interfere with normal scrolling
     let resizeTimer;
     let lastWidth = window.innerWidth;
     let lastHeight = window.innerHeight;
+    let isHandlingResize = false;
     
     window.addEventListener('resize', function() {
+        // Prevent recursive calls
+        if (isHandlingResize) return;
+        
         const currentWidth = window.innerWidth;
         const currentHeight = window.innerHeight;
         
         // Check if this is likely an orientation change (width/height swap)
+        // Only trigger if it's a significant change that looks like rotation
+        const widthChange = Math.abs(currentWidth - lastWidth);
+        const heightChange = Math.abs(currentHeight - lastHeight);
         const isOrientationChange = (
             (Math.abs(currentWidth - lastHeight) < 50 && Math.abs(currentHeight - lastWidth) < 50) ||
-            (currentWidth !== lastWidth && currentHeight !== lastHeight && 
-             Math.abs(currentWidth - lastWidth) > 100) // Significant size change
+            (widthChange > 100 && heightChange > 100 && 
+             Math.abs(currentWidth - lastHeight) < Math.abs(currentWidth - lastWidth)) // Width became previous height
         );
         
         if (isOrientationChange) {
             console.log('[PWA Orientation] Resize detected as orientation change:', 
                        lastWidth + 'x' + lastHeight, '->', currentWidth + 'x' + currentHeight);
             clearTimeout(resizeTimer);
+            isHandlingResize = true;
             resizeTimer = setTimeout(function() {
                 handleOrientationChange();
                 lastWidth = currentWidth;
                 lastHeight = currentHeight;
-            }, 100);
+                isHandlingResize = false;
+            }, 200); // Increased delay to avoid conflicts with scrolling
         } else {
+            // Small resize changes - just update tracking
+            if (widthChange < 50 && heightChange < 50) {
+                // Likely just a scrollbar or small UI change, ignore
+                return;
+            }
             lastWidth = currentWidth;
             lastHeight = currentHeight;
         }

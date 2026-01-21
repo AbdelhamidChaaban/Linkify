@@ -836,6 +836,16 @@ body.light-mode .page-title {
     }
 }
 
+/* In landscape mode on mobile - ensure scrolling works everywhere */
+@media screen and (max-width: 768px) and (orientation: landscape),
+       screen and (max-height: 600px) and (orientation: landscape) and (max-width: 1024px) {
+    /* Ensure table elements allow scrolling - this will be overridden by more specific rule below */
+    body.insights-page .subscribers-table,
+    body.insights-page .subscribers-table * {
+        touch-action: pan-y pan-x !important;
+    }
+}
+
 /* In landscape mode, allow horizontal scrolling for table */
 @media (orientation: landscape) and (max-height: 600px) {
     html.insights-page,
@@ -847,6 +857,8 @@ body.light-mode .page-title {
         min-height: 100vh !important;
         position: relative !important;
         -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior-y: contain !important; /* Prevent overscroll effects */
+        scroll-behavior: auto !important; /* Disable smooth scroll during orientation changes */
     }
 
     body.insights-page .main-content {
@@ -885,20 +897,52 @@ body.light-mode .page-title {
         display: flex !important;
         flex-direction: column !important;
         -webkit-overflow-scrolling: touch !important;
-        overscroll-behavior: auto !important;
+        overscroll-behavior: auto !important; /* Allow normal scroll behavior */
+        scroll-behavior: auto !important; /* Disable smooth scroll during orientation changes */
+        will-change: scroll-position !important; /* Optimize scrolling */
     }
     
     /* Remove scroll contexts from table - let card-container handle all scrolling */
+    /* CRITICAL: Set touch-action to match parent so touches scroll the card-container */
     body.insights-page .table-container {
         overflow: visible !important;
-        touch-action: auto !important;
+        touch-action: pan-y pan-x !important; /* Match parent to allow parent scrolling */
+        pointer-events: auto !important;
+        position: relative !important;
     }
     
     body.insights-page .table-wrapper {
         overflow: visible !important;
-        touch-action: auto !important;
+        touch-action: pan-y pan-x !important; /* Match parent to allow parent scrolling */
         -webkit-overflow-scrolling: auto !important;
+        pointer-events: auto !important;
+        position: relative !important;
         /* NO scroll context - card-container handles all scrolling */
+    }
+    
+    /* CRITICAL: Remove touch-action from table elements so touches bubble to parent card-container */
+    /* The card-container handles all scrolling - table elements should not interfere */
+    body.insights-page .subscribers-table,
+    body.insights-page .subscribers-table tbody,
+    body.insights-page .subscribers-table thead,
+    body.insights-page .subscribers-table tr,
+    body.insights-page .subscribers-table td,
+    body.insights-page .subscribers-table th {
+        touch-action: unset !important; /* Remove touch-action so parent handles scrolling */
+        pointer-events: auto !important; /* But allow interaction */
+    }
+    
+    /* CRITICAL: Override base rule that sets touch-action on table rows */
+    body.insights-page .subscribers-table tbody tr {
+        touch-action: unset !important; /* Remove so parent card-container handles scrolling */
+    }
+    
+    /* Ensure buttons and links still work */
+    body.insights-page .subscribers-table button,
+    body.insights-page .subscribers-table a,
+    body.insights-page .subscribers-table .action-btn {
+        touch-action: manipulation !important; /* Allow clicks on interactive elements */
+        pointer-events: auto !important;
     }
     
     /* Ensure pagination section is visible and scrollable */
