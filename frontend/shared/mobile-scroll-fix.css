@@ -89,3 +89,75 @@
     }
 }
 
+/* In landscape mode on small screens, allow horizontal scrolling for table */
+@media (orientation: landscape) and (max-height: 600px) {
+    html.insights-page,
+    body.insights-page {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        position: relative !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+
+    body.insights-page .main-content {
+        overflow: visible !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        min-height: calc(100vh - 70px) !important;
+        position: relative !important;
+    }
+    
+    body.insights-page .container {
+        overflow: visible !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        position: relative !important;
+    }
+    
+    /* Allow page header and other sections to scroll */
+    body.insights-page .page-header-section,
+    body.insights-page .filters-section,
+    body.insights-page .tabs-container {
+        touch-action: pan-y pan-x !important;
+        pointer-events: auto !important;
+    }
+
+    body.insights-page .card-container {
+        overflow-y: visible !important;
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        max-height: none !important; /* remove clamp so header scrolls with page */
+        position: relative !important;
+    }
+    
+    body.insights-page .table-container {
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        touch-action: pan-y pan-x !important;
+        min-width: 100% !important;
+        position: relative !important;
+    }
+    
+    body.insights-page .table-wrapper {
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-y pan-x !important;
+        width: 100% !important;
+        min-width: max-content !important;
+    }
+    
+    /* Ensure pagination section is visible and scrollable */
+    body.insights-page .pagination-section {
+        visibility: visible !important;
+        display: flex !important;
+        position: relative !important;
+        flex-shrink: 0 !important;
+        overflow: visible !important;
+    }
+}
+

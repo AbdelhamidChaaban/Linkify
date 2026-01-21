@@ -579,7 +579,18 @@ body.insights-page .main-content {
     flex-shrink: 0;
 }
 
+/* When page-header-section is inside card-container, add padding */
+.card-container > .page-header-section {
+    padding: 1.5rem 1.5rem 0 1.5rem;
+    margin-bottom: 1rem;
+}
+
 @media (max-width: 768px) {
+    .card-container > .page-header-section {
+        padding: 1rem 0.875rem 0 0.875rem;
+        margin-bottom: 0.75rem;
+    }
+    
     .page-header-section {
         margin-bottom: 0.75rem;
         flex-direction: row;
@@ -610,6 +621,11 @@ body.insights-page .main-content {
 }
 
 @media (max-width: 480px) {
+    .card-container > .page-header-section {
+        padding: 0.75rem 0.5rem 0 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    
     .page-header-section {
         margin-bottom: 0.5rem;
         gap: 0.5rem;
@@ -817,6 +833,122 @@ body.light-mode .page-title {
         -webkit-transform: translateZ(0) !important;
         overscroll-behavior: contain !important;
         position: relative !important;
+    }
+}
+
+/* In landscape mode, allow horizontal scrolling for table */
+@media (orientation: landscape) and (max-height: 600px) {
+    html.insights-page,
+    body.insights-page {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        min-height: 100vh !important;
+        position: relative !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+
+    body.insights-page .main-content {
+        overflow: visible !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        min-height: calc(100vh - 70px) !important;
+        position: relative !important;
+    }
+    
+    body.insights-page .container {
+        overflow: visible !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        position: relative !important;
+    }
+    
+    /* Allow page header and other sections to scroll */
+    body.insights-page .page-header-section,
+    body.insights-page .filters-section,
+    body.insights-page .tabs-container {
+        touch-action: pan-y pan-x !important;
+        pointer-events: auto !important;
+    }
+
+    body.insights-page .card-container {
+        overflow-y: visible !important;
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        max-height: none !important; /* remove clamp so header scrolls with page */
+        position: relative !important;
+    }
+    
+    body.insights-page .table-container {
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        touch-action: pan-y pan-x !important;
+        min-width: 100% !important;
+        position: relative !important;
+    }
+    
+    body.insights-page .table-wrapper {
+        overflow-x: auto !important;
+        overflow-y: visible !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-y pan-x !important;
+        width: 100% !important;
+        min-width: max-content !important;
+    }
+    
+    /* Ensure pagination section is visible and scrollable */
+    body.insights-page .pagination-section {
+        visibility: visible !important;
+        display: flex !important;
+        position: relative !important;
+        flex-shrink: 0 !important;
+        overflow: visible !important;
+    }
+}
+
+/* In landscape mode on small screens (height constraint), allow horizontal scrolling */
+@media (orientation: landscape) and (max-height: 600px) {
+    body.insights-page {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+    }
+
+    body.insights-page .main-content,
+    body.insights-page .container {
+        overflow: visible !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        min-height: calc(100vh - 70px) !important;
+    }
+
+    body.insights-page .card-container {
+        overflow-y: auto !important;
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+        height: auto !important;
+        max-height: none !important;
+    }
+    
+    body.insights-page .table-container {
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+        min-width: 100% !important;
+    }
+    
+    body.insights-page .table-wrapper {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-y pan-x !important;
+        width: 100% !important;
+        min-width: max-content !important;
+    }
+    
+    body.insights-page .subscribers-table {
+        min-width: 900px;
     }
 }
 
@@ -3911,16 +4043,12 @@ body.light-mode .dense-toggle-text {
     }
 
     .table-container {
-        overflow: visible;
+        overflow-x: visible;
+        overflow-y: visible;
         margin: 0;
         padding: 0;
         width: 100%;
         flex: 0 0 auto;
-    }
-    
-    .table-container {
-        overflow-x: visible;
-        overflow-y: visible;
     }
     
     .table-wrapper {
@@ -3968,6 +4096,32 @@ body.light-mode .dense-toggle-text {
     }
 
     .subscribers-table {
+        min-width: 900px;
+    }
+}
+
+/* Landscape mode fixes for horizontal scrolling */
+@media (max-width: 768px) and (orientation: landscape) {
+    body.insights-page .card-container {
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+    }
+    
+    body.insights-page .table-container {
+        overflow-x: auto !important;
+        touch-action: pan-y pan-x !important;
+        min-width: 100% !important;
+    }
+    
+    body.insights-page .table-wrapper {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-y pan-x !important;
+        width: 100% !important;
+        min-width: max-content !important;
+    }
+    
+    body.insights-page .subscribers-table {
         min-width: 900px;
     }
 

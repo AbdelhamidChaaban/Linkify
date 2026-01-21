@@ -3079,14 +3079,38 @@ class HomeManager {
     filterServicesExpiredYesterday(snapshot) {
         const expiredYesterday = [];
         
-        // Get yesterday's date in DD/MM/YYYY format
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayFormatted = this.formatDateDDMMYYYY(yesterday);
-        
-        // Get today's date in DD/MM/YYYY format
+        // Get today's date (set to start of day for accurate calculation)
         const today = new Date();
+        today.setHours(0, 0, 0, 0);
         const todayFormatted = this.formatDateDDMMYYYY(today);
+        
+        // Helper function to parse DD/MM/YYYY date string to Date object
+        const parseDDMMYYYY = (dateStr) => {
+            if (!dateStr || dateStr === 'N/A' || dateStr.trim() === '') return null;
+            const parts = String(dateStr).trim().split('/');
+            if (parts.length !== 3) return null;
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+            const year = parseInt(parts[2], 10);
+            if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+            const date = new Date(year, month, day);
+            date.setHours(0, 0, 0, 0);
+            // Validate the date was parsed correctly
+            if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) {
+                return null; // Invalid date
+            }
+            return date;
+        };
+        
+        // Helper function to calculate inclusive days between two dates
+        // Returns the number of days including both start and end dates
+        const calculateInclusiveDays = (startDate, endDate) => {
+            if (!startDate || !endDate) return null;
+            const diffTime = endDate.getTime() - startDate.getTime();
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+            // Add 1 to make it inclusive (both start and end dates count)
+            return diffDays + 1;
+        };
 
         snapshot.docs.forEach(doc => {
             const data = doc.data();
@@ -3097,26 +3121,35 @@ class HomeManager {
                 return;
             }
             
-            // Get admin validity date
-            let validityDate = '';
+            // Get admin validity date from alfaData (same as insights table)
+            let validityDateStr = '';
             if (alfaData.validityDate) {
-                validityDate = alfaData.validityDate;
+                validityDateStr = alfaData.validityDate;
             } else {
                 // Fallback: calculate from createdAt + 30 days
                 let createdAt = new Date();
                 if (data.createdAt) {
                     createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
                 }
-                validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+                validityDateStr = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
             }
+            
+            // Parse validity date
+            const validityDateObj = parseDDMMYYYY(validityDateStr);
+            if (!validityDateObj) {
+                return; // Skip if validity date is invalid
+            }
+            
+            // Calculate inclusive days from today to validity date
+            const inclusiveDays = calculateInclusiveDays(today, validityDateObj);
             
             // Get tracking field for when admin was shown in this table
             const expiredYesterdayShownDate = data._expiredYesterdayShownDate || null;
             
             // Include if:
-            // 1. Admin validity date matches yesterday (first time appearing), OR
+            // 1. Validity date is exactly 30 days from today (inclusive) - meaning service expired yesterday, OR
             // 2. Admin was already shown today (persist for the whole day even if validity date changed)
-            const shouldInclude = validityDate === yesterdayFormatted || expiredYesterdayShownDate === todayFormatted;
+            const shouldInclude = (inclusiveDays === 30) || expiredYesterdayShownDate === todayFormatted;
             
             if (shouldInclude) {
                 // Parse balance
@@ -3168,7 +3201,7 @@ class HomeManager {
                     subscribersCount: subscribersCount,
                     neededBalanceStatus: neededBalanceStatus,
                     expiration: expiration,
-                    validityDate: validityDate,
+                    validityDate: validityDateStr,
                     alfaData: alfaData
                 });
             }
