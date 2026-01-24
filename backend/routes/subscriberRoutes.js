@@ -212,6 +212,14 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
         
         const { phone: adminPhone, password: adminPassword, cookies } = await getAdminCredentialsAndCookies(adminId, req.userId);
         
+        // CRITICAL: Invalidate cache at the start of add subscriber operation to ensure fresh data
+        // This prevents stale cache from affecting verification
+        const { invalidateUshareCache } = require('../services/ushareHtmlParser');
+        await invalidateUshareCache(adminPhone).catch(err => {
+            console.warn(`⚠️ [Add Subscriber] Failed to invalidate cache at start: ${err.message}`);
+        });
+        console.log(`🗑️ [Add Subscriber] Cache invalidated at start for ${adminPhone} (ensuring fresh data)`);
+        
         // Clean subscriber number (8 digits)
         // Normalize: Remove spaces and Lebanon country code (+961 or 961)
         let cleanSubscriberNumber = subscriberNumber.trim().replace(/\s+/g, ''); // Remove spaces first
@@ -383,13 +391,21 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
         console.log(`⚠️ [Add Subscriber] No clear success markers found - verifying by checking Ushare HTML...`);
         
         // For 200 responses or redirects without clear indicators, do verification
-        const { fetchUshareHtml, invalidateUshareCache } = require('../services/ushareHtmlParser');
+        const { fetchUshareHtml } = require('../services/ushareHtmlParser');
+        
+        // CRITICAL: Invalidate cache again before verification to ensure we get the latest data
+        // Cache was already invalidated at start, but invalidate again to be absolutely sure
+        await invalidateUshareCache(adminPhone).catch(err => {
+            console.warn(`⚠️ [Add Subscriber] Failed to invalidate cache before verification: ${err.message}`);
+        });
+        console.log(`🗑️ [Add Subscriber] Cache invalidated before verification for ${adminPhone}`);
         
         // Verify for both 200 OK and redirects (redirects often indicate success even without clear markers)
         let verifyResult = null;
         if (is200 || isRedirect) {
             // Brief wait to allow Alfa's system to update
             await new Promise(resolve => setTimeout(resolve, 1500)); // Slightly longer wait for reliability
+            // CRITICAL: Always use fresh data (useCache = false) - never use cache in add subscriber operation
             verifyResult = await fetchUshareHtml(adminPhone, cookies, false).catch(() => null);
         }
         

@@ -140,7 +140,7 @@ AddSubscriberPageManager.prototype.openAdminSelector = function(itemIndex) {
             setTimeout(() => {
                 console.log(`🔄 [Admin Selector] Re-checking after delay - subscribers count: ${this.subscribers ? this.subscribers.length : 0}`);
                 
-                // Get active admins that match "Available Services" criteria and have free space > 0
+                // Get active admins that match "Available Services" criteria
                 let activeAdmins = [];
                 try {
                     activeAdmins = (this.subscribers || []).filter(sub => {
@@ -150,14 +150,20 @@ AddSubscriberPageManager.prototype.openAdminSelector = function(itemIndex) {
                                 return false;
                             }
                             
-                            // Then check if admin has free space > 0
-                            const data = this.calculateAdminSelectorData(sub);
-                            const hasFreeSpace = data.freeSpace > 0;
-                            
-                            if (!hasFreeSpace) {
-                                console.log(`  ❌ Filtered out ${sub.name || sub.phone}: freeSpace = 0 GB`);
-                                return false;
+                            // For "Open" type admins, check if they have free space > 0
+                            // For "Closed" type admins, skip free space check (they might not have adminQuota field)
+                            const adminType = sub.type ? String(sub.type).toLowerCase() : null;
+                            if (adminType === 'open') {
+                                const data = this.calculateAdminSelectorData(sub);
+                                const hasFreeSpace = data.freeSpace > 0;
+                                
+                                if (!hasFreeSpace) {
+                                    console.log(`  ❌ Filtered out ${sub.name || sub.phone}: freeSpace = 0 GB (Open admin)`);
+                                    return false;
+                                }
                             }
+                            // For "Closed" admins or admins without type, skip free space check
+                            // They meet the available services criteria, so they should appear
                             
                             return true;
                         } catch (error) {
@@ -189,7 +195,7 @@ AddSubscriberPageManager.prototype.openAdminSelector = function(itemIndex) {
             return; // Exit early, will populate after delay
         }
         
-        // Get active admins that match "Available Services" criteria and have free space > 0
+        // Get active admins that match "Available Services" criteria
         let activeAdmins = [];
         try {
             activeAdmins = this.subscribers.filter(sub => {
@@ -199,14 +205,20 @@ AddSubscriberPageManager.prototype.openAdminSelector = function(itemIndex) {
                         return false;
                     }
                     
-                    // Then check if admin has free space > 0
-                    const data = this.calculateAdminSelectorData(sub);
-                    const hasFreeSpace = data.freeSpace > 0;
-                    
-                    if (!hasFreeSpace) {
-                        console.log(`  ❌ Filtered out ${sub.name || sub.phone}: freeSpace = 0 GB`);
-                        return false;
+                    // For "Open" type admins, check if they have free space > 0
+                    // For "Closed" type admins, skip free space check (they might not have adminQuota field)
+                    const adminType = sub.type ? String(sub.type).toLowerCase() : null;
+                    if (adminType === 'open') {
+                        const data = this.calculateAdminSelectorData(sub);
+                        const hasFreeSpace = data.freeSpace > 0;
+                        
+                        if (!hasFreeSpace) {
+                            console.log(`  ❌ Filtered out ${sub.name || sub.phone}: freeSpace = 0 GB (Open admin)`);
+                            return false;
+                        }
                     }
+                    // For "Closed" admins or admins without type, skip free space check
+                    // They meet the available services criteria, so they should appear
                     
                     return true;
                 } catch (error) {
@@ -355,7 +367,18 @@ AddSubscriberPageManager.prototype.calculateAdminSelectorData = function(admin) 
     const adminQuotaNum = parseFloat(adminQuota) || 0;
     const totalSubscriberQuotaNum = parseFloat(totalSubscriberQuota) || 0;
     
-    const freeSpace = Math.max(0, packageSizeNum - (adminQuotaNum + totalSubscriberQuotaNum));
+    // Calculate free space differently based on admin type
+    // For "Closed" type admins: exclude adminQuota (they don't have admin quota)
+    // For "Open" type admins: include adminQuota in calculation
+    const adminType = admin.type ? String(admin.type).toLowerCase() : null;
+    let freeSpace;
+    if (adminType === 'closed') {
+        // Closed admins: freeSpace = packageSize - totalSubscriberQuota (no adminQuota)
+        freeSpace = Math.max(0, packageSizeNum - totalSubscriberQuotaNum);
+    } else {
+        // Open admins or admins without type: freeSpace = packageSize - (adminQuota + totalSubscriberQuota)
+        freeSpace = Math.max(0, packageSizeNum - (adminQuotaNum + totalSubscriberQuotaNum));
+    }
     
     // Get validity date and calculate days remaining
     const validityDate = alfaData.validityDate || admin.validityDate || '';

@@ -833,6 +833,15 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
             removals: results.removals.map(r => ({ phone: r.phone, success: r.success }))
         });
         
+        // CRITICAL: Hide loading animation immediately after operations complete (before refresh)
+        // This ensures the user sees the result right away, not after refresh completes
+        this.hidePageLoading();
+        this.isSubmittingEditForm = false;
+        if (submitButton && originalButtonText) {
+            submitButton.disabled = false;
+            submitButton.textContent = originalButtonText;
+        }
+        
         // CRITICAL: If we have successful additions, always show success messages first
         // Even if some operations failed, we should acknowledge the successful ones
         if (hasAdditions) {
@@ -967,39 +976,34 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
         });
         
         if (hasSuccessfulOperations && window.AlfaAPIService) {
-            try {
-                // Update loading message to indicate refresh is in progress
-                this.showPageLoading('Refreshing admin data...');
-                console.log('🔄 [Edit Subscriber] Starting admin refresh...');
+            // For additions: refresh in background (fire-and-forget)
+            // For removals/updates: refresh and then redirect
+            if (hasAdditions) {
+                // Refresh in background for additions (non-blocking)
+                console.log('🔄 [Edit Subscriber] Refreshing admin data in background after additions...');
+                window.AlfaAPIService.refreshAdmin(adminId).then(() => {
+                    console.log('✅ [Edit Subscriber] Background admin refresh completed');
+                }).catch(error => {
+                    console.error('⚠️ [Edit Subscriber] Error during background admin refresh:', error);
+                });
+            } else if (hasRemovalsOrUpdates) {
+                // For removals/updates: refresh in background and redirect (don't show loading - already hidden)
+                console.log('🔄 [Edit Subscriber] Refreshing admin data in background before redirect...');
                 
-                // Wait for refresh to complete before hiding loading or redirecting
-                await window.AlfaAPIService.refreshAdmin(adminId);
-                console.log('✅ [Edit Subscriber] Admin refresh completed successfully');
+                // Start refresh in background (don't await - let it run while we redirect)
+                window.AlfaAPIService.refreshAdmin(adminId).then(() => {
+                    console.log('✅ [Edit Subscriber] Background admin refresh completed');
+                }).catch(error => {
+                    console.error('⚠️ [Edit Subscriber] Error during background admin refresh:', error);
+                    // Don't block redirect if refresh fails
+                });
                 
-                // For removals/updates: redirect to insights page after refresh completes
-                // This ensures the insights page shows the updated data
-                if (hasRemovalsOrUpdates && !hasAdditions) {
-                    console.log('🔄 [Edit Subscriber] Redirecting to insights page after refresh...');
-                    // Reset flag before redirect (page will change anyway)
-                    this.isSubmittingEditForm = false;
-                    setTimeout(() => {
-                        window.location.href = '/pages/insights.html';
-                    }, 500);
-                    return; // Exit early since we're redirecting (don't hide loading - page will change)
-                }
-            } catch (error) {
-                console.error('⚠️ [Edit Subscriber] Error during admin refresh:', error);
-                // Don't fail the whole operation if refresh fails - operations already succeeded
-                // Still redirect if needed even if refresh fails
-                if (hasRemovalsOrUpdates && !hasAdditions) {
-                    console.log('🔄 [Edit Subscriber] Redirecting to insights page (refresh failed but operations succeeded)...');
-                    // Reset flag before redirect (page will change anyway)
-                    this.isSubmittingEditForm = false;
-                    setTimeout(() => {
-                        window.location.href = '/pages/insights.html';
-                    }, 500);
-                    return; // Exit early since we're redirecting
-                }
+                // Redirect immediately (don't wait for refresh - it will complete in background)
+                console.log('🔄 [Edit Subscriber] Redirecting to insights page...');
+                setTimeout(() => {
+                    window.location.href = '/pages/insights.html';
+                }, 500);
+                return; // Exit early since we're redirecting
             }
         } else {
             console.warn('⚠️ [Edit Subscriber] Refresh skipped:', {
@@ -1010,8 +1014,6 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
             // If we have removals/updates but refresh didn't happen, still redirect
             if (hasRemovalsOrUpdates && !hasAdditions) {
                 console.log('🔄 [Edit Subscriber] Redirecting to insights page (no refresh needed or available)...');
-                // Reset flag before redirect (page will change anyway)
-                this.isSubmittingEditForm = false;
                 setTimeout(() => {
                     window.location.href = '/pages/insights.html';
                 }, 1000);
@@ -1023,8 +1025,9 @@ EditSubscriberPageManager.prototype.handleEditSubscribersSubmit = async function
         console.error('❌ Error calling API:', error);
         alert('Error updating subscribers: ' + (error.message || 'Please try again.'));
     } finally {
-        // Always reset flag and cleanup (except if we already reset it before redirect)
+        // Always reset flag and cleanup (except if we already reset it before redirect or if we're redirecting)
         // The redirect checks above already reset the flag, so this is a safety net
+        // Only hide loading if we're not redirecting (redirect cases handle their own loading)
         if (this.isSubmittingEditForm) {
             this.isSubmittingEditForm = false;
             this.hidePageLoading();

@@ -459,6 +459,14 @@ AddSubscriberPageManager.prototype.handleAddSubscribersSubmit = async function()
                 alert(`✅ Successfully added ${successCount} subscriber(s)!`);
             }
             
+            // CRITICAL: Hide loading animation immediately after operation completes (before refresh)
+            this.hidePageLoading();
+            this.isSubmittingAddForm = false;
+            if (submitBtn && originalButtonText) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalButtonText;
+            }
+            
             // Automatically refresh all selected admins in the background (non-blocking)
             // Firebase real-time listeners will automatically update the UI when refresh completes
             const uniqueAdminIds = [...new Set(items.map(item => item.adminId))];
@@ -488,6 +496,7 @@ AddSubscriberPageManager.prototype.handleAddSubscribersSubmit = async function()
             // Don't redirect immediately - let user see the messages
             // User can manually navigate away or we can add a delay if needed
             // For now, keep the messages visible so user can copy them
+            return;
         } else {
             // Errors occurred - display cancel message
             const cancelMessage = `Cancel old service\n*111*7*2*1*2*1#`;

@@ -430,6 +430,14 @@ app.post('/api/subscribers/add', async (req, res) => {
         // Get cookies
         const cookies = await getCookiesOrLogin(adminData.phone, adminData.password, adminId);
 
+        // CRITICAL: Invalidate cache at the start of add subscriber operation to ensure fresh data
+        // This prevents stale cache from affecting verification
+        const { invalidateUshareCache } = require('./services/ushareHtmlParser');
+        await invalidateUshareCache(adminData.phone).catch(err => {
+            console.warn(`⚠️ [Add Subscriber] Failed to invalidate cache at start: ${err.message}`);
+        });
+        console.log(`🗑️ [Add Subscriber] Cache invalidated at start for ${adminData.phone} (ensuring fresh data)`);
+
         // Get CSRF token (reuse helper from subscriberRoutes)
         // Import the helper function
         const getCsrfToken = async (adminPhone, cookies, adminId, adminPassword, retryCount = 0) => {
@@ -621,7 +629,7 @@ app.post('/api/subscribers/add', async (req, res) => {
         // Only report success if explicit success markers are found
         if (hasAlertSuccess || hasSubscriberCard) {
             console.log(`✅ [Add Subscriber] Success detected (explicit markers found)`);
-            const { invalidateUshareCache } = require('./services/ushareHtmlParser');
+            // Cache already invalidated at start, but invalidate again to be sure
             invalidateUshareCache(adminData.phone).catch(() => {});
             
             try {
@@ -639,8 +647,67 @@ app.post('/api/subscribers/add', async (req, res) => {
             });
         }
 
-        // No success markers found - treat as failure
-        console.error(`❌ [Add Subscriber] No success markers found - treating as failure`);
+        // No clear success/error markers found - verify by checking if subscriber exists in Ushare HTML
+        // This is important because sometimes Alfa's HTML response doesn't contain clear markers
+        // but the operation actually succeeded (especially for pending subscribers)
+        console.log(`⚠️ [Add Subscriber] No clear success markers found - verifying by checking Ushare HTML...`);
+        
+        // For 200 responses or redirects without clear indicators, do verification
+        const { fetchUshareHtml } = require('./services/ushareHtmlParser');
+        
+        // CRITICAL: Invalidate cache again before verification to ensure we get the latest data
+        // Cache was already invalidated at start, but invalidate again to be absolutely sure
+        await invalidateUshareCache(adminData.phone).catch(err => {
+            console.warn(`⚠️ [Add Subscriber] Failed to invalidate cache before verification: ${err.message}`);
+        });
+        console.log(`🗑️ [Add Subscriber] Cache invalidated before verification for ${adminData.phone}`);
+        
+        // Verify for both 200 OK and redirects (redirects often indicate success even without clear markers)
+        let verifyResult = null;
+        if (is200 || isRedirect) {
+            // Brief wait to allow Alfa's system to update
+            await new Promise(resolve => setTimeout(resolve, 1500)); // Slightly longer wait for reliability
+            // CRITICAL: Always use fresh data (useCache = false) - never use cache in add subscriber operation
+            verifyResult = await fetchUshareHtml(adminData.phone, cookies, false).catch(() => null);
+        }
+        
+        if (verifyResult && verifyResult.success && verifyResult.data) {
+            const subscribers = verifyResult.data.subscribers || [];
+            const subscriberExists = subscribers.some(sub => {
+                const subNumber = sub.phoneNumber || sub.fullPhoneNumber || '';
+                return subNumber.replace(/^961/, '').replace(/\D/g, '') === cleanSubscriberNumber;
+            });
+            
+            if (subscriberExists) {
+                console.log(`✅ [Add Subscriber] Verified: Subscriber ${cleanSubscriberNumber} exists in list`);
+                // Cache already invalidated, but invalidate again to be sure
+                await invalidateUshareCache(adminData.phone).catch(err => {
+                    console.warn('⚠️ Failed to invalidate cache:', err.message);
+                });
+                console.log(`🗑️ [Add Subscriber] Cache invalidated for ${adminData.phone}`);
+                
+                try {
+                    const userId = adminData.userId || null;
+                    if (userId) {
+                        await logAction(userId, adminId, adminData.name || 'Unknown', adminData.phone, 'add', cleanSubscriberNumber, quotaNum, true);
+                    }
+                } catch (logError) {
+                    console.warn(`⚠️ Could not log action (non-critical):`, logError?.message);
+                }
+                
+                return res.json({
+                    success: true,
+                    message: 'Subscriber added successfully'
+                });
+            } else {
+                console.warn(`⚠️ [Add Subscriber] Subscriber ${cleanSubscriberNumber} not found in list after verification`);
+            }
+        } else {
+            console.warn(`⚠️ [Add Subscriber] Verification failed or returned no data`);
+        }
+
+        // No success markers found and verification failed - treat as failure
+        console.error(`❌ [Add Subscriber] No success markers found and verification failed - treating as failure`);
         try {
             const userId = adminData.userId || null;
             if (userId) {

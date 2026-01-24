@@ -173,6 +173,43 @@ body.light-mode .edit-subscriber-page-container {
         0 0 30px rgba(139, 92, 246, 0.08);
 }
 
+/* Ensure mini-nav is clearly visible in landscape mode */
+@media (max-width: 768px) and (orientation: landscape),
+       (max-height: 600px) and (orientation: landscape) and (max-width: 1024px) {
+    .edit-subscriber-page .mini-nav {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        position: sticky !important;
+        top: 80px !important;
+        z-index: 999 !important;
+        background: rgba(15, 15, 20, 0.95) !important;
+        backdrop-filter: blur(15px) !important;
+        border-bottom: 2px solid rgba(139, 92, 246, 0.4) !important;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4) !important;
+    }
+    
+    body.light-mode.edit-subscriber-page .mini-nav {
+        background: rgba(255, 255, 255, 0.95) !important;
+        border-bottom: 2px solid rgba(58, 10, 78, 0.2) !important;
+    }
+    
+    .edit-subscriber-page .mini-nav-container {
+        padding: 0.75rem 1rem !important;
+    }
+    
+    .edit-subscriber-page .mini-nav-link {
+        font-size: 0.875rem !important;
+        padding: 0.625rem 1rem !important;
+        font-weight: 600 !important;
+    }
+    
+    .edit-subscriber-page .mini-nav-link svg {
+        width: 16px !important;
+        height: 16px !important;
+    }
+}
+
 @media (max-width: 768px) {
     .edit-subscriber-page .main-content {
         padding: 1rem;

@@ -493,6 +493,18 @@ body.light-mode .mini-nav-link.active::before {
     .mini-nav {
         display: block;
     }
+    
+    /* Hide main navbar links in landscape - mini-nav will show instead */
+    .nav-center {
+        display: none !important;
+    }
+}
+
+/* Also hide nav-center in landscape for tablets */
+@media (max-height: 600px) and (orientation: landscape) and (max-width: 1024px) {
+    .nav-center {
+        display: none !important;
+    }
 }
 
 /* Light Mode Styles - Support both html.light-mode (for immediate application) and body.light-mode (for compatibility) */
