@@ -681,13 +681,15 @@ body.light-mode .insights-section p {
     padding: 2rem 1.5rem;
     box-shadow: 8px 0 40px var(--sidebar-shadow), 
                 0 0 60px rgba(139, 92, 246, 0.1);
-    transition: left 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55),
-                box-shadow 0.5s ease;
+    transition: left 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                box-shadow 0.25s ease,
+                transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);
     z-index: 1001;
     overflow-y: auto;
     overflow-x: hidden;
     border-right: 2px solid var(--sidebar-border);
     clip-path: polygon(0 0, 100% 0, 95% 100%, 0% 100%);
+    will-change: left, transform;
 }
 
 .mobile-sidebar::before {
@@ -707,6 +709,7 @@ body.light-mode .insights-section p {
 
 #mobileMenuCheck:checked ~ .mobile-sidebar {
     left: 0;
+    transform: translateX(0);
     box-shadow: 12px 0 50px var(--sidebar-shadow), 
                 0 0 80px rgba(139, 92, 246, 0.15);
 }

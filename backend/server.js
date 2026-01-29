@@ -314,6 +314,36 @@ app.post('/api/scheduled-refresh/trigger', async (req, res) => {
     }
 });
 
+// Get scheduled refresh status (for monitoring)
+app.get('/api/scheduled-refresh/status', (req, res) => {
+    try {
+        const timezone = process.env.TZ || 'Asia/Beirut';
+        const now = new Date();
+        const nowInTimezone = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+        const nextRun = new Date(nowInTimezone);
+        nextRun.setHours(6, 0, 0, 0);
+        if (nextRun <= nowInTimezone) {
+            nextRun.setDate(nextRun.getDate() + 1);
+        }
+        
+        res.json({
+            success: true,
+            enabled: process.env.DISABLE_SCHEDULED_REFRESH !== 'true',
+            timezone: timezone,
+            cronExpression: '0 6 * * *',
+            currentServerTime: now.toISOString(),
+            currentTimeInTimezone: now.toLocaleString('en-US', { timeZone: timezone }),
+            nextScheduledRun: nextRun.toLocaleString('en-US', { timeZone: timezone }),
+            nextScheduledRunISO: nextRun.toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
 // Clear stuck request for an admin
 app.post('/api/refresh/clear-stuck', async (req, res) => {
     try {

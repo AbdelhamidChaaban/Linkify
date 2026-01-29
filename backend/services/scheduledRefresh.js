@@ -344,7 +344,7 @@ async function refreshAllActiveAdmins() {
 
 /**
  * Start the scheduled refresh task
- * Runs daily at 6:00 AM
+ * Runs daily at 6:00 AM (Lebanon/Beirut timezone)
  */
 function startScheduledRefresh() {
     // Check if scheduled refresh is disabled
@@ -363,26 +363,35 @@ function startScheduledRefresh() {
     // Cron format: minute hour day month day-of-week
     // '0 6 * * *' means: at minute 0 of hour 6, every day
     const cronExpression = '0 6 * * *';
+    const timezone = process.env.TZ || 'Asia/Beirut'; // Default to Lebanon timezone
     
     console.log('⏰ [Scheduled Refresh] Setting up daily refresh at 6:00 AM...');
+    console.log(`⏰ [Scheduled Refresh] Timezone from env: ${process.env.TZ || 'NOT SET (using default)'}`);
+    console.log(`⏰ [Scheduled Refresh] Using timezone: ${timezone}`);
     
     const task = cron.schedule(cronExpression, async () => {
+        console.log(`\n🔔 [Scheduled Refresh] CRON TRIGGERED at ${new Date().toLocaleString('en-US', { timeZone: timezone })} (${timezone})`);
         await refreshAllActiveAdmins();
     }, {
         scheduled: true,
-        timezone: process.env.TZ || 'UTC' // Use TZ env var or default to UTC
+        timezone: timezone
     });
     
-    console.log(`✅ [Scheduled Refresh] Scheduled refresh configured to run daily at 6:00 AM (${process.env.TZ || 'UTC'} timezone)`);
+    console.log(`✅ [Scheduled Refresh] Scheduled refresh configured to run daily at 6:00 AM (${timezone} timezone)`);
     
-    // Log next run time
+    // Log next run time in the configured timezone
     const now = new Date();
-    const nextRun = new Date(now);
+    const nowInTimezone = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+    const nextRun = new Date(nowInTimezone);
     nextRun.setHours(6, 0, 0, 0);
-    if (nextRun <= now) {
+    if (nextRun <= nowInTimezone) {
         nextRun.setDate(nextRun.getDate() + 1);
     }
-    console.log(`📅 [Scheduled Refresh] Next refresh scheduled for: ${nextRun.toISOString()}`);
+    
+    console.log(`📅 [Scheduled Refresh] Current server time: ${now.toISOString()}`);
+    console.log(`📅 [Scheduled Refresh] Current time in ${timezone}: ${now.toLocaleString('en-US', { timeZone: timezone })}`);
+    console.log(`📅 [Scheduled Refresh] Next refresh scheduled for: ${nextRun.toLocaleString('en-US', { timeZone: timezone })} (${timezone})`);
+    console.log(`📅 [Scheduled Refresh] Next refresh in ISO: ${nextRun.toISOString()}`);
     
     return task;
 }
