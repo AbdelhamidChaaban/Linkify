@@ -262,14 +262,27 @@ async function refreshAllActiveAdmins() {
         return;
     }
     
-    console.log(`🔄 [Scheduled Refresh] Refreshing ${activeAdmins.length} admin(s) in parallel...`);
+    console.log(`🔄 [Scheduled Refresh] Refreshing ${activeAdmins.length} admin(s) sequentially to avoid rate limits...`);
     
-    // Step 1: Delete old sessions before refresh (ensures fresh sessions are stored)
-    await deleteOldSessionsForActiveAdmins(activeAdmins);
+    // Step 1: REMOVED forced session deletion. 
+    // We want to reuse valid sessions to avoid flooding Alfa with login requests.
+    // await deleteOldSessionsForActiveAdmins(activeAdmins);
     
-    // Step 2: Refresh all admins in parallel (truly parallel, not sequential)
-    const refreshPromises = activeAdmins.map(admin => refreshAdmin(admin));
-    const results = await Promise.all(refreshPromises);
+    // Step 2: Refresh admins sequentially with a small delay
+    const results = [];
+    for (let i = 0; i < activeAdmins.length; i++) {
+        const admin = activeAdmins[i];
+        console.log(`🔄 [Scheduled Refresh] [${i + 1}/${activeAdmins.length}] Processing ${admin.name}...`);
+        
+        const result = await refreshAdmin(admin);
+        results.push(result);
+        
+        // Add a small delay between admins (e.g., 2 seconds) to avoid Alfa's rate limits
+        if (i < activeAdmins.length - 1) {
+            const delay = 2000; // 2 seconds
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
     
     // Summary
     const successful = results.filter(r => r.success).length;

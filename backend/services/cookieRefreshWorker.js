@@ -11,16 +11,17 @@ const { getAdminData } = require('./firebaseDbService');
  */
 
 // Worker configuration
-const COOKIE_REFRESH_THRESHOLD_MS = 30 * 60 * 1000; // Refresh if expiring within 30 minutes
+const COOKIE_REFRESH_THRESHOLD_MS = 45 * 60 * 1000; // INCREASED: Refresh if expiring within 45 minutes
 const REFRESH_BUFFER_MS = 30 * 1000; // Refresh 30 seconds before expiry
 const MAX_CONCURRENT_REFRESHES = 5; // Max concurrent refreshes (global semaphore)
 const MAX_CONCURRENT_LOGINS = 5; // Max concurrent full logins (same as refreshes)
 const ADMINS_PER_MINUTE = 10; // Stagger execution: refresh 10 admins per minute
 const DELAY_BETWEEN_ADMINS_MS = (60 * 1000) / ADMINS_PER_MINUTE; // 6 seconds between each admin
 const LOGIN_IN_PROGRESS_TTL = 5 * 60; // 5 minutes TTL for login-in-progress flag
-const MIN_SLEEP_MS = 10 * 1000; // Minimum 10 seconds (only for safety, not enforced for expiry-driven scheduling)
-const MAX_SLEEP_MS = 60 * 60 * 1000; // Maximum 60 minutes (safety cap, but expiry-driven takes priority)
-const BATCH_SIZE = 5; // Process 5 admins per batch (matches MAX_CONCURRENT_REFRESHES)
+const MIN_SLEEP_MS = 10 * 1000; // Minimum 10 seconds
+const MAX_SLEEP_MS = 60 * 60 * 1000; // Maximum 60 minutes
+const BATCH_SIZE = 5; // Process 5 admins per batch
+const KEEP_ALIVE_BUFFER_MS = 45 * 60 * 1000; // REDUCED: Schedule keep-alive 45 minutes before expiry (was 60)
 
 // Health tracking for backoff and throttling
 let consecutiveFailures = 0;
@@ -1185,7 +1186,7 @@ function scheduleNextDailyLogin() {
 
 // Silent keep-alive scheduler - dynamic scheduling based on __ACCOUNT expiry
 let keepAliveTimeoutId = null;
-const KEEP_ALIVE_BUFFER_MS = 60 * 60 * 1000; // 60 minutes (1 hour) before expiry - ensures cookies are refreshed well before expiration
+// BUFFER IS NOW DEFINED AT TOP OF FILE: const KEEP_ALIVE_BUFFER_MS = 45 * 60 * 1000;
 
 // Track last scheduled keep-alive times per admin (to avoid duplicate logs)
 // Map<adminId, { nextKeepAliveUTC: number, expiryUTC: number }>
@@ -1598,8 +1599,25 @@ async function scheduleNextKeepAlive() {
             return;
         }
 
+        // Consolidate and sort schedules
+        adminSchedules.sort((a, b) => a.nextKeepAliveUTC - b.nextKeepAliveUTC);
+
         // Find earliest next keep-alive time (all in UTC)
         const earliestNextUTC = Math.min(...nextTimes);
+        
+        // Log "Night Guard" status every hour during 00:00 - 06:00
+        const timezone = process.env.TZ || 'Asia/Beirut';
+        const nowInBeirut = new Date(new Date().toLocaleString('en-US', { timeZone: timezone }));
+        const currentHour = nowInBeirut.getHours();
+        
+        if (currentHour >= 0 && currentHour < 6) {
+            // Check if we already logged guard status in the last hour
+            const lastGuardLog = await cacheLayer.get('worker:nightGuardLog');
+            if (lastGuardLog !== currentHour.toString()) {
+                console.log(`🌙 [Night Guard] Active at ${currentHour}:00 AM. Keeping ${adminsWithCookies} sessions alive until the 6 AM refresh.`);
+                await cacheLayer.set('worker:nightGuardLog', currentHour.toString(), 3600);
+            }
+        }
         
         // CRITICAL: Also check for expired cookies periodically (every 1 minute)
         // This ensures we catch expired cookies IMMEDIATELY and perform proactive login
@@ -1693,20 +1711,22 @@ async function scheduleNextKeepAlive() {
  */
 function startWorker() {
     console.log('🚀 [Cookie Worker] Starting adaptive cookie refresh worker...');
-    console.log(`   Daily login: 6 AM (proactive __ACCOUNT refresh)`);
+    console.log(`   Daily login: 6 AM (DISABLED - Handled by scheduledRefresh.js)`);
     console.log(`   Silent keep-alive: Every 30-45 min or before expiry`);
     console.log(`   Max concurrent logins: ${MAX_CONCURRENT_LOGINS}`);
     console.log(`   Batch size: ${BATCH_SIZE} admins`);
 
-    // Schedule daily login at 6 AM
-    scheduleNextDailyLogin();
+    // DISABLED: Daily 6 AM check is now redundant because scheduledRefresh.js 
+    // already performs a sequential 6 AM data refresh which refreshes cookies naturally.
+    // Having both causes massive login collisions and 401 errors.
+    // scheduleNextDailyLogin();
     
     // Start silent keep-alive cycle
     scheduleNextKeepAlive();
     
     // Note: We no longer run minute-by-minute refresh cycles
     // All refreshes are now driven by:
-    // 1. Daily login at 6 AM (proactive)
+    // 1. Daily data refresh at 6 AM (scheduledRefresh.js)
     // 2. Manual refresh requests (on-demand)
     // 3. Cookie expiry-driven refreshes (when __ACCOUNT expires)
     // 4. Silent keep-alive pings (every 30-45 min or before expiry)
