@@ -440,22 +440,47 @@ async function refreshCookiesForAdmin(admin) {
         const cookiesStillValid = currentCookieExpiry && currentCookieExpiry > currentTime;
         
         if (cookiesStillValid) {
-            // Cookies are still valid - keep-alive failed due to network/timeout, not expired cookies
-            // Reschedule refresh for a short time in the future (30 seconds) instead of forcing login
-            console.log(`⚠️ [Worker] Keep-alive failed (timeout/network) for ${id}, but cookies are still valid (expires ${new Date(currentCookieExpiry).toISOString()})`);
-            console.log(`   Rescheduling refresh in 30 seconds instead of forcing login...`);
+            // Check if the failure was due to a network error (DNS, ECONNRESET, etc.)
+            const keepAliveError = keepAliveResult.error || '';
+            const isNetworkError = keepAliveError.includes('ENOTFOUND') || 
+                                 keepAliveError.includes('ECONNRESET') || 
+                                 keepAliveError.includes('EPIPE') ||
+                                 keepAliveError.includes('DNS resolution failed') ||
+                                 keepAliveError.includes('Connection reset by peer');
             
-            const { storeNextRefresh } = require('./cookieManager');
-            const rescheduleTime = currentTime + (30 * 1000); // 30 seconds from now
-            await storeNextRefresh(id, rescheduleTime);
-            
-            const expiry = currentCookieExpiry;
-            logData.nextRefresh = rescheduleTime;
-            logData.outcomes.keepAlive = { success: false, duration: keepAliveDuration, reason: 'timeout-network-rescheduled' };
-            logData.phases.push({ phase: 'keep-alive', duration: keepAliveDuration, outcome: 'rescheduled-valid-cookies' });
-            
-            console.log(`✅ [Worker] Rescheduled refresh for ${id} at ${new Date(rescheduleTime).toISOString()} (cookies still valid)`);
-            return { success: false, method: null, expiry, scheduled: true, reason: 'keep-alive-timeout-rescheduled', logData };
+            if (isNetworkError) {
+                // This is a network error, not a credential issue - don't treat as failure
+                console.log(`⚠️ [Worker] Keep-alive failed due to network error for ${id}, but cookies are still valid (expires ${new Date(currentCookieExpiry).toISOString()})`);
+                console.log(`   Rescheduling refresh in 30 seconds instead of marking as failed...`);
+                
+                const { storeNextRefresh } = require('./cookieManager');
+                const rescheduleTime = currentTime + (30 * 1000); // 30 seconds from now
+                await storeNextRefresh(id, rescheduleTime);
+                
+                const expiry = currentCookieExpiry;
+                logData.nextRefresh = rescheduleTime;
+                logData.outcomes.keepAlive = { success: false, duration: keepAliveDuration, reason: 'network-error-rescheduled' };
+                logData.phases.push({ phase: 'keep-alive', duration: keepAliveDuration, outcome: 'rescheduled-network-error' });
+                
+                console.log(`✅ [Worker] Rescheduled refresh for ${id} at ${new Date(rescheduleTime).toISOString()} (network error, cookies still valid)`);
+                return { success: false, method: null, expiry, scheduled: true, reason: 'network-error-rescheduled', logData };
+            } else {
+                // Cookies are still valid but it's not a network error - reschedule refresh for a short time in the future (30 seconds) instead of forcing login
+                console.log(`⚠️ [Worker] Keep-alive failed (timeout/network) for ${id}, but cookies are still valid (expires ${new Date(currentCookieExpiry).toISOString()})`);
+                console.log(`   Rescheduling refresh in 30 seconds instead of forcing login...`);
+                
+                const { storeNextRefresh } = require('./cookieManager');
+                const rescheduleTime = currentTime + (30 * 1000); // 30 seconds from now
+                await storeNextRefresh(id, rescheduleTime);
+                
+                const expiry = currentCookieExpiry;
+                logData.nextRefresh = rescheduleTime;
+                logData.outcomes.keepAlive = { success: false, duration: keepAliveDuration, reason: 'timeout-network-rescheduled' };
+                logData.phases.push({ phase: 'keep-alive', duration: keepAliveDuration, outcome: 'rescheduled-valid-cookies' });
+                
+                console.log(`✅ [Worker] Rescheduled refresh for ${id} at ${new Date(rescheduleTime).toISOString()} (cookies still valid)`);
+                return { success: false, method: null, expiry, scheduled: true, reason: 'keep-alive-timeout-rescheduled', logData };
+            }
         }
         
         // Cookies expired or can't determine validity - perform full login

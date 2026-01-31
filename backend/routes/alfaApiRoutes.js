@@ -28,6 +28,23 @@ function createErrorResponse(message, error = null) {
         timestamp: Date.now()
     };
     
+    // Check if this is a network error
+    const isNetworkError = error && (
+        (error.message && (
+            error.message.includes('ENOTFOUND') ||
+            error.message.includes('ECONNRESET') ||
+            error.message.includes('EPIPE') ||
+            error.message.includes('DNS resolution failed') ||
+            error.message.includes('Connection reset by peer')
+        )) ||
+        (error.type === 'Network')
+    );
+    
+    if (isNetworkError) {
+        response.error = 'Network error — unable to reach Alfa servers';
+        response.errorType = 'network';
+    }
+    
     if (error && process.env.NODE_ENV !== 'production') {
         response.errorDetails = {
             message: error.message,

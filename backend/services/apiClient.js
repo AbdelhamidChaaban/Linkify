@@ -1,6 +1,26 @@
 const https = require('https');
 const http = require('http');
+const dns = require('dns').promises;
 const { URL } = require('url');
+
+// Configure multiple DNS resolvers for fallback
+const DNS_RESOLVERS = [
+    '8.8.8.8',    // Google DNS
+    '8.8.4.4',    // Google DNS backup
+    '1.1.1.1',    // Cloudflare DNS
+    '1.0.0.1',    // Cloudflare DNS backup
+    '208.67.222.222', // OpenDNS
+    '208.67.220.220'  // OpenDNS backup
+];
+
+// Set custom DNS resolvers
+try {
+    dns.setServers(DNS_RESOLVERS);
+    console.log(`🌐 DNS resolvers configured: ${DNS_RESOLVERS.join(', ')}`);
+} catch (error) {
+    console.warn(`⚠️ Failed to set DNS resolvers: ${error.message}`);
+    console.log('Using default system DNS resolvers');
+}
 
 const BASE_URL = 'https://www.alfa.com.lb';
 const DEFAULT_TIMEOUT = 3000;
@@ -232,9 +252,21 @@ function makeRequest(options, timeout) {
         });
 
         req.on('error', (error) => {
+            // Classify specific network errors
+            let errorType = 'Network';
+            let errorMessage = `Network error: ${error.message}`;
+            
+            if (error.code === 'ENOTFOUND') {
+                errorType = 'Network';
+                errorMessage = `DNS resolution failed: ${error.message}`;
+            } else if (error.code === 'ECONNRESET' || error.code === 'EPIPE') {
+                errorType = 'Network';
+                errorMessage = `Connection reset by peer: ${error.message}`;
+            }
+            
             reject(new ApiError(
-                `Network error: ${error.message}`,
-                'Network',
+                errorMessage,
+                errorType,
                 null,
                 error
             ));

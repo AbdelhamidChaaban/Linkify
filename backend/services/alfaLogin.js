@@ -735,297 +735,357 @@ async function loginViaHttp(phone, password, adminId) {
         throw new Error(`Phone number must be exactly 8 digits. Got: ${cleanPhone.length} digits`);
     }
     
-    return new Promise((resolve, reject) => {
-        const startTime = Date.now();
-        const loginUrl = new URL(AEFA_LOGIN_URL);
-        let cookies = [];
-        let csrfToken = null;
-        
-        // Step 1: Fetch login page to get CSRF token
-        const getOptions = {
-            hostname: loginUrl.hostname,
-            path: loginUrl.pathname,
-            method: 'GET',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': 'https://www.alfa.com.lb/'
-            },
-            agent: httpsAgent
-        };
-        
-        console.log(`⚡ [HTTP Login] Fetching login page to extract CSRF token...`);
-        const getReq = https.request(getOptions, (getRes) => {
-            let htmlData = '';
-            
-            // Collect cookies from initial request
-            if (getRes.headers['set-cookie']) {
-                cookies = parseCookiesFromHeaders(getRes.headers['set-cookie']);
-            }
-            
-            getRes.on('data', (chunk) => {
-                htmlData += chunk;
-            });
-            
-            getRes.on('end', () => {
-                // Extract CSRF token from HTML
-                const tokenMatch = htmlData.match(/name="__RequestVerificationToken"\s+value="([^"]+)"/) ||
-                                 htmlData.match(/<input[^>]*name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
+    // Retry with exponential backoff for network errors
+    const RETRY_DELAYS = [1000, 3000, 5000]; // 1s, 3s, 5s
+    
+    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+        try {
+            const result = await new Promise((resolve, reject) => {
+                const startTime = Date.now();
+                const loginUrl = new URL(AEFA_LOGIN_URL);
+                let cookies = [];
+                let csrfToken = null;
                 
-                if (!tokenMatch) {
-                    console.log(`⚠️ [HTTP Login] Could not extract CSRF token`);
-                    resolve({ success: false, needsCaptcha: false, error: 'Could not extract CSRF token' });
-                    return;
-                }
+                // Step 1: Fetch login page to get CSRF token
+                const getOptions = {
+                    hostname: loginUrl.hostname,
+                    path: loginUrl.pathname,
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Referer': 'https://www.alfa.com.lb/'
+                    },
+                    agent: httpsAgent
+                };
                 
-                csrfToken = tokenMatch[1];
-                console.log(`✅ [HTTP Login] Extracted CSRF token`);
-                
-                // Check for CAPTCHA in HTML
-                const hasCaptcha = htmlData.includes('g-recaptcha') || htmlData.includes('recaptcha');
-                let captchaToken = null;
-                
-                if (hasCaptcha) {
-                    console.log(`[Captcha] CAPTCHA detected in login page`);
+                console.log(`⚡ [HTTP Login] Fetching login page to extract CSRF token... (attempt ${attempt + 1})`);
+                const getReq = https.request(getOptions, (getRes) => {
+                    let htmlData = '';
                     
-                    // Extract site key
-                    const siteKey = extractSiteKey(htmlData);
-                    if (!siteKey) {
-                        console.log(`⚠️ [HTTP Login] CAPTCHA detected but could not extract site key`);
-                        resolve({ success: false, needsCaptcha: true, fallback: false });
-                        return;
+                    // Collect cookies from initial request
+                    if (getRes.headers['set-cookie']) {
+                        cookies = parseCookiesFromHeaders(getRes.headers['set-cookie']);
                     }
                     
-                    // Solve CAPTCHA using 2Captcha
-                    if (isCaptchaServiceAvailable()) {
-                        console.log(`[Captcha] Solving CAPTCHA for admin ${adminId}`);
-                        solveCaptcha(siteKey, AEFA_LOGIN_URL)
-                            .then(token => {
-                                captchaToken = token;
-                                console.log(`[Captcha] CAPTCHA solved successfully`);
-                                
-                                // Continue with login using the token
-                                performLoginWithCaptcha();
-                            })
-                            .catch(error => {
-                                console.error(`[Captcha] CAPTCHA failed after retries: ${error.message}`);
-                                resolve({ success: false, needsCaptcha: true, error: error.message });
-                            });
-                        return; // Will continue in performLoginWithCaptcha callback
-                    } else {
-                        console.log(`⚠️ [HTTP Login] CAPTCHA detected but CAPTCHA_API_KEY not configured`);
-                        resolve({ success: false, needsCaptcha: true, fallback: false });
-                        return;
-                    }
-                }
-                
-                // No CAPTCHA, proceed with normal login
-                performLoginWithoutCaptcha();
-                
-                function performLoginWithCaptcha() {
-                    // Step 2: POST login form with CAPTCHA token
-                    const postUrl = new URL(AEFA_LOGIN_URL);
-                    let formData = `Username=${encodeURIComponent(cleanPhone)}&Password=${encodeURIComponent(password)}&__RequestVerificationToken=${encodeURIComponent(csrfToken)}`;
+                    getRes.on('data', (chunk) => {
+                        htmlData += chunk;
+                    });
                     
-                    if (captchaToken) {
-                        formData += `&g-recaptcha-response=${encodeURIComponent(captchaToken)}`;
-                    }
-                    
-                    performPostRequest(formData);
-                }
-                
-                function performLoginWithoutCaptcha() {
-                    // Step 2: POST login form
-                    const postUrl = new URL(AEFA_LOGIN_URL);
-                    const formData = `Username=${encodeURIComponent(cleanPhone)}&Password=${encodeURIComponent(password)}&__RequestVerificationToken=${encodeURIComponent(csrfToken)}`;
-                    
-                    performPostRequest(formData);
-                }
-                
-                function performPostRequest(formData) {
-                    const postUrl = new URL(AEFA_LOGIN_URL);
-                    
-                    // Build cookie header from initial cookies
-                    const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-                    
-                    const postOptions = {
-                        hostname: postUrl.hostname,
-                        path: postUrl.pathname,
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'Content-Length': Buffer.byteLength(formData),
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                            'Accept-Language': 'en-US,en;q=0.9',
-                            'Referer': AEFA_LOGIN_URL,
-                            'Origin': 'https://www.alfa.com.lb',
-                            'Cookie': cookieHeader
-                        },
-                        agent: httpsAgent
-                    };
-                    
-                    console.log(`⚡ [HTTP Login] Submitting login form...`);
-                    const postReq = https.request(postOptions, (postRes) => {
-                        console.log(`🔍🔍🔍 [HTTP Login] POST RESPONSE HANDLER CALLED! Status: ${postRes.statusCode}`);
-                        console.log(`🔍 [HTTP Login] POST response received: status=${postRes.statusCode}`);
+                    getRes.on('end', () => {
+                        // Extract CSRF token from HTML
+                        const tokenMatch = htmlData.match(/name="__RequestVerificationToken"\s+value="([^"]+)"/) ||
+                                         htmlData.match(/<input[^>]*name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
                         
-                        // Collect cookies from login response
-                        if (postRes.headers['set-cookie']) {
-                            const newCookies = parseCookiesFromHeaders(postRes.headers['set-cookie']);
-                            // Merge cookies, keeping latest values
-                            const cookieMap = new Map();
-                            [...cookies, ...newCookies].forEach(c => cookieMap.set(c.name, c));
-                            cookies = Array.from(cookieMap.values());
-                            console.log(`🔍 [HTTP Login] Collected ${newCookies.length} new cookies from POST response (total: ${cookies.length})`);
+                        if (!tokenMatch) {
+                            console.log(`⚠️ [HTTP Login] Could not extract CSRF token`);
+                            resolve({ success: false, needsCaptcha: false, error: 'Could not extract CSRF token' });
+                            return;
                         }
                         
-                        // Check if login was successful (redirect to dashboard or 302/301/200)
-                        const location = postRes.headers.location || '';
-                        const isSuccess = postRes.statusCode === 302 || postRes.statusCode === 301 || postRes.statusCode === 200;
+                        csrfToken = tokenMatch[1];
+                        console.log(`✅ [HTTP Login] Extracted CSRF token`);
                         
-                        console.log(`🔍 [HTTP Login] POST response: status=${postRes.statusCode}, location="${location}", cookies=${cookies.length}, isSuccess=${isSuccess}`);
+                        // Check for CAPTCHA in HTML
+                        const hasCaptcha = htmlData.includes('g-recaptcha') || htmlData.includes('recaptcha');
+                        let captchaToken = null;
                         
-                        // For redirects or 200, we need to consume the response body
-                        if (postRes.statusCode === 302 || postRes.statusCode === 301 || postRes.statusCode === 200) {
-                            postRes.resume(); // Consume the response body
+                        if (hasCaptcha) {
+                            console.log(`[Captcha] CAPTCHA detected in login page`);
+                            
+                            // Extract site key
+                            const siteKey = extractSiteKey(htmlData);
+                            if (!siteKey) {
+                                console.log(`⚠️ [HTTP Login] CAPTCHA detected but could not extract site key`);
+                                resolve({ success: false, needsCaptcha: true, fallback: false });
+                                return;
+                            }
+                            
+                            // Solve CAPTCHA using 2Captcha
+                            if (isCaptchaServiceAvailable()) {
+                                console.log(`[Captcha] Solving CAPTCHA for admin ${adminId}`);
+                                solveCaptcha(siteKey, AEFA_LOGIN_URL)
+                                    .then(token => {
+                                        captchaToken = token;
+                                        console.log(`[Captcha] CAPTCHA solved successfully`);
+                                        
+                                        // Continue with login using the token
+                                        performLoginWithCaptcha();
+                                    })
+                                    .catch(error => {
+                                        console.error(`[Captcha] CAPTCHA failed after retries: ${error.message}`);
+                                        resolve({ success: false, needsCaptcha: true, error: error.message });
+                                    });
+                                return; // Will continue in performLoginWithCaptcha callback
+                            } else {
+                                console.log(`⚠️ [HTTP Login] CAPTCHA detected but CAPTCHA_API_KEY not configured`);
+                                resolve({ success: false, needsCaptcha: true, fallback: false });
+                                return;
+                            }
                         }
-                    
-                    if (isSuccess) {
-                        // Follow redirect to get __ACCOUNT cookie (set on redirect target)
-                        // Also handle 200 responses - we should still visit /en/account to get __ACCOUNT cookie
-                        const shouldFollowRedirect = location && (postRes.statusCode === 302 || postRes.statusCode === 301);
-                        const shouldFollowDashboard = postRes.statusCode === 200; // Always try to visit dashboard for 200 responses
                         
-                        if (shouldFollowRedirect || shouldFollowDashboard) {
-                            // Use location header if present, otherwise go to dashboard
-                            const redirectPath = location || '/en/account';
-                            console.log(`🔄 [HTTP Login] Following ${shouldFollowRedirect ? 'redirect' : 'dashboard request'} to: ${redirectPath}`);
-                            const redirectUrl = new URL(redirectPath, 'https://www.alfa.com.lb');
+                        // No CAPTCHA, proceed with normal login
+                        performLoginWithoutCaptcha();
+                        
+                        function performLoginWithCaptcha() {
+                            // Step 2: POST login form with CAPTCHA token
+                            const postUrl = new URL(AEFA_LOGIN_URL);
+                            let formData = `Username=${encodeURIComponent(cleanPhone)}&Password=${encodeURIComponent(password)}&__RequestVerificationToken=${encodeURIComponent(csrfToken)}`;
+                            
+                            if (captchaToken) {
+                                formData += `&g-recaptcha-response=${encodeURIComponent(captchaToken)}`;
+                            }
+                            
+                            performPostRequest(formData);
+                        }
+                        
+                        function performLoginWithoutCaptcha() {
+                            // Step 2: POST login form
+                            const postUrl = new URL(AEFA_LOGIN_URL);
+                            const formData = `Username=${encodeURIComponent(cleanPhone)}&Password=${encodeURIComponent(password)}&__RequestVerificationToken=${encodeURIComponent(csrfToken)}`;
+                            
+                            performPostRequest(formData);
+                        }
+                        
+                        function performPostRequest(formData) {
+                            const postUrl = new URL(AEFA_LOGIN_URL);
+                            
+                            // Build cookie header from initial cookies
                             const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
                             
-                            const redirectOptions = {
-                                hostname: redirectUrl.hostname,
-                                path: redirectUrl.pathname + (redirectUrl.search || ''),
-                                method: 'GET',
+                            const postOptions = {
+                                hostname: postUrl.hostname,
+                                path: postUrl.pathname,
+                                method: 'POST',
                                 headers: {
+                                    'Content-Type': 'application/x-www-form-urlencoded',
+                                    'Content-Length': Buffer.byteLength(formData),
                                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                                     'Accept-Language': 'en-US,en;q=0.9',
                                     'Referer': AEFA_LOGIN_URL,
+                                    'Origin': 'https://www.alfa.com.lb',
                                     'Cookie': cookieHeader
                                 },
                                 agent: httpsAgent
                             };
                             
-                            const redirectReq = https.request(redirectOptions, (redirectRes) => {
-                                // Collect cookies from redirect target (where __ACCOUNT is typically set)
-                                if (redirectRes.headers['set-cookie']) {
-                                    const redirectCookies = parseCookiesFromHeaders(redirectRes.headers['set-cookie']);
+                            console.log(`⚡ [HTTP Login] Submitting login form... (attempt ${attempt + 1})`);
+                            const postReq = https.request(postOptions, (postRes) => {
+                                console.log(`🔍🔍🔍 [HTTP Login] POST RESPONSE HANDLER CALLED! Status: ${postRes.statusCode}`);
+                                console.log(`🔍 [HTTP Login] POST response received: status=${postRes.statusCode}`);
+                                
+                                // Collect cookies from login response
+                                if (postRes.headers['set-cookie']) {
+                                    const newCookies = parseCookiesFromHeaders(postRes.headers['set-cookie']);
                                     // Merge cookies, keeping latest values
-                                    const finalCookieMap = new Map();
-                                    [...cookies, ...redirectCookies].forEach(c => finalCookieMap.set(c.name, c));
-                                    cookies = Array.from(finalCookieMap.values());
+                                    const cookieMap = new Map();
+                                    [...cookies, ...newCookies].forEach(c => cookieMap.set(c.name, c));
+                                    cookies = Array.from(cookieMap.values());
+                                    console.log(`🔍 [HTTP Login] Collected ${newCookies.length} new cookies from POST response (total: ${cookies.length})`);
                                 }
                                 
-                                // Check if we got __ACCOUNT cookie
-                                const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+                                // Check if login was successful (redirect to dashboard or 302/301/200)
+                                const location = postRes.headers.location || '';
+                                const isSuccess = postRes.statusCode === 302 || postRes.statusCode === 301 || postRes.statusCode === 200;
                                 
+                                console.log(`🔍 [HTTP Login] POST response: status=${postRes.statusCode}, location="${location}", cookies=${cookies.length}, isSuccess=${isSuccess}`);
+                                
+                                // For redirects or 200, we need to consume the response body
+                                if (postRes.statusCode === 302 || postRes.statusCode === 301 || postRes.statusCode === 200) {
+                                    postRes.resume(); // Consume the response body
+                                }
+                            
+                            if (isSuccess) {
+                                // Follow redirect to get __ACCOUNT cookie (set on redirect target)
+                                // Also handle 200 responses - we should still visit /en/account to get __ACCOUNT cookie
+                                const shouldFollowRedirect = location && (postRes.statusCode === 302 || postRes.statusCode === 301);
+                                const shouldFollowDashboard = postRes.statusCode === 200; // Always try to visit dashboard for 200 responses
+                                
+                                if (shouldFollowRedirect || shouldFollowDashboard) {
+                                    // Use location header if present, otherwise go to dashboard
+                                    const redirectPath = location || '/en/account';
+                                    console.log(`🔄 [HTTP Login] Following ${shouldFollowRedirect ? 'redirect' : 'dashboard request'} to: ${redirectPath}`);
+                                    const redirectUrl = new URL(redirectPath, 'https://www.alfa.com.lb');
+                                    const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+                                    
+                                    const redirectOptions = {
+                                        hostname: redirectUrl.hostname,
+                                        path: redirectUrl.pathname + (redirectUrl.search || ''),
+                                        method: 'GET',
+                                        headers: {
+                                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                                            'Accept-Language': 'en-US,en;q=0.9',
+                                            'Referer': AEFA_LOGIN_URL,
+                                            'Cookie': cookieHeader
+                                        },
+                                        agent: httpsAgent
+                                    };
+                                    
+                                    const redirectReq = https.request(redirectOptions, (redirectRes) => {
+                                        // Collect cookies from redirect target (where __ACCOUNT is typically set)
+                                        if (redirectRes.headers['set-cookie']) {
+                                            const redirectCookies = parseCookiesFromHeaders(redirectRes.headers['set-cookie']);
+                                            // Merge cookies, keeping latest values
+                                            const finalCookieMap = new Map();
+                                            [...cookies, ...redirectCookies].forEach(c => finalCookieMap.set(c.name, c));
+                                            cookies = Array.from(finalCookieMap.values());
+                                        }
+                                        
+                                        // Check if we got __ACCOUNT cookie
+                                        const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+                                        
+                                        if (cookies.length > 0) {
+                                            console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
+                                            resolve({ success: true, cookies, needsCaptcha: false });
+                                        } else {
+                                            console.log(`⚠️ [HTTP Login] Login redirect succeeded but no cookies received`);
+                                            resolve({ success: false, needsCaptcha: false, error: 'No cookies received after redirect' });
+                                        }
+                                    });
+                                    
+                                    redirectReq.on('error', () => {
+                                        // Even if redirect fails, use cookies we have
+                                        if (cookies.length > 0) {
+                                            const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+                                            console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}, redirect failed but using available cookies) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
+                                            resolve({ success: true, cookies, needsCaptcha: false });
+                                        } else {
+                                            resolve({ success: false, needsCaptcha: false, fallback: true });
+                                        }
+                                    });
+                                    
+                                    redirectReq.setTimeout(5000, () => {
+                                        redirectReq.destroy();
+                                        // Use cookies we have even if redirect times out
+                                        if (cookies.length > 0) {
+                                            const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
+                                            console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}, redirect timeout but using available cookies) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
+                                            resolve({ success: true, cookies, needsCaptcha: false });
+                                        } else {
+                                            resolve({ success: false, needsCaptcha: false, fallback: true });
+                                        }
+                                    });
+                                    
+                                    redirectReq.end();
+                                    return; // Don't continue with original response handling
+                                }
+                                
+                                // No redirect but success
                                 if (cookies.length > 0) {
+                                    const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
                                     console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
                                     resolve({ success: true, cookies, needsCaptcha: false });
                                 } else {
-                                    console.log(`⚠️ [HTTP Login] Login redirect succeeded but no cookies received`);
-                                    resolve({ success: false, needsCaptcha: false, error: 'No cookies received after redirect' });
+                                    console.log(`⚠️ [HTTP Login] Login succeeded but no cookies received`);
+                                    resolve({ success: false, needsCaptcha: false, error: 'No cookies received after login' });
                                 }
-                            });
-                            
-                            redirectReq.on('error', () => {
-                                // Even if redirect fails, use cookies we have
-                                if (cookies.length > 0) {
-                                    const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
-                                    console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}, redirect failed but using available cookies) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
-                                    resolve({ success: true, cookies, needsCaptcha: false });
-                                } else {
-                                    resolve({ success: false, needsCaptcha: false, fallback: true });
-                                }
-                            });
-                            
-                            redirectReq.setTimeout(5000, () => {
-                                redirectReq.destroy();
-                                // Use cookies we have even if redirect times out
-                                if (cookies.length > 0) {
-                                    const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
-                                    console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}, redirect timeout but using available cookies) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
-                                    resolve({ success: true, cookies, needsCaptcha: false });
-                                } else {
-                                    resolve({ success: false, needsCaptcha: false, fallback: true });
-                                }
-                            });
-                            
-                            redirectReq.end();
-                            return; // Don't continue with original response handling
-                        }
-                        
-                        // No redirect but success
-                        if (cookies.length > 0) {
-                            const hasAccountCookie = cookies.some(c => c.name === '__ACCOUNT');
-                            console.log(`✅ [HTTP Login] Login successful! Got ${cookies.length} cookies (${hasAccountCookie ? 'including __ACCOUNT' : 'no __ACCOUNT'}) (${Math.round((Date.now() - startTime) / 100) / 10}s)`);
-                            resolve({ success: true, cookies, needsCaptcha: false });
-                        } else {
-                            console.log(`⚠️ [HTTP Login] Login succeeded but no cookies received`);
-                            resolve({ success: false, needsCaptcha: false, error: 'No cookies received after login' });
-                        }
-                    } else {
-                        // Check response body for errors or CAPTCHA
-                        let responseData = '';
-                        postRes.on('data', (chunk) => {
-                            responseData += chunk.toString();
-                        });
-                        
-                        postRes.on('end', () => {
-                            if (responseData.includes('g-recaptcha') || responseData.includes('recaptcha')) {
-                                console.log(`⚠️ [HTTP Login] CAPTCHA required in response`);
-                                resolve({ success: false, needsCaptcha: true, error: 'CAPTCHA required' });
                             } else {
-                                console.log(`⚠️ [HTTP Login] Login failed (status: ${postRes.statusCode})`);
-                                resolve({ success: false, needsCaptcha: false, error: `Login failed with status ${postRes.statusCode}` });
+                                // Check response body for errors or CAPTCHA
+                                let responseData = '';
+                                postRes.on('data', (chunk) => {
+                                    responseData += chunk.toString();
+                                });
+                                
+                                postRes.on('end', () => {
+                                    if (responseData.includes('g-recaptcha') || responseData.includes('recaptcha')) {
+                                        console.log(`⚠️ [HTTP Login] CAPTCHA required in response`);
+                                        resolve({ success: false, needsCaptcha: true, error: 'CAPTCHA required' });
+                                    } else {
+                                        console.log(`⚠️ [HTTP Login] Login failed (status: ${postRes.statusCode})`);
+                                        resolve({ success: false, needsCaptcha: false, error: `Login failed with status ${postRes.statusCode}` });
+                                    }
+                                });
                             }
                         });
+                        
+                        postReq.on('error', (error) => {
+                            console.log(`⚠️ [HTTP Login] POST request error: ${error.message}`);
+                            
+                            // Check if this is a network error that should be retried
+                            if (error.code === 'ENOTFOUND' || error.code === 'ECONNRESET' || error.code === 'EPIPE') {
+                                console.log(`⚠️ [HTTP Login] Network error (attempt ${attempt + 1}): ${error.code} - ${error.message}`);
+                                resolve({ success: false, needsCaptcha: false, error: `Network error: ${error.code} - ${error.message}` });
+                            } else {
+                                resolve({ success: false, needsCaptcha: false, error: error.message });
+                            }
+                        });
+                        
+                        postReq.setTimeout(10000, () => {
+                            postReq.destroy();
+                            console.log(`⚠️ [HTTP Login] POST request timeout`);
+                            resolve({ success: false, needsCaptcha: false, error: 'POST request timeout' });
+                        });
+                        
+                            postReq.write(formData);
+                            postReq.end();
+                        }
+                    });
+                });
+                
+                getReq.on('error', (error) => {
+                    console.log(`⚠️ [HTTP Login] GET request error: ${error.message}`);
+                    
+                    // Check if this is a network error that should be retried
+                    if (error.code === 'ENOTFOUND' || error.code === 'ECONNRESET' || error.code === 'EPIPE') {
+                        console.log(`⚠️ [HTTP Login] Network error (attempt ${attempt + 1}): ${error.code} - ${error.message}`);
+                        resolve({ success: false, needsCaptcha: false, error: `Network error: ${error.code} - ${error.message}` });
+                    } else {
+                        resolve({ success: false, needsCaptcha: false, error: error.message });
                     }
                 });
                 
-                postReq.on('error', (error) => {
-                    console.log(`⚠️ [HTTP Login] POST request error: ${error.message}`);
-                    resolve({ success: false, needsCaptcha: false, error: error.message });
+                getReq.setTimeout(8000, () => {
+                    getReq.destroy();
+                    console.log(`⚠️ [HTTP Login] GET request timeout`);
+                    resolve({ success: false, needsCaptcha: false, error: 'GET request timeout' });
                 });
                 
-                postReq.setTimeout(10000, () => {
-                    postReq.destroy();
-                    console.log(`⚠️ [HTTP Login] POST request timeout`);
-                    resolve({ success: false, needsCaptcha: false, error: 'POST request timeout' });
-                });
-                
-                    postReq.write(formData);
-                    postReq.end();
-                }
+                getReq.end();
             });
-        });
-        
-        getReq.on('error', (error) => {
-            console.log(`⚠️ [HTTP Login] GET request error: ${error.message}`);
-            resolve({ success: false, needsCaptcha: false, error: error.message });
-        });
-        
-        getReq.setTimeout(8000, () => {
-            getReq.destroy();
-            console.log(`⚠️ [HTTP Login] GET request timeout`);
-            resolve({ success: false, needsCaptcha: false, error: 'GET request timeout' });
-        });
-        
-        getReq.end();
-    });
+            
+            // If login was successful or it was not a network error, return the result
+            if (result.success || 
+                !(result.error && (
+                    result.error.includes('Network error: ENOTFOUND') ||
+                    result.error.includes('Network error: ECONNRESET') ||
+                    result.error.includes('Network error: EPIPE') ||
+                    result.error.includes('DNS resolution failed') ||
+                    result.error.includes('Connection reset by peer')
+                ))) {
+                return result;
+            }
+            
+            // If this was the last attempt, return the result
+            if (attempt === RETRY_DELAYS.length) {
+                return result;
+            }
+            
+            // Wait before retrying
+            console.log(`⏳ [HTTP Login] Waiting ${RETRY_DELAYS[attempt]}ms before retry...`);
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+            
+        } catch (error) {
+            // If it's not a network error, don't retry
+            if (!(error.message.includes('ENOTFOUND') || 
+                  error.message.includes('ECONNRESET') || 
+                  error.message.includes('EPIPE'))) {
+                throw error;
+            }
+            
+            if (attempt === RETRY_DELAYS.length) {
+                throw error;
+            }
+            
+            console.log(`⏳ [HTTP Login] Waiting ${RETRY_DELAYS[attempt]}ms before retry...`);
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+        }
+    }
+    
+    // This should not be reached, but return a default in case
+    return { success: false, needsCaptcha: false, error: 'Maximum retry attempts reached' };
 }
 
 module.exports = { loginToAlfa, loginViaHttp, delay, AEFA_LOGIN_URL, AEFA_DASHBOARD_URL };

@@ -571,41 +571,52 @@ async function loginAndSaveCookies(phone, password, userId) {
         // HTTP-based login with 2Captcha support
         console.log(`⚡ [Login] Attempting HTTP-based login...`);
         const httpResult = await loginViaHttp(phone, password, userId);
-        
+                
         if (httpResult.success && httpResult.cookies && httpResult.cookies.length > 0) {
             // Check if __ACCOUNT cookie is present (critical for long-lived sessions)
             const hasAccountCookie = httpResult.cookies.some(c => c.name === '__ACCOUNT');
-            
+                    
             if (!hasAccountCookie) {
                 console.log(`⚠️ [Fast Login] HTTP login got ${httpResult.cookies.length} cookies but missing __ACCOUNT cookie, will retry...`);
                 httpResult.fallback = true; // Force fallback
             } else {
                 // HTTP login succeeded and has __ACCOUNT cookie!
                 console.log(`✅ [Fast Login] HTTP login successful! Saving ${httpResult.cookies.length} cookies (including __ACCOUNT)...`);
-                
+                        
                 // Save all cookies to Redis
                 await saveCookies(userId, httpResult.cookies);
                 await saveLastVerified(userId);
-                
+                        
                 console.log(`✅ Login successful via HTTP, saved ${httpResult.cookies.length} cookies`);
                 return httpResult.cookies;
             }
-            
+                    
             // HTTP login succeeded and has __ACCOUNT cookie!
             console.log(`✅ [Login] HTTP login successful! Saving ${httpResult.cookies.length} cookies (including __ACCOUNT)...`);
-            
+                    
             // Save all cookies to Redis
             await saveCookies(userId, httpResult.cookies);
             await saveLastVerified(userId);
-            
+                    
             console.log(`✅ Login successful via HTTP, saved ${httpResult.cookies.length} cookies`);
             return httpResult.cookies;
         }
-        
+                
+        // Check if this is a network error (DNS, ECONNRESET, etc.)
+        if (httpResult.error && (
+            httpResult.error.includes('DNS resolution failed') ||
+            httpResult.error.includes('Connection reset by peer') ||
+            httpResult.error.includes('ENOTFOUND') ||
+            httpResult.error.includes('ECONNRESET') ||
+            httpResult.error.includes('EPIPE')
+        )) {
+            throw new Error(`Network error — unable to reach Alfa servers: ${httpResult.error}`);
+        }
+                
         // HTTP login failed or CAPTCHA detected
         const needsCaptcha = httpResult.needsCaptcha === true;
         const fallbackReason = needsCaptcha ? 'CAPTCHA detected' : 'HTTP login failed';
-        
+                
         // Try CAPTCHA service first (if available)
         if (needsCaptcha && isCaptchaServiceAvailable()) {
             console.log(`🔧 [LoginFallback] Attempting CAPTCHA solving service for admin ${userId} (${phone})...`);
@@ -622,7 +633,7 @@ async function loginAndSaveCookies(phone, password, userId) {
                 console.warn(`⚠️ [LoginFallback] CAPTCHA service error: ${captchaError.message}`);
             }
         }
-        
+                
         // No fallback available - throw error
         throw new Error(`Login failed: ${fallbackReason}. HTTP login failed and CAPTCHA service ${needsCaptcha ? 'unavailable or failed' : 'not needed'}`);
     } catch (error) {
@@ -729,7 +740,20 @@ async function getCookiesOrLogin(phone, password, userId) {
     // If no cookies, perform login
     if (!cookies || cookies.length === 0) {
         console.log(`⚠️ No cookies found for ${userId}, performing login...`);
-        cookies = await loginAndSaveCookies(phone, password, userId);
+        try {
+            cookies = await loginAndSaveCookies(phone, password, userId);
+        } catch (error) {
+            // Check if this is a network error
+            if (error.message.includes('Network error — unable to reach Alfa servers') ||
+                error.message.includes('DNS resolution failed') ||
+                error.message.includes('Connection reset by peer') ||
+                error.message.includes('ENOTFOUND') ||
+                error.message.includes('ECONNRESET') ||
+                error.message.includes('EPIPE')) {
+                throw new Error('Network error — unable to reach Alfa servers');
+            }
+            throw error; // Re-throw other errors
+        }
     } else {
         console.log(`✅ Found ${cookies.length} cookies, using them for login...`);
     }

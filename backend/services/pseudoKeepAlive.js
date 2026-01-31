@@ -289,11 +289,21 @@ async function pseudoKeepAlive(userId, currentCookies) {
 
         req.on('error', (error) => {
             // Network errors are logged in summary by caller - no individual log here
+            // Check for specific network error codes
+            let errorType = 'Network';
+            let errorMessage = error.message || 'Network error';
+            
+            if (error.code === 'ENOTFOUND') {
+                errorMessage = `DNS resolution failed: ${error.message}`;
+            } else if (error.code === 'ECONNRESET' || error.code === 'EPIPE') {
+                errorMessage = `Connection reset by peer: ${error.message}`;
+            }
+            
             resolve({
                 success: false,
                 cookies: null,
                 statusCode: 0,
-                error: error.message || 'Network error'
+                error: errorMessage
             });
         });
 
