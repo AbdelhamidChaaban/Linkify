@@ -312,7 +312,13 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
         let hasAlertSuccess = html.includes('alert-success') || /alert-success/i.test(html);
         
         // Check for subscriber card (success indicator)
-        const subscriberCardPattern = new RegExp(`(?:961|0)?${cleanSubscriberNumber}`, 'i');
+        // CRITICAL FIX: Handle numbers that may appear with or without leading zero
+        // For numbers starting with 03, they sometimes appear as "03489588" and sometimes as "3489588"
+        const normalizedNumberWithoutZero = cleanSubscriberNumber.replace(/^0+/, '');
+        const normalizedNumberWithZero = cleanSubscriberNumber.startsWith('0') ? cleanSubscriberNumber : '0' + cleanSubscriberNumber;
+        
+        // Create pattern that matches both versions
+        const subscriberCardPattern = new RegExp(`(?:(?:961|0)?${normalizedNumberWithoutZero}|${normalizedNumberWithZero})`, 'i');
         let hasSubscriberCard = subscriberCardPattern.test(html) && 
                                  html.includes('secondary-numbers') &&
                                  (html.includes('ushare-numbers') || html.includes('col-sm-4'));
@@ -347,6 +353,7 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
                 // Re-check for markers after following redirect
                 hasAlertDanger = html.includes('alert-danger') || /alert-danger/i.test(html);
                 hasAlertSuccess = html.includes('alert-success') || /alert-success/i.test(html);
+                // Use the same improved pattern for consistency
                 hasSubscriberCard = subscriberCardPattern.test(html) && 
                                      html.includes('secondary-numbers') &&
                                      (html.includes('ushare-numbers') || html.includes('col-sm-4'));
