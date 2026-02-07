@@ -791,7 +791,14 @@ class PushNotificationManager {
         
         list.innerHTML = this.notifications.map(notif => {
             const time = new Date(notif.timestamp).toLocaleString();
-            const typeClass = notif.type === 'expiring' ? 'expiring' : 'high-consumption';
+            let typeClass;
+            if (notif.type === 'expiring') {
+                typeClass = 'expiring';
+            } else if (notif.type === 'high-total-consumption') {
+                typeClass = 'high-total-consumption';
+            } else {
+                typeClass = 'high-consumption';
+            }
             
             return `
                 <div class="notification-item ${typeClass}">

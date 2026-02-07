@@ -550,7 +550,123 @@ async function checkForNotifications(userId, adminId = null) {
             }
             
             // ==========================================
-            // 2. CHECK: Admin expiration less than 30 days
+            // 2. CHECK: Total consumption at 95% or more
+            // ==========================================
+            // Use TOTAL consumption (from Mobile Internet service)
+            // ONLY FOR ACTIVE ADMINS
+            let totalConsumption = 0;
+            let totalLimit = 0;
+            
+            // Try to get total consumption and limit from alfaData fields first
+            if (alfaDataForConsumption.totalConsumption) {
+                const consumptionStr = String(alfaDataForConsumption.totalConsumption);
+                const match = consumptionStr.match(/(\d+\.?\d*)\s*\/\s*(\d+\.?\d*)/);
+                if (match) {
+                    totalConsumption = parseFloat(match[1]) || 0;
+                    totalLimit = parseFloat(match[2]) || 0;
+                    console.log(`✅ [${adminName}] Found totalConsumption from alfaData.totalConsumption: ${totalConsumption}/${totalLimit}`);
+                }
+            }
+            
+            // Fallback: Try to extract from adminConsumption string (it might contain total data)
+            if (totalConsumption === 0 && alfaDataForConsumption.adminConsumption) {
+                const consumptionStr = String(alfaDataForConsumption.adminConsumption);
+                const match = consumptionStr.match(/(\d+\.?\d*)\s*\/\s*(\d+\.?\d*)/);
+                if (match) {
+                    // The second number in adminConsumption might be the total limit
+                    const adminConsumptionValue = parseFloat(match[1]) || 0;
+                    const possibleTotalLimit = parseFloat(match[2]) || 0;
+                    
+                    // If the second number is much larger than admin quota, it's likely the total limit
+                    if (possibleTotalLimit > (adminData.quota || 0) * 1.5) {
+                        totalLimit = possibleTotalLimit;
+                        console.log(`✅ [${adminName}] Using total limit from adminConsumption string: ${totalLimit} GB`);
+                    }
+                }
+            }
+            
+            // Try to get total consumption from alfaData.primaryData (Mobile Internet service)
+            if (totalConsumption === 0 && alfaDataForConsumption.primaryData) {
+                try {
+                    const primaryData = alfaDataForConsumption.primaryData;
+                    
+                    // Look for Mobile Internet service for total consumption
+                    if (primaryData.ServiceInformationValue && Array.isArray(primaryData.ServiceInformationValue)) {
+                        for (const service of primaryData.ServiceInformationValue) {
+                            const serviceName = (service.ServiceNameValue || '').toLowerCase();
+                            
+                            // Look for Mobile Internet service (this contains total consumption)
+                            if (serviceName.includes('mobile internet')) {
+                                if (service.ServiceDetailsInformationValue && Array.isArray(service.ServiceDetailsInformationValue)) {
+                                    for (const details of service.ServiceDetailsInformationValue) {
+                                        // Extract total consumption and limit from Mobile Internet service
+                                        if (details.ConsumptionValue) {
+                                            let consumption = parseFloat(details.ConsumptionValue) || 0;
+                                            const consumptionUnit = details.ConsumptionUnitValue || '';
+                                            if (consumptionUnit === 'MB' && consumption > 0) {
+                                                consumption = consumption / 1024;
+                                            }
+                                            totalConsumption = consumption;
+                                            
+                                            // Also extract the limit from the same service details
+                                            // Look for limit information in the service details
+                                            if (details.TotalValue || details.BundleSizeValue) {
+                                                let limit = parseFloat(details.TotalValue || details.BundleSizeValue) || 0;
+                                                const limitUnit = details.TotalUnitValue || details.BundleSizeUnitValue || '';
+                                                if (limitUnit === 'MB' && limit > 0) {
+                                                    limit = limit / 1024;
+                                                }
+                                                totalLimit = limit;
+                                                console.log(`✅ [${adminName}] Extracted totalConsumption and limit from Mobile Internet: ${totalConsumption}/${totalLimit} GB`);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    if (totalConsumption > 0) break;
+                                }
+                            }
+                        }
+                    }
+                } catch (totalExtractError) {
+                    console.warn(`⚠️ [${adminName}] Error extracting totalConsumption from primaryData:`, totalExtractError.message);
+                }
+            }
+            
+            // Try to get total limit from adminData.quota if not found
+            if (totalLimit === 0) {
+                totalLimit = adminData.quota || 0;
+            }
+            
+            // Debug logging for total consumption check
+            console.log(`🔍 [${adminName}] Total consumption check: totalConsumption=${totalConsumption}, totalLimit=${totalLimit}`);
+            
+            // Check if total consumption is >= 95% of limit
+            if (totalConsumption > 0 && totalLimit > 0) {
+                const totalConsumptionPercentage = (totalConsumption / totalLimit) * 100;
+                console.log(`📊 [${adminName}] Total consumption percentage: ${totalConsumptionPercentage.toFixed(1)}%`);
+                
+                if (totalConsumptionPercentage >= 95) {
+                    notifications.push({
+                        type: 'high-total-consumption',
+                        title: 'Total Consumption Alert',
+                        message: `${adminName} has ${totalConsumptionPercentage.toFixed(0)}% used from its total consumption ${totalConsumption.toFixed(1)}/${totalLimit.toFixed(1)} GB`,
+                        adminId: adminId,
+                        adminPhone: adminPhone,
+                        totalConsumption: totalConsumption,
+                        totalLimit: totalLimit,
+                        percentage: totalConsumptionPercentage,
+                        priority: totalConsumptionPercentage >= 98 ? 'high' : 'medium'
+                    });
+                    console.log(`📢 Notification: ${adminName} has ${totalConsumptionPercentage.toFixed(1)}% total consumption (${totalConsumption.toFixed(1)}/${totalLimit.toFixed(1)} GB)`);
+                } else {
+                    console.log(`ℹ️ [${adminName}] Total consumption ${totalConsumptionPercentage.toFixed(1)}% is below 95% threshold`);
+                }
+            } else {
+                console.log(`⚠️ [${adminName}] Cannot check total consumption - missing data: totalConsumption=${totalConsumption}, totalLimit=${totalLimit}`);
+            }
+            
+            // ==========================================
+            // 3. CHECK: Admin expiration less than 30 days
             // ==========================================
             // expiration is a number (days until expiration) from getexpirydate API
             // ONLY FOR ACTIVE ADMINS
