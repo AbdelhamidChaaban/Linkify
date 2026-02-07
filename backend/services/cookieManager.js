@@ -731,7 +731,14 @@ async function getCookiesOrLogin(phone, password, userId) {
         console.log(`⚠️ No cookies found for ${userId}, performing login...`);
         cookies = await loginAndSaveCookies(phone, password, userId);
     } else {
-        console.log(`✅ Found ${cookies.length} cookies, using them for login...`);
+        // OPTIMIZATION: Check if cookies are still valid before using them
+        const areExpired = await areCookiesExpired(cookies);
+        if (!areExpired) {
+            console.log(`✅ Found ${cookies.length} fresh cookies, using them...`);
+        } else {
+            console.log(`⚠️ Cookies expired for ${userId}, performing fresh login...`);
+            cookies = await loginAndSaveCookies(phone, password, userId);
+        }
     }
     
     return cookies;

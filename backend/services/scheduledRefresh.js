@@ -268,18 +268,48 @@ async function refreshAllActiveAdmins() {
     // We want to reuse valid sessions to avoid flooding Alfa with login requests.
     // await deleteOldSessionsForActiveAdmins(activeAdmins);
     
-    // Step 2: Refresh admins sequentially with a small delay
+    // Step 2: Refresh admins with adaptive delays to prevent rate limiting
     const results = [];
+    const batchSize = 10; // Process in batches of 10
+    const baseDelay = 5000; // Start with 5 seconds
+    const maxDelay = 30000; // Max 30 seconds
+    const maxConsecutiveFailures = 20; // Stop after 20 consecutive failures
+    let consecutiveFailures = 0;
+    
     for (let i = 0; i < activeAdmins.length; i++) {
         const admin = activeAdmins[i];
         console.log(`🔄 [Scheduled Refresh] [${i + 1}/${activeAdmins.length}] Processing ${admin.name}...`);
         
+        // Circuit breaker: stop if too many consecutive failures
+        if (consecutiveFailures >= maxConsecutiveFailures) {
+            console.log(`🛑 [Scheduled Refresh] Circuit breaker triggered! ${consecutiveFailures} consecutive failures. Stopping refresh to prevent further issues.`);
+            console.log(`🛑 [Scheduled Refresh] Remaining ${activeAdmins.length - i} admins will be processed in next run.`);
+            break;
+        }
+        
+        // Adaptive delay: increase as we process more admins
+        let delay = baseDelay;
+        if (i > 0) {
+            // Increase delay every 10 admins
+            const batchNumber = Math.floor(i / batchSize);
+            delay = Math.min(baseDelay + (batchNumber * 5000), maxDelay);
+            console.log(`⏱️ [Scheduled Refresh] Using ${delay/1000}s delay for admin ${i + 1} (batch ${batchNumber + 1}, ${consecutiveFailures} consecutive failures)`);
+        }
+        
         const result = await refreshAdmin(admin);
         results.push(result);
         
-        // Add a small delay between admins (e.g., 2 seconds) to avoid Alfa's rate limits
+        // Track consecutive failures
+        if (result.success) {
+            consecutiveFailures = 0; // Reset on success
+        } else {
+            consecutiveFailures++;
+            console.log(`❌ [Scheduled Refresh] Consecutive failures: ${consecutiveFailures}`);
+        }
+        
+        // Add adaptive delay between admins (increases as we process more)
         if (i < activeAdmins.length - 1) {
-            const delay = 2000; // 2 seconds
+            console.log(`⏱️ [Scheduled Refresh] Waiting ${delay/1000}s before next admin...`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }

@@ -710,6 +710,7 @@ class HomeManager {
             this.setCardCount('11', 0); // Services To Expire Tomorrow
             this.setCardCount('6', 0); // Finished Services
             this.setCardCount('7', 0); // High Admin Consumption
+            this.setCardCount('14', 0); // High Total Consumption
             this.setCardCount('9', 0); // Inactive Numbers
             this.setCardCount('12', 0); // Waiting Balance
             this.setCardCount('13', 0); // Access Denied Numbers
@@ -735,6 +736,7 @@ class HomeManager {
         const expiringTomorrow = this.filterServicesToExpireTomorrow(snapshot);
         const finishedServices = this.filterFinishedServices(snapshot);
         const highAdminConsumption = this.filterHighAdminConsumption(snapshot);
+        const highTotalConsumption = this.filterHighTotalConsumption(snapshot);
         const requestedServices = this.filterRequestedServices(snapshot);
         const inactiveNumbers = this.filterInactiveNumbers(snapshot);
         const accessDeniedNumbers = this.filterAccessDeniedNumbers(snapshot);
@@ -747,6 +749,7 @@ class HomeManager {
         this.setCardCount('11', expiringTomorrow.length); // Services To Expire Tomorrow
         this.setCardCount('6', finishedServices.length); // Finished Services
         this.setCardCount('7', highAdminConsumption.length); // High Admin Consumption
+        this.setCardCount('14', highTotalConsumption.length); // High Total Consumption
         this.setCardCount('8', requestedServices.length); // Requested Services
         this.setCardCount('9', inactiveNumbers.length); // Inactive Numbers
         this.setCardCount('13', accessDeniedNumbers.length); // Access Denied Numbers
@@ -1507,6 +1510,93 @@ class HomeManager {
             return;
         }
         
+        // Handle "High Total Consumption" modal - 4 columns: Name, Total Consumption, Validity Date, Actions
+        if (modalType === 'highTotalConsumption') {
+            let tableRows = '';
+            let hasMore = false;
+            if (services.length === 0) {
+                tableRows = `
+                    <tr>
+                        <td colspan="4" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                            No admins with high total consumption found
+                        </td>
+                    </tr>
+                `;
+            } else {
+                const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
+                    const totalPercent = service.totalLimit > 0 ? (service.totalConsumption / service.totalLimit) * 100 : 0;
+                    const totalProgressClass = totalPercent >= 95 ? 'progress-fill error' : 'progress-fill';
+                    const totalProgressWidth = Math.min(totalPercent, 100);
+                    const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                    
+                    return `
+                        <tr class="${hiddenClass}">
+                            <td>
+                                <div>
+                                    <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                    <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="progress-container">
+                                    <div class="progress-bar">
+                                        <div class="${totalProgressClass}" style="width: ${totalProgressWidth}%"></div>
+                                    </div>
+                                    <div class="progress-text">${service.totalConsumption.toFixed(2)} / ${service.totalLimit.toFixed(2)} GB</div>
+                                </div>
+                            </td>
+                            <td>${this.escapeHtml(service.validityDate)}</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                            <circle cx="12" cy="12" r="3"/>
+                                        </svg>
+                                    </button>
+                                    <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <circle cx="12" cy="12" r="2"/>
+                                            <circle cx="12" cy="5" r="2"/>
+                                            <circle cx="12" cy="19" r="2"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }, 4);
+                tableRows = result.rows;
+                hasMore = result.hasMore;
+            }
+            
+            // Update table body content
+            tbody.innerHTML = tableRows;
+            
+            // Update "See More" button
+            const seeMoreBtn = modalElement.querySelector('.see-more-btn');
+            if (hasMore && !seeMoreBtn) {
+                const modalBody = modalElement.querySelector('.available-services-modal-body');
+                if (modalBody) {
+                    const btn = document.createElement('button');
+                    btn.className = 'see-more-btn';
+                    btn.textContent = 'See More';
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                        hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                        btn.remove();
+                    });
+                    modalBody.appendChild(btn);
+                }
+            } else if (!hasMore && seeMoreBtn) {
+                seeMoreBtn.remove();
+            }
+            
+            bindEventHandlers(tableRows, services);
+            return;
+        }
+        
         // Handle "Inactive Numbers" modal - 3 columns: Name, Balance, Actions
         if (modalType === 'inactiveNumbers') {
             let tableRows = '';
@@ -1806,6 +1896,10 @@ class HomeManager {
         // Handle "High Admin Consumption" card (card-id="7")
         else if (cardId === '7') {
             this.openHighAdminConsumptionModal();
+        }
+        // Handle "High Total Consumption" card (card-id="14")
+        else if (cardId === '14') {
+            this.openHighTotalConsumptionModal();
         }
         // Handle "Requested Services" card (card-id="8")
         else if (cardId === '8') {
@@ -4692,6 +4786,167 @@ class HomeManager {
         return highAdminConsumption;
     }
 
+    // High Total Consumption Filter
+    filterHighTotalConsumption(snapshot) {
+        const highTotalConsumption = [];
+        
+        // First, get all admins that would appear in "Finished Services" to exclude them
+        const finishedServicesIds = new Set();
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const alfaData = data.alfaData || {};
+            
+            // Parse admin consumption
+            let adminConsumption = 0;
+            let adminLimit = 0;
+            
+            if (alfaData.adminConsumption) {
+                const adminConsumptionStr = String(alfaData.adminConsumption).trim();
+                const match = adminConsumptionStr.match(/^([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i);
+                if (match) {
+                    adminConsumption = parseFloat(match[1]) || 0;
+                    adminLimit = parseFloat(match[2]) || 0;
+                }
+            } else if (data.quota) {
+                const quotaStr = String(data.quota).trim();
+                const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                adminLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+            }
+            
+            // Parse total consumption
+            let totalConsumption = 0;
+            let totalLimit = 0;
+            if (alfaData.totalConsumption) {
+                const parsed = this.parseConsumption(alfaData.totalConsumption);
+                totalConsumption = parsed.used;
+                totalLimit = parsed.total || 0;
+            } else if (data.quota) {
+                const quotaStr = String(data.quota).trim();
+                const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                totalLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+            }
+            
+            // Check if this admin would be in Finished Services (same logic as filterFinishedServices)
+            const isAdminFull = adminLimit > 0 && adminConsumption >= adminLimit - 0.01;
+            const isTotalFull = totalLimit > 0 && totalConsumption >= totalLimit - 0.01;
+            const isFullyUsed = isAdminFull || isTotalFull;
+            
+            if (isFullyUsed) {
+                finishedServicesIds.add(doc.id);
+            }
+        });
+
+        // Now filter for High Total Consumption (95% to 99%), excluding those in Finished Services
+        snapshot.docs.forEach(doc => {
+            // Skip if this admin is in Finished Services
+            if (finishedServicesIds.has(doc.id)) {
+                return;
+            }
+            
+            const data = doc.data();
+            const alfaData = data.alfaData || {};
+            
+            // Skip if admin is inactive (should only appear in Inactive Numbers card)
+            if (this.isAdminInactive(data, alfaData)) {
+                return;
+            }
+
+            // Parse total consumption - this is the key metric for this table
+            let totalConsumption = 0;
+            let totalLimit = 0;
+
+            if (alfaData.totalConsumption) {
+                const parsed = this.parseConsumption(alfaData.totalConsumption);
+                totalConsumption = parsed.used;
+                totalLimit = parsed.total || 0;
+            } else if (data.quota) {
+                // Fallback: use quota as limit
+                const quotaStr = String(data.quota).trim();
+                const quotaMatch = quotaStr.match(/^([\d.]+)/);
+                totalLimit = quotaMatch ? parseFloat(quotaMatch[1]) : parseFloat(quotaStr) || 0;
+            }
+
+            // Check if total consumption is 95% to 99% of total limit
+            // Note: 100% users are already excluded via Finished Services filter above
+            const totalPercent = totalLimit > 0 ? (totalConsumption / totalLimit) * 100 : 0;
+            const isHighTotalConsumption = totalLimit > 0 && totalConsumption > 0 && totalPercent >= 95 && totalPercent < 100;
+            
+            // Debug logging (can be removed later)
+            if (totalLimit > 0) {
+                console.log(`[High Total Consumption Filter] ${data.name || data.phone}: totalConsumption=${totalConsumption.toFixed(2)} GB, totalLimit=${totalLimit.toFixed(2)} GB, percent=${totalPercent.toFixed(2)}%, isHigh=${isHighTotalConsumption ? 'YES' : 'NO'}`);
+            }
+            
+            // Show only if total quota usage is 95% to 99% (and we already excluded Finished Services admins above)
+            if (isHighTotalConsumption) {
+                // Get validity date
+                let validityDate = '';
+                if (alfaData.validityDate) {
+                    validityDate = alfaData.validityDate;
+                } else {
+                    // Fallback: calculate from createdAt + 30 days
+                    let createdAt = new Date();
+                    if (data.createdAt) {
+                        createdAt = data.createdAt.toDate ? data.createdAt.toDate() : (data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt));
+                    }
+                    validityDate = this.formatDateDDMMYYYY(new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+                }
+
+                highTotalConsumption.push({
+                    id: doc.id,
+                    name: data.name || 'N/A',
+                    phone: data.phone || 'N/A',
+                    totalConsumption: totalConsumption,
+                    totalLimit: totalLimit,
+                    validityDate: validityDate,
+                    alfaData: alfaData
+                });
+            }
+        });
+
+        return highTotalConsumption;
+    }
+
+    // High Total Consumption Modal
+    async openHighTotalConsumptionModal() {
+        try {
+            // Show loading state
+            this.showLoadingModal();
+
+            // Use real-time data if available, otherwise fetch
+            let snapshot;
+            if (this.admins && this.admins.length > 0) {
+                snapshot = {
+                    docs: this.admins.map(admin => ({
+                        id: admin.id,
+                        data: () => admin
+                    }))
+                };
+            } else {
+                if (typeof db === 'undefined') {
+                    throw new Error('Firebase Firestore (db) is not initialized. Please check firebase-config.js');
+                }
+                // CRITICAL: Filter by userId for data isolation
+                const currentUserId = this.getCurrentUserId();
+                if (!currentUserId) {
+                    throw new Error('User not authenticated. Please log in.');
+                }
+                const firebaseSnapshot = await db.collection('admins').where('userId', '==', currentUserId).get();
+                snapshot = firebaseSnapshot;
+            }
+            
+            // Process and filter admins
+            const highTotalConsumption = this.filterHighTotalConsumption(snapshot);
+            
+            // Hide loading and show modal with data
+            this.hideLoadingModal();
+            this.showHighTotalConsumptionModal(highTotalConsumption);
+        } catch (error) {
+            console.error('Error opening High Total Consumption modal:', error);
+            this.hideLoadingModal();
+            alert('Error loading data: ' + error.message);
+        }
+    }
+
     showHighAdminConsumptionModal(services) {
         // Remove existing modal if any
         const existingModal = document.getElementById('highAdminConsumptionModal');
@@ -4795,6 +5050,151 @@ class HomeManager {
                                         <th>Admin Usage</th>
                                         <th>Total Usage</th>
                                         <th>Expiration Date</th>
+                                        <th class="actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                        ${hasMore ? '<button class="see-more-btn">See More</button>' : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Bind view buttons
+        modal.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.viewSubscriberDetails(id, services);
+            });
+        });
+
+        // Bind menu buttons
+        modal.querySelectorAll('.menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const id = e.currentTarget.dataset.subscriberId;
+                this.toggleMenu(id, e.currentTarget);
+            });
+        });
+
+        // Bind "See More" button
+        const seeMoreBtn = modal.querySelector('.see-more-btn');
+        if (seeMoreBtn) {
+            seeMoreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tbody = modal.querySelector('tbody');
+                if (tbody) {
+                    const hiddenRows = tbody.querySelectorAll('.table-row-hidden');
+                    hiddenRows.forEach(row => row.classList.remove('table-row-hidden'));
+                    seeMoreBtn.remove();
+                }
+            });
+        }
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+    }
+
+    showHighTotalConsumptionModal(services) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('highTotalConsumptionModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+
+        // Build table rows with limit
+        let tableRows = '';
+        let hasMore = false;
+        if (services.length === 0) {
+            tableRows = `
+                <tr>
+                    <td colspan="4" style="text-align: center; padding: 3rem; color: #94a3b8;">
+                        No admins with high total consumption found
+                    </td>
+                </tr>
+            `;
+        } else {
+            const result = this.buildTableRowsWithLimit(services, (service, index, isHidden = false) => {
+                const totalPercent = service.totalLimit > 0 ? (service.totalConsumption / service.totalLimit) * 100 : 0;
+                // All admins in this table have 95%+ total consumption, so show warning (orange) for all
+                const totalProgressClass = totalPercent >= 95 ? 'progress-fill error' : 'progress-fill';
+                const totalProgressWidth = Math.min(totalPercent, 100);
+                const hiddenClass = isHidden ? 'table-row-hidden' : '';
+                
+                return `
+                    <tr class="${hiddenClass}">
+                        <td>
+                            <div>
+                                <div class="subscriber-name">${this.escapeHtml(service.name)}</div>
+                                <div class="subscriber-phone">${this.escapeHtml(service.phone)}</div>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="progress-container">
+                                <div class="progress-bar">
+                                    <div class="${totalProgressClass}" style="width: ${totalProgressWidth}%"></div>
+                                </div>
+                                <div class="progress-text">${service.totalConsumption.toFixed(2)} / ${service.totalLimit.toFixed(2)} GB</div>
+                            </div>
+                        </td>
+                        <td>${this.escapeHtml(service.validityDate)}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn view-btn" data-subscriber-id="${service.id}" title="View Details">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button class="action-btn menu-btn" data-subscriber-id="${service.id}" title="Menu">
+                                    <svg viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="12" cy="12" r="2"/>
+                                        <circle cx="12" cy="5" r="2"/>
+                                        <circle cx="12" cy="19" r="2"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }, 4);
+            tableRows = result.rows;
+            hasMore = result.hasMore;
+        }
+
+        const modal = document.createElement('div');
+        modal.id = 'highTotalConsumptionModal';
+        modal.className = 'available-services-modal-overlay';
+        modal.innerHTML = `
+            <div class="available-services-modal">
+                <div class="available-services-modal-inner">
+                    <div class="available-services-modal-header">
+                        <h2>High Total Consumption</h2>
+                        <button class="modal-close-btn" onclick="this.closest('.available-services-modal-overlay').remove()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="available-services-modal-body">
+                        <div class="table-container">
+                            <table class="available-services-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Total Consumption</th>
+                                        <th>Validity Date</th>
                                         <th class="actions-col">Actions</th>
                                     </tr>
                                 </thead>

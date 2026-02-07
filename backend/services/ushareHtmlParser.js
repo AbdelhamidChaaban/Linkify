@@ -145,6 +145,10 @@ async function fetchUshareHtmlHttp(adminPhone, cookies) {
                 }
             }
             
+            // Normalize phone number: remove non-digits and pad to 8 digits
+            let cleanPhone = phoneNumber.replace(/^961/, '').replace(/\D/g, '');
+            cleanPhone = cleanPhone.padStart(8, '0');
+            
             // Extract consumption data
             const capacityElement = $card.find('h4.italic.capacity');
             const dataVal = capacityElement.attr('data-val');
@@ -154,8 +158,6 @@ async function fetchUshareHtmlHttp(adminPhone, cookies) {
             const totalQuota = dataQuota ? parseFloat(dataQuota) : 0;
             
             if (phoneNumber && phoneNumber.length >= 8) {
-                const cleanPhone = phoneNumber.replace(/^961/, '');
-                
                 subscribers.push({
                     phoneNumber: cleanPhone,
                     fullPhoneNumber: phoneNumber,

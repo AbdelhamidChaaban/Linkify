@@ -249,22 +249,32 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
             return res.status(400).json(createErrorResponse('Subscriber number must be 8 digits'));
         }
         
-        // Get CSRF token and MaxQuota (will auto-refresh cookies if expired)
-        const { token: csrfToken, maxQuota } = await getCsrfToken(adminPhone, cookies, adminId, adminPassword);
-        const actualMaxQuota = maxQuota || 70; // Default to 70 if not found
+        // OPTIMIZATION #4: Parallel operations - start POST preparation while getting CSRF token
+        console.log(`📤 [Add Subscriber] Starting parallel operations...`);
         
-        // Reuse cookies - getCsrfToken already refreshed them internally if needed
-        // No need to call getCookiesOrLogin again (this was causing the 17-second delay)
-        const cookieHeader = formatCookiesForHeader(cookies);
+        // Start CSRF token fetch in parallel with form data preparation
+        const csrfPromise = getCsrfToken(adminPhone, cookies, adminId, adminPassword);
         
-        // Build form data
+        // Prepare form data while CSRF token is being fetched
         const { URLSearchParams } = require('url');
         const formData = new URLSearchParams();
         formData.append('mobileNumber', adminPhone);
         formData.append('Number', cleanSubscriberNumber);
         formData.append('Quota', quota.toString());
-        formData.append('MaxQuota', actualMaxQuota.toString());
-        formData.append('__RequestVerificationToken', csrfToken);
+        formData.append('MaxQuota', '70'); // Default, will be updated after CSRF response
+        formData.append('__RequestVerificationToken', 'pending'); // Will be updated after CSRF response
+        
+        // Wait for CSRF token to complete
+        const { token: csrfToken, maxQuota } = await csrfPromise;
+        const actualMaxQuota = maxQuota || 70; // Default to 70 if not found
+        
+        // Update form data with actual values
+        formData.set('MaxQuota', actualMaxQuota.toString());
+        formData.set('__RequestVerificationToken', csrfToken);
+        
+        // Reuse cookies - getCsrfToken already refreshed them internally if needed
+        // No need to call getCookiesOrLogin again (this was causing the 17-second delay)
+        const cookieHeader = formatCookiesForHeader(cookies);
         const url = `${USHARE_BASE_URL}?mobileNumber=${adminPhone}`;
         
         console.log(`📤 [Add Subscriber] POSTing to ${url}`);
@@ -279,7 +289,7 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
             },
             maxRedirects: 0,
             validateStatus: (status) => status >= 200 && status < 400,
-            timeout: 20000 // Increased to 20s (Alfa's servers are slow)
+            timeout: 10000 // OPTIMIZATION: Reduced from 20s to 10s for faster response
         });
         
         console.log(`📥 [Add Subscriber] Response status: ${response.status}`);
@@ -411,9 +421,21 @@ router.post('/addSubscriber', authenticateJWT, async (req, res) => {
         
         if (verifyResult && verifyResult.success && verifyResult.data) {
             const subscribers = verifyResult.data.subscribers || [];
+            
+            // Normalize both numbers before comparison to handle leading zeros
+            const normalizePhoneNumber = (phone) => {
+                if (!phone) return '';
+                // Remove all non-digits, then pad to 8 digits
+                const cleanPhone = phone.replace(/^961/, '').replace(/\D/g, '');
+                return cleanPhone.padStart(8, '0');
+            };
+            
+            const normalizedAddedNumber = normalizePhoneNumber(cleanSubscriberNumber);
+            
             const subscriberExists = subscribers.some(sub => {
                 const subNumber = sub.phoneNumber || sub.fullPhoneNumber || '';
-                return subNumber.replace(/^961/, '').replace(/\D/g, '') === cleanSubscriberNumber;
+                const normalizedSubNumber = normalizePhoneNumber(subNumber);
+                return normalizedSubNumber === normalizedAddedNumber;
             });
             
             if (subscriberExists) {
