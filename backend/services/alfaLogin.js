@@ -15,8 +15,37 @@ const httpsAgent = new https.Agent({
     timeout: 60000
 });
 
+// Rate limiting to prevent Alfa from blocking us
+const loginAttempts = new Map();
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const MAX_ATTEMPTS_PER_WINDOW = 3; // Max 3 login attempts per minute per admin
+
+function checkRateLimit(adminId) {
+    const now = Date.now();
+    const attempts = loginAttempts.get(adminId) || [];
+    
+    // Clean old attempts
+    const recentAttempts = attempts.filter(time => now - time < RATE_LIMIT_WINDOW);
+    
+    if (recentAttempts.length >= MAX_ATTEMPTS_PER_WINDOW) {
+        const oldestAttempt = Math.min(...recentAttempts);
+        const waitTime = RATE_LIMIT_WINDOW - (now - oldestAttempt);
+        throw new Error(`Rate limit exceeded. Please wait ${Math.ceil(waitTime / 1000)} seconds before trying again.`);
+    }
+    
+    recentAttempts.push(now);
+    loginAttempts.set(adminId, recentAttempts);
+    return true;
+}
+
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Exponential backoff for retries
+function getBackoffDelay(attempt) {
+    const delays = [1000, 2000, 4000, 8000, 16000]; // 1s, 2s, 4s, 8s, 16s
+    return delays[Math.min(attempt, delays.length - 1)];
 }
 
 /**
@@ -730,10 +759,52 @@ function parseCookiesFromHeaders(setCookieHeaders, domain = 'www.alfa.com.lb') {
  * @returns {Promise<{success: boolean, cookies: Array, needsCaptcha: boolean, fallback: boolean}>}
  */
 async function loginViaHttp(phone, password, adminId) {
+    // Check rate limit first
+    checkRateLimit(adminId);
+    
     const cleanPhone = phone.replace(/\D/g, '').substring(0, 8);
     if (cleanPhone.length !== 8) {
         throw new Error(`Phone number must be exactly 8 digits. Got: ${cleanPhone.length} digits`);
     }
+    
+    // Retry logic with exponential backoff
+    let lastError = null;
+    const maxRetries = 3;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (attempt > 0) {
+            const delayMs = getBackoffDelay(attempt - 1);
+            console.log(`🔄 [HTTP Login] Retry attempt ${attempt}/${maxRetries} after ${delayMs}ms delay...`);
+            await delay(delayMs);
+        }
+        
+        try {
+            const result = await performLoginAttempt(cleanPhone, password, adminId);
+            if (result.success) {
+                console.log(`✅ [HTTP Login] Login successful on attempt ${attempt + 1}`);
+                return result;
+            }
+            
+            // If CAPTCHA required, don't retry - let it fail to CAPTCHA service
+            if (result.needsCaptcha) {
+                console.log(`⚠️ [HTTP Login] CAPTCHA required, not retrying`);
+                return result;
+            }
+            
+            lastError = result.error || 'Login failed';
+            console.log(`⚠️ [HTTP Login] Attempt ${attempt + 1} failed: ${lastError}`);
+            
+        } catch (error) {
+            lastError = error.message;
+            console.log(`⚠️ [HTTP Login] Attempt ${attempt + 1} error: ${lastError}`);
+        }
+    }
+    
+    // All retries failed
+    throw new Error(`Login failed after ${maxRetries + 1} attempts: ${lastError}`);
+}
+
+async function performLoginAttempt(cleanPhone, password, adminId) {
     
     return new Promise((resolve, reject) => {
         const startTime = Date.now();
